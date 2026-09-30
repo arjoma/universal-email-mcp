@@ -32,3 +32,18 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Label management: list (tree) and create first; rename / move / delete folders later.
 - [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
       raw headers, `.eml` and attachment downloads in the authenticated portal.
+
+## M1 review leftovers
+- [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
+      `SINCE`/`BEFORE` compare the server's INTERNALDATE day (server time zone) —
+      mail near midnight can fall into the neighbouring day.
+- [ ] Fuzzy search results show flags from the header cache (up to the index TTL);
+      listings and threads refresh them.
+- [ ] Bare domains (`evil.com`, no scheme/`www.`/path) stay as they are: GFM does not
+      autolink them, but renderers with fuzzy linkify (markdown-it) do.
+- [ ] Cursor resume when the last returned message was expunged falls back to UID
+      order, which is only approximate for SORT (REVERSE ARRIVAL) listings.
+- [ ] Threads: `search_related` uses the first 30 ids only (most relevant first);
+      the same message in two accounts is now listed twice (dedupe is per folder).
+- [ ] Observed once: an integration `list_folders(counts=True)` call hit the account
+      time-out on a slow container start — watch for flakiness in CI.
