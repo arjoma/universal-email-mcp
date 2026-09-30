@@ -64,6 +64,8 @@ _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "d
 
 _TRANSIENT = frozenset({AccountTimeout.code, ServerUnreachable.code})
 """Failures worth retrying on the next page."""
+MAX_CURSOR_RETRIES = 3
+"""Pages a cursor stays alive only to retry failed accounts."""
 
 
 # =========================================================================== results
@@ -364,11 +366,16 @@ class MailService:
         # dropped (that account starts over).
         stale = {p.account for p in fan.problems if p.code == StaleCursor.code}
         retry = any(p.code in _TRANSIENT for p in fan.problems)
+        more = any(next_sources[c.key].offset < c.total for c in chunks)
+        retries = (cur.retries if cur else 0) + 1 if retry and not more else 0
+        if retries > MAX_CURSOR_RETRIES:
+            notes.append("stopped retrying the failed accounts; call again without a cursor later")
+            retry = False
         next_cursor = None
-        if retry or any(next_sources[c.key].offset < c.total for c in chunks):
+        if retry or more:
             sources = {k: v for k, v in (cur.sources if cur else {}).items() if k[0] not in stale}
             sources.update(next_sources)
-            next_cursor = self.cursors.encode(Cursor(tool, qh, sources))
+            next_cursor = self.cursors.encode(Cursor(tool, qh, sources, retries=retries))
         return MessagePage(
             hits=[Hit(h) for h in hits],
             total=total,
