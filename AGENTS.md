@@ -52,6 +52,18 @@ Code must treat it that way everywhere:
   authors); a GitHub squash merge would re-author the commit with the GitHub
   account's e-mail.
 
+## Code layout (`src/universal_email_mcp/`)
+
+- `models.py` — frozen dataclasses (accounts, identities, folders, `MessageRef`
+  with opaque ids, summaries, messages); `errors.py` — `MailError` + stable codes.
+- `presets.py` — server presets, `MAIL_SERVERS` / `LOGIN_DOMAINS` parsing.
+- `config.py` — local-mode TOML config and password lookup (env / keyring).
+- `mail/net.py` — SSRF-safe connect (resolve once, check every IP, connect to it,
+  TLS on the host name). `mail/imap.py` — synchronous read-only `ImapSession`
+  (run it via `asyncio.to_thread`). `mail/mime.py` — parsing, HTML→text,
+  `fence_untrusted`. `mail/folders.py` — role detection.
+- `probe.py`, `cli.py` — command line (`probe`, `local`).
+
 ## Checks (same as CI)
 
 ```bash
@@ -63,6 +75,12 @@ uv run pytest -q
 
 CI (`.github/workflows/ci.yml`) runs these on Python 3.12 and 3.14 plus
 `pip-audit` of the locked dependencies.
+
+Integration tests (`tests/integration`, marker `integration`) run against a real
+Dovecot server: locally they start it with rootless **podman** (or a working
+docker) and skip if neither is available; CI provides it as a service container
+and sets `UEM_TEST_REQUIRE_INTEGRATION=1` so they cannot silently skip there.
+Protocol behaviour is tested against the server, not mocks.
 
 ## Releases
 

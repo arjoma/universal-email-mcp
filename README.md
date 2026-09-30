@@ -22,6 +22,19 @@ Planned highlights:
 - **Operable** — encrypted credentials, pseudonymous audit logging, admin policy;
   reference deployment on Google Cloud Run.
 
+## Try the probe
+
+The first working piece is a read-only diagnostic that logs in to an IMAP server
+and shows what it supports (no message content is displayed). From a checkout:
+
+```bash
+UEM_PASSWORD=... uv run universal-email-mcp probe --server mail.example.com --user alice@example.com
+```
+
+`--server` takes a preset name (e.g. `united-domains`) or a host name; `--starttls`
+and `--port` select other connection modes, `--account NAME` uses an account from
+the local config file (see [`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml)).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](https://github.com/arjoma/universal-email-mcp/blob/main/LICENSE) and [NOTICE](https://github.com/arjoma/universal-email-mcp/blob/main/NOTICE).
