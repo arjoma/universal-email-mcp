@@ -18,8 +18,10 @@ Design and scope: `docs/plans/2026-09-30-design.md`; parked ideas: `TODO.md`.
 
 - **Larger pieces of work run in a subagent** (one focused agent per feature or
   subsystem), so the main session keeps the overview and the context stays small.
-- **New features go through a pull request** from a feature branch; CI must pass
-  before merging. No direct feature commits to `main`.
+- **Larger features go through a pull request** from a feature branch, so `main`
+  stays clean while the work is in progress; CI must pass before merging. Small
+  changes (docs, process, fixes) may be pushed directly to `main`. A guideline,
+  not a hard rule.
 - Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`
   ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, SemVer).
 - **Review after every larger piece of work.** Once the work is done and CI is
