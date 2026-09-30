@@ -8,7 +8,6 @@ fenced as untrusted content. Errors come back as ``isError`` results carrying
 """
 
 import functools
-import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any
@@ -112,12 +111,17 @@ MessageId = Annotated[str, Field(description="Message id from a list/search resu
 
 
 def _error_result(err: MailError) -> CallToolResult:
-    payload = {"error": err.to_dict()}
+    """Text: escaped message and hint only (messages can quote mail-derived names).
+    The raw details go to structured content (the SDK does not validate the output
+    schema for ``isError`` results)."""
     text = f"Error [{err.code}]: {escape_cell(err.message, 400)}"
     if err.hint:
-        text += f"\nHint: {err.hint}"
-    text += "\n\n" + json.dumps(payload, ensure_ascii=False)
-    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+        text += f"\nHint: {escape_cell(err.hint, 400)}"
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structured_content={"error": err.to_dict()},
+        is_error=True,
+    )
 
 
 def _guard[**P](
@@ -602,7 +606,10 @@ def build_server(service: MailService) -> MCPServer:
         msg = await service.get_message(id, offset=offset, max_chars=max_chars)
         s = msg.summary
         item = MessageItem.of(s, viewer_url=service.viewer_url(s.ref))
-        fenced = fence_untrusted(msg.body.text, source="email body") if msg.body.text else ""
+        # Defanged in both forms: clients may hand structured content to the model
+        # or render it, so the raw body (live links, images) is never passed on.
+        body_text = render.defang_body(msg.body.text)
+        fenced = fence_untrusted(body_text, source="email body") if body_text else ""
         data = MessageOut(
             message=item,
             reply_to=[AddressOut.of(a) for a in s.reply_to],

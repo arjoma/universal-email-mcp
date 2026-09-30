@@ -11,6 +11,7 @@ from universal_email_mcp.mail.mime import (
     parse_header_block,
     parse_message,
     parse_msgid_list,
+    sanitize_line,
     sanitize_text,
     slice_text,
 )
@@ -39,7 +40,9 @@ def test_html_only_drops_hidden_content_scripts_and_pixels():
     m = load("html_only_hidden.eml")
     assert m.text_source == "html"
     assert "Visible paragraph one." in m.text
-    assert "[the article](https://example.com/article)" in m.text
+    # links become plain "text (url)", never Markdown links with attacker link text
+    assert "the article (https://example.com/article)" in m.text
+    assert "](" not in m.text
     assert "Tail text after pixel." in m.text
     for hidden in (
         "HIDDEN-DISPLAY",
@@ -193,3 +196,18 @@ def test_slice_text_windows():
     assert slice_text("abc", 10, offset=99).text == ""
     with pytest.raises(ValueError):
         slice_text("abc", 0)
+
+
+def test_html_links_never_become_markdown_links():
+    text = html_to_text(
+        '<p><a href="https://evil.example/x">[trusted bank](https://bank.example)</a> '
+        '<a href="https://same.example">https://same.example</a> <a href="#top">top</a></p>'
+    )
+    assert "](" not in text.replace("[trusted bank](https://bank.example)", "")
+    assert "(https://evil.example/x)" in text
+    assert text.count("https://same.example") == 1
+
+
+def test_line_and_paragraph_separators():
+    assert sanitize_text("a\u2028b\u2029c\x85d") == "a\nb\nc\nd"
+    assert sanitize_line("a\u2028b") == "a b"

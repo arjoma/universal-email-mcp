@@ -18,12 +18,16 @@ from universal_email_mcp.mail.mime import sanitize_line
 
 DEFAULT_CELL_CHARS = 80
 
-# URLs with a scheme (https://, ftp://, …), www. hosts, and bare host/path forms
-# that some renderers autolink.
+# URL-like tokens: anything with ``scheme://`` (no word boundary needed: ``_https://``
+# and ``1https://`` autolink too), ``www.`` hosts, and bare host/path forms.
 _URL = re.compile(
-    r"(?i)\b(?:[a-z][a-z0-9+.\-]{1,15}://[^\s|]*|www\.[^\s|]+|"
-    r"(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/[^\s|]*)"
+    r"(?i)(?:[a-z][a-z0-9+.\-]*://|www\.)[^\s|<>]*"
+    r"|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/[^\s|<>]*"
 )
+_SCHEME = re.compile(r"(?i)([a-z][a-z0-9+.\-]*)://")
+# ``mailto:x``, ``xmpp:x``, ``javascript:x`` … (a word glued to a colon and more text)
+_SCHEME_COLON = re.compile(r"(?i)(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*):(?=[^\s:/\[\d])")
+_WWW = re.compile(r"(?i)www\.")
 # Markdown characters that start links/images/emphasis/code/HTML/entities.
 _MD_SPECIAL = str.maketrans(
     {
@@ -48,26 +52,78 @@ _MD_SPECIAL = str.maketrans(
 
 def _defang_url(url: str) -> str:
     # hxxps[:]//example[.]com — readable, never clickable or fetchable.
-    m = re.match(r"(?i)([a-z][a-z0-9+.\-]*)://", url)
+    m = _SCHEME.search(url)
     if m:
         scheme = re.sub(r"(?i)^http", "hxxp", m.group(1))
-        url = f"{scheme}[:]//{url[m.end() :]}"
+        url = f"{url[: m.start()]}{scheme}[:]//{url[m.end() :]}"
     return url.replace(".", "[.]")
+
+
+def defang(text: str) -> str:
+    """Make links in untrusted text inert and readable (no Markdown escaping).
+
+    URL-like tokens get ``hxxp``, ``[:]//`` and ``[.]``; then, unconditionally,
+    every remaining ``://`` and ``www.``, every ``@`` (``＠``: no e-mail autolinks)
+    and every ``word:`` scheme prefix glued to more text (``mailto:``, ``xmpp:``,
+    ``javascript:`` …) is broken up, so no GFM autolink can form anywhere.
+    """
+    text = _URL.sub(lambda m: _defang_url(m.group(0)), text)
+    text = text.replace("://", "[:]//")
+    text = _WWW.sub(lambda m: m.group(0)[:3] + "[.]", text)
+    text = text.replace("@", "＠")
+    return _SCHEME_COLON.sub(r"\1[:]", text)
 
 
 def escape_cell(value: object, max_chars: int = DEFAULT_CELL_CHARS) -> str:
     """Make untrusted text safe and compact for one Markdown table cell.
 
     Removes invisible/bidi/control characters and line breaks, defangs URLs,
-    neutralises ``|``, backticks, link/image brackets, HTML ``<>``, emphasis and
-    entity characters, and caps the length (``…``). The result renders as the
-    literal text in any CommonMark/GFM renderer.
+    e-mail addresses and scheme prefixes (:func:`defang`), neutralises ``|``,
+    backticks, link/image brackets, HTML ``<>``, emphasis and entity characters,
+    and caps the length (``…``). The result renders as the literal text in any
+    CommonMark/GFM renderer.
     """
     text = sanitize_line("" if value is None else str(value))
     if max_chars > 0 and len(text) > max_chars:
         text = text[: max_chars - 1].rstrip() + "…"
-    text = _URL.sub(lambda m: _defang_url(m.group(0)), text)
-    return text.translate(_MD_SPECIAL)
+    return defang(text).translate(_MD_SPECIAL)
+
+
+# --------------------------------------------------------------------------- bodies
+
+_MD_IMAGE = re.compile(r"!\[([^\]\n]*)\]\s*(?:\([^)\n]*\)|\[[^\]\n]*\])")
+_MD_LINK = re.compile(r"\[([^\]\n]*)\]\(\s*<?([^)\s>]*)>?(?:\s+[\"'(][^)\n]*)?\)")
+_MD_REF_DEF = re.compile(r"(?m)^( {0,3})\[([^\]\n]+)\]:")
+_HTML_IMG = re.compile(r"(?is)<img\b[^>]*>")
+_HTML_ALT = re.compile(r"""(?is)\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""")
+
+
+def _html_img(m: re.Match[str]) -> str:
+    alt = _HTML_ALT.search(m.group(0))
+    text = next((g for g in alt.groups() if g), "") if alt else ""
+    return f"[image: {text.strip()}]" if text.strip() else "[image]"
+
+
+def defang_body(text: str) -> str:
+    """Make an untrusted message body inert as Markdown, keeping it readable.
+
+    For text that is shown as quoted text (paragraphs and line breaks stay):
+    images become ``[image: alt]``, inline links ``text (hxxps[:]//…)``, HTML tags
+    lose their ``<>`` (``‹img …›``), reference-link definitions are broken up, and
+    all URLs, addresses and scheme prefixes are defanged (:func:`defang`). Emphasis,
+    lists and code are left alone — they cannot fetch or link anything.
+    """
+    text = _HTML_IMG.sub(_html_img, text)
+    text = _MD_IMAGE.sub(
+        lambda m: f"[image: {m.group(1).strip()}]" if m.group(1).strip() else "[image]", text
+    )
+    text = _MD_LINK.sub(
+        lambda m: f"{m.group(1)} ({m.group(2)})" if m.group(2) else m.group(1), text
+    )
+    text = _MD_REF_DEF.sub(r"\1[\2] :", text)
+    text = text.replace("](", "] (")  # whatever link syntax is left over
+    text = text.replace("<", "‹").replace(">", "›")
+    return defang(text)
 
 
 def server_link(label: str, url: str) -> str:

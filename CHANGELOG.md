@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New limit `max_headers_scanned` (headers read per account for fuzzy search
   and contact lookup).
 
+### Security
+
+- Message bodies are defanged, not only fenced: images become `[image: alt]`,
+  links `text (hxxps[:]//…)`, HTML tags and reference-link definitions are
+  neutralised; HTML mail no longer yields Markdown links.
+- Table cells also defang autolinks without a word boundary (`_https://…`),
+  e-mail addresses (`＠`) and scheme prefixes (`mailto:`, `xmpp:` …); error
+  results carry details only as structured content.
+- Variation selectors U+E0100–E01EF (and a few more invisible format characters)
+  are stripped from mail text.
+
 ## [0.0.1] - 2026-09-30
 
 ### Added
