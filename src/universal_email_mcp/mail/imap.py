@@ -76,6 +76,9 @@ MAX_CLIENT_FILTER = 2_000
 MAX_RELATED_IDS = 30
 """Most Message-IDs per :meth:`ImapSession.search_related` call."""
 
+_ATTACHMENT_TYPES = (b"multipart/", b"application/", b"image/", b"audio/", b"video/", b"message/")
+"""Content-Type prefixes of the ``has_attachment`` server pre-filter."""
+
 _HEADER_FIELDS = "BODY.PEEK[HEADER.FIELDS (" + " ".join(h.upper() for h in SUMMARY_HEADERS) + ")]"
 _SUMMARY_ITEMS = ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE", "BODYSTRUCTURE", _HEADER_FIELDS]
 _SUMMARY_ITEMS_NO_BS = [i for i in _SUMMARY_ITEMS if i != "BODYSTRUCTURE"]
@@ -763,15 +766,12 @@ class ImapSession:
         if criteria.smaller is not None and criteria.smaller > 0:
             out += [b"SMALLER", str(int(criteria.smaller)).encode()]
         if criteria.has_attachment is True:
-            out += [
-                b"OR",
-                b"HEADER",
-                b"Content-Type",
-                b'"multipart/mixed"',
-                b"HEADER",
-                b"Content-Type",
-                b'"application/"',
-            ]
+            # Heuristic pre-filter: messages whose top-level type can carry an
+            # attachment (any multipart — mixed, signed, related, report … — or a
+            # non-text single part). BODYSTRUCTURE decides afterwards.
+            out += [b"OR"] * (len(_ATTACHMENT_TYPES) - 1)
+            for t in _ATTACHMENT_TYPES:
+                out += [b"HEADER", b"Content-Type", b'"' + t + b'"']
         return out
 
     def _run_search(self, args: list[bytes], charset: str | None) -> tuple[list[int], str]:
@@ -822,8 +822,8 @@ class ImapSession:
         if criteria.has_attachment is not None:
             uids, att_notes = self._filter_attachments(uids, criteria.has_attachment)
             notes += att_notes
-            if att_notes:
-                exact = False
+            # The Content-Type pre-filter and the BODYSTRUCTURE check are heuristics.
+            exact = False
 
         return SearchResult(
             account=self.account_name,

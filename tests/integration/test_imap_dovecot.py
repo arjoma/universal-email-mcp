@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import socket
 import ssl
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -220,6 +221,38 @@ def test_search_criteria(session: ImapSession):
 def test_search_has_attachment(session: ImapSession):
     assert uids(session, has_attachment=True) == [4, 2]
     assert uids(session, has_attachment=False) == [8, 7, 6, 5, 3, 1]
+
+
+def _mime(ctype: str, parts: str) -> bytes:
+    return (
+        "From: a@example.com\r\nTo: b@example.org\r\nSubject: t\r\nMIME-Version: 1.0\r\n"
+        f'Content-Type: {ctype}; boundary="B"\r\n\r\n'
+        "--B\r\nContent-Type: text/plain\r\n\r\nHello\r\n"
+        f"--B\r\n{parts}\r\n--B--\r\n"
+    ).encode()
+
+
+PDF_PART = (
+    'Content-Type: application/pdf; name="x.pdf"\r\n'
+    'Content-Disposition: attachment; filename="x.pdf"\r\n'
+    "Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK"
+)
+
+
+def test_search_has_attachment_in_signed_related_report(imap_server: ImapServer):
+    mb = Mailbox(imap_server, f"att-{uuid.uuid4().hex[:10]}@example.org")
+    c = mb.admin()
+    try:
+        c.append("INBOX", _mime('multipart/signed; protocol="application/pgp-signature"', PDF_PART))
+        c.append("INBOX", _mime('multipart/related; type="text/plain"', PDF_PART))
+        c.append("INBOX", _mime("multipart/report; report-type=delivery-status", PDF_PART))
+        c.append("INBOX", b"From: a@example.com\r\nSubject: plain\r\n\r\nno attachment\r\n")
+    finally:
+        c.logout()
+    with mb.session() as s:
+        res = s.search("INBOX", SearchCriteria(has_attachment=True))
+        assert sorted(res.uids) == [1, 2, 3]
+        assert not res.exact  # heuristic pre-filter + BODYSTRUCTURE: never claimed exact
 
 
 def test_search_without_sort_orders_by_uid(session: ImapSession):

@@ -97,3 +97,16 @@ def test_server_features():
     )
     assert f.sort and f.quota and not f.move
     assert f.threads == ("ORDEREDSUBJECT", "REFERENCES")
+
+
+def test_attachment_prefilter_covers_signed_related_report():
+    from typing import Any, cast
+
+    from universal_email_mcp.mail.imap import ImapSession
+
+    s = ImapSession(cast(Any, object()), account_name="A", login_info=cast(Any, None))
+    args = s._criteria_bytes(SearchCriteria(has_attachment=True), include_text=[])  # pyright: ignore[reportPrivateUsage]
+    values = [a.strip(b'"') for a in args[args.index(b"HEADER") :] if a.startswith(b'"')]
+    for ctype in (b"multipart/signed", b"multipart/related", b"multipart/report", b"image/png"):
+        assert any(ctype.startswith(v) for v in values), ctype
+    assert args.count(b"OR") == len(values) - 1
