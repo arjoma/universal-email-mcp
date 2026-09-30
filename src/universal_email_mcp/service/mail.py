@@ -518,7 +518,7 @@ class MailService:
         ref, acc = self._ref(message_id)
         cap = max(1, min(limit or MAX_THREAD_MESSAGES, MAX_THREAD_MESSAGES))
 
-        def primary(session: ImapSession) -> tuple[list[MessageSummary], set[str], list[str]]:
+        def primary(session: ImapSession) -> tuple[list[MessageSummary], list[str], list[str]]:
             notes: list[str] = []
             first = session.fetch_summaries(ref.folder, [ref.uid], uidvalidity=ref.uidvalidity)
             if not first:
@@ -544,7 +544,7 @@ class MailService:
             for _ in range(THREAD_ROUNDS):
                 new_ids = False
                 for f in scan:
-                    res = session.search_related(f.name, sorted(ids))
+                    res = session.search_related(f.name, ids)
                     fresh = [u for u in res.uids if (res.folder, u) not in found]
                     if not fresh:
                         continue
@@ -553,14 +553,15 @@ class MailService:
                         session, res.folder, res.uidvalidity, fresh[: max(0, room)]
                     ):
                         found[(s.ref.folder, s.ref.uid)] = s
-                        before = len(ids)
-                        ids |= _thread_ids(s)
-                        new_ids = new_ids or len(ids) != before
+                        for i in _thread_ids(s):
+                            if i not in ids:
+                                ids.append(i)
+                                new_ids = True
                 if not new_ids or len(found) >= cap * 2:
                     break
             return list(found.values()), ids, notes
 
-        async def work(a: Account) -> tuple[list[MessageSummary], set[str], list[str]]:
+        async def work(a: Account) -> tuple[list[MessageSummary], list[str], list[str]]:
             return await self.router.call(a, primary)
 
         messages, ids, notes = await self.router.run_one(acc, work)
@@ -575,7 +576,7 @@ class MailService:
                     f = session.folder_for_role(role)
                     if f is None:
                         continue
-                    res = session.search_related(f.name, sorted(ids))
+                    res = session.search_related(f.name, ids)
                     out += self.index.summaries(
                         session, res.folder, res.uidvalidity, list(res.uids[:cap])
                     )
@@ -586,11 +587,13 @@ class MailService:
                 messages += extra
             problems += fan.problems
             problems += [p for p in sel_problems if p.code != "NOT_SUPPORTED_YET"]
-        # The same message can sit in two accounts' folders; keep one per Message-ID.
-        unique: dict[str, MessageSummary] = {}
+        # Duplicates (same Message-ID) are merged only within one account and folder:
+        # a forged copy elsewhere must not hide, say, the user's own Sent message.
+        unique: dict[tuple[str, str, str], MessageSummary] = {}
         for m in messages:
-            unique.setdefault(m.message_id or m.ref.encode(), m)
-        ordered = sorted(unique.values(), key=_date_key)
+            unique.setdefault((m.ref.account, m.ref.folder, m.message_id or m.ref.encode()), m)
+        # Arrival order (INTERNALDATE, set by the server) — the Date header is forgeable.
+        ordered = sorted(unique.values(), key=_sort_key)
         if len(ordered) > cap:
             notes.append(f"conversation has {len(ordered)} messages; showing the last {cap}")
             ordered = ordered[-cap:]
@@ -755,13 +758,11 @@ def _consumed(c: _Chunk, taken: int) -> int:
     return c.window.index(c.summaries[taken - 1].ref.uid) + 1
 
 
-def _thread_ids(s: MessageSummary) -> set[str]:
-    ids = set(s.references)
-    if s.message_id:
-        ids.add(s.message_id)
-    if s.in_reply_to:
-        ids.add(s.in_reply_to)
-    return {i for i in ids if 3 <= len(i) <= 998}
+def _thread_ids(s: MessageSummary) -> list[str]:
+    """Conversation ids by relevance: Message-ID, In-Reply-To, then References from
+    the last (the direct parent) backwards — searches use only the first ones."""
+    ordered = [s.message_id, s.in_reply_to, *reversed(s.references)]
+    return list(dict.fromkeys(i for i in ordered if i and 3 <= len(i) <= 998))
 
 
 def window_criteria(window: Window, **kw: Any) -> SearchCriteria:

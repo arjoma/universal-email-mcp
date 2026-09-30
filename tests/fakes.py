@@ -15,7 +15,12 @@ from typing import Any
 
 from universal_email_mcp.config import Config, parse_config
 from universal_email_mcp.errors import FolderNotFound, ServerUnreachable, UidValidityChanged
-from universal_email_mcp.mail.imap import IncrementalBatch, SearchCriteria, SearchResult
+from universal_email_mcp.mail.imap import (
+    MAX_RELATED_IDS,
+    IncrementalBatch,
+    SearchCriteria,
+    SearchResult,
+)
 from universal_email_mcp.models import Account, Address, FolderInfo, MessageRef, MessageSummary
 
 BASE = datetime(2026, 9, 1, tzinfo=UTC)
@@ -76,6 +81,7 @@ class FakeSession:
         self.capabilities: tuple[str, ...] = ("IMAP4REV1",)
         self.features: Any = None
         self.called_on_loop: list[str] = []
+        self.related_queries: list[list[str]] = []
         self.close_delay = 0.0
 
     def _tick(self, what: str) -> None:
@@ -136,6 +142,29 @@ class FakeSession:
         self._tick(f"SEARCH {folder}")
         uids = sorted(self.folders[folder], reverse=True)
         return SearchResult(self.account_name, folder, self.uidvalidity, tuple(uids), "uid")
+
+    def search_related(self, folder: str, message_ids: Sequence[str]) -> SearchResult:
+        self._tick(f"RELATED {folder}")
+        ids = set(list(message_ids)[:MAX_RELATED_IDS])
+        self.related_queries.append(list(message_ids))
+        uids = sorted(
+            (
+                u
+                for u, m in self.folders[folder].items()
+                if ids & {m.message_id, m.in_reply_to, *m.references}
+            ),
+            reverse=True,
+        )
+        return SearchResult(self.account_name, folder, self.uidvalidity, tuple(uids), "uid")
+
+    def fetch_flags(
+        self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
+    ) -> dict[int, tuple[str, ...]]:
+        self._tick(f"FLAGS {folder} {len(uids)}")
+        if uidvalidity is not None and uidvalidity != self.uidvalidity:
+            raise UidValidityChanged("changed")
+        box = self.folders[folder]
+        return {u: box[u].flags for u in uids if u in box}
 
     def fetch_summaries(
         self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None

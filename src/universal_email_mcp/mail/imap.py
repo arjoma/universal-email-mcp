@@ -839,8 +839,9 @@ class ImapSession:
         """Messages whose Message-ID, In-Reply-To or References header contains one
         of ``message_ids`` (for conversation lookup), newest first.
 
-        At most ``MAX_RELATED_IDS`` ids are used per call; ids are sanitised like
-        any other search value (they come from mail and are untrusted).
+        Pass ids in priority order: only the first ``MAX_RELATED_IDS`` are used.
+        Ids are sanitised like any other search value (they come from mail and are
+        untrusted).
         """
         wire, uidvalidity, exists = self._examine(folder)
         ids = [c for c in (_clean_search_value(m) for m in message_ids) if c][:MAX_RELATED_IDS]
