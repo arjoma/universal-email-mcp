@@ -310,13 +310,14 @@ class Message:
     """A full message: summary + text body window + attachment list.
 
     ``body_source`` tells where the text came from: ``plain``, ``html`` (converted),
-    or ``none``. ``source_truncated`` is set when the raw message exceeded the fetch
+    ``none`` or ``unparseable`` (MIME structure too deep or broken to parse; the
+    headers still are). ``source_truncated`` is set when the raw message exceeded the fetch
     size cap and only its beginning was parsed.
     """
 
     summary: MessageSummary
     body: TextSlice
-    body_source: Literal["plain", "html", "none"]
+    body_source: Literal["plain", "html", "none", "unparseable"]
     attachments: tuple[Attachment, ...]
     source_truncated: bool = False
 
