@@ -1,6 +1,9 @@
+import os
+import sys
 from pathlib import Path
 
 import pytest
+from mcp import Client, StdioServerParameters
 
 from universal_email_mcp.cli import main
 
@@ -17,9 +20,28 @@ def test_version(capsys: pytest.CaptureFixture[str]):
     assert "universal-email-mcp" in capsys.readouterr().out
 
 
-def test_local_is_a_stub(capsys: pytest.CaptureFixture[str]):
-    assert main(["local"]) == 2
-    assert "not implemented" in capsys.readouterr().err
+def test_local_without_config_fails_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    assert main(["local", "--config", str(tmp_path / "missing.toml")]) == 1
+    assert "CONFIG_INVALID" in capsys.readouterr().err
+
+
+async def test_local_serves_mcp_over_stdio(tmp_path: Path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(
+        '[[accounts]]\nname = "Work"\nserver = "imap.example.com"\nusername = "u"\n'
+        'password_env = "UEM_TEST_UNSET_PASSWORD"\n'
+    )
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "universal_email_mcp", "local", "--config", str(cfg)],
+        env={k: v for k, v in os.environ.items() if k != "UEM_TEST_UNSET_PASSWORD"},
+    )
+    async with Client(params) as c:
+        names = {t.name for t in (await c.list_tools()).tools}
+        assert {"list_messages", "search_messages", "get_message"} <= names
+        r = await c.call_tool("account_info", {})
+        assert r.is_error and r.structured_content is not None
+        assert r.structured_content["problems"][0]["code"] == "CREDENTIAL_MISSING"
 
 
 def test_probe_requires_target(capsys: pytest.CaptureFixture[str]):
