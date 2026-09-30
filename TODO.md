@@ -23,3 +23,9 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,
       bypass: repository admin) so only admins can trigger PyPI releases. The `pypi`
       environment is already restricted to `v*` tags.
+
+## Targets from real use (planned for M2, see design §7.2)
+- [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
+- [ ] Archive action like the webmailer's (probably `Archive/<year>` — verify with `probe`).
+- [ ] Move mail between folders, incl. "move the mail from X and my answer to client X".
+- [ ] File replies: the Sent copy of a reply goes into the conversation's folder too.
