@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SSRF-safe connections, folder roles (SPECIAL-USE, English/German names,
   overrides), structured search with UTF-8, message summaries, full messages with
   HTML-to-text conversion and attachment lists, fencing of untrusted content.
+- `universal-email-mcp local`: MCP server over stdio (works with Claude Desktop
+  and Claude Code via `uvx universal-email-mcp local`) with the read-only tools
+  `account_info`, `list_folders` (folder tree with roles and counts),
+  `list_messages` (time windows like `today`, `this_week`, `last_7_days`),
+  `search_messages` (structured criteria; `fuzzy=true` tolerates typos, umlaut
+  spellings and name order), `get_message` (fenced, paged body; never marks as
+  read), `get_thread` (conversation across INBOX, Sent and other folders) and
+  `find_contacts` (ranked by frequency and recency, marks addresses you have
+  written to).
+- Searches and listings span all accounts in parallel with a per-account
+  time-out; failing accounts are reported with the partial result. Cursor
+  paging with signed cursors.
+- Results are Markdown tables (mail text escaped: no links, images, HTML or
+  table breakage from crafted subjects) plus structured content with output
+  schemas; errors carry a code and a hint.
+- Folder names in tools may be approximate and hierarchical
+  (`clients/hubr` → `Clients/Huber`); ambiguous names return the choices.
+- New limit `max_headers_scanned` (headers read per account for fuzzy search
+  and contact lookup).
 
 ## [0.0.1] - 2026-09-30
 
