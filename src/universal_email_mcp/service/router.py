@@ -137,7 +137,6 @@ class AccountRouter:
         self._slots: dict[str, _Slot] = {}
         self._idle_ttl = idle_ttl
         self._clock = clock
-        self._closed = False
 
     # ------------------------------------------------------------ selection
 
@@ -243,9 +242,7 @@ class AccountRouter:
         if fut.cancelled() or fut.exception() is not None:
             return
         session = fut.result()
-        if self._closed:
-            _in_thread(_close_quietly, session)
-        elif slot.session is None:
+        if slot.session is None:
             slot.session = session
             slot.last_used = self._clock()
         elif slot.session is not session:  # pragma: no cover - defensive
@@ -334,7 +331,6 @@ class AccountRouter:
         return out
 
     async def aclose(self) -> None:
-        self._closed = True
         sessions = [s.session for s in self._slots.values() if s.session is not None]
         for s in self._slots.values():
             s.session = None
