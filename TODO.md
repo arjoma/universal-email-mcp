@@ -29,3 +29,4 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Archive action like the webmailer's (probably `Archive/<year>` — verify with `probe`).
 - [ ] Move mail between folders, incl. "move the mail from X and my answer to client X".
 - [ ] File replies: the Sent copy of a reply goes into the conversation's folder too.
+- [ ] Label management: list (tree) and create first; rename / move / delete folders later.
