@@ -6,6 +6,7 @@ exercise routing, paging, caching and fan-out logic.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections.abc import Sequence
@@ -50,7 +51,12 @@ def summary(
 
 class FakeSession:
     """Folders with messages; ``hang`` makes every call block, ``fail_next`` makes
-    the next call raise :class:`ServerUnreachable` (a dropped connection)."""
+    the next call raise :class:`ServerUnreachable` (a dropped connection).
+
+    ``close``/``abort`` of a real session do network I/O and may block, so calling
+    them on the event loop thread is a bug: such calls are recorded in
+    ``called_on_loop`` (tests assert it stays empty) and made slow by ``close_delay``.
+    """
 
     def __init__(self, account: str, folders: dict[str, list[int]], uidvalidity: int = 1) -> None:
         self.account_name = account
@@ -69,6 +75,8 @@ class FakeSession:
         self.role_warnings: list[str] = []
         self.capabilities: tuple[str, ...] = ("IMAP4REV1",)
         self.features: Any = None
+        self.called_on_loop: list[str] = []
+        self.close_delay = 0.0
 
     def _tick(self, what: str) -> None:
         self.calls.append(what)
@@ -82,10 +90,22 @@ class FakeSession:
             self.fail_next = False
             raise ServerUnreachable("connection reset")
 
+    def _blocking(self, what: str) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            self.called_on_loop.append(what)
+        if self.close_delay:
+            time.sleep(self.close_delay)
+
     def close(self) -> None:
+        self._blocking("close")
         self.closed = True
 
     def abort(self) -> None:
+        self._blocking("abort")
         self.aborted.set()
         self.closed = True
 
@@ -159,9 +179,23 @@ class Connector:
         self.sessions = sessions
         self.connects: list[str] = []
         self.fail: dict[str, Exception] = {}
+        self.delay = 0.0
+        """Seconds each connect takes (a tarpitting server)."""
+        self.active = 0
+        self.peak = 0
+        self._lock = threading.Lock()
 
     def __call__(self, account: Account, _config: Config) -> FakeSession:
         self.connects.append(account.name)
+        with self._lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            if self.delay:
+                time.sleep(self.delay)
+        finally:
+            with self._lock:
+                self.active -= 1
         if account.name in self.fail:
             raise self.fail[account.name]
         s = self.sessions[account.name]
