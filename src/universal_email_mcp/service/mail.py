@@ -392,15 +392,15 @@ class MailService:
                     f"folder {decode_folder_name(res.folder)!r} was rebuilt on the server"
                 )
             max_uid = pos.max_uid
-            start = pos.offset
         else:
             max_uid = max(uids, default=0)
-            start = 0
         if max_uid:
             uids = [u for u in uids if u <= max_uid]
+        last_uid = pos.last_uid if pos is not None else 0
+        start = _resume_index(uids, last_uid)
         window = uids[start : start + limit]
         summaries = self.index.summaries(session, res.folder, res.uidvalidity, window)
-        return _Chunk(key, res.uidvalidity, max_uid, start, len(uids), window, summaries)
+        return _Chunk(key, res.uidvalidity, max_uid, start, len(uids), window, summaries, last_uid)
 
     # ------------------------------------------------------------ fuzzy search
 
@@ -700,6 +700,8 @@ class _Chunk:
     window: list[int]
     """UIDs requested for this page (some may have vanished)."""
     summaries: list[MessageSummary]
+    last_uid: int = 0
+    """Where this page resumed (the previous page's last UID; 0 = from the top)."""
 
 
 def _merge(
@@ -720,11 +722,27 @@ def _merge(
             break
         out.append(chunks[best].summaries[idx[best]])
         idx[best] += 1
-    positions = {
-        c.key: SourcePos(c.uidvalidity, c.start + _consumed(c, idx[i]), c.max_uid)
-        for i, c in enumerate(chunks)
-    }
+    positions: dict[tuple[str, str], SourcePos] = {}
+    for i, c in enumerate(chunks):
+        n = _consumed(c, idx[i])
+        last = c.window[n - 1] if n else c.last_uid
+        positions[c.key] = SourcePos(c.uidvalidity, c.start + n, c.max_uid, last)
     return out, positions
+
+
+def _resume_index(uids: Sequence[int], last_uid: int) -> int:
+    """Index after ``last_uid`` in a fresh (newest-first) SEARCH result.
+
+    Resuming by UID instead of a stored offset means messages expunged meanwhile
+    cannot make the next page skip anything. If ``last_uid`` itself is gone, the
+    position falls back to UID order: everything with a higher UID was passed.
+    """
+    if not last_uid:
+        return 0
+    try:
+        return uids.index(last_uid) + 1
+    except ValueError:
+        return sum(1 for u in uids if u > last_uid)
 
 
 def _consumed(c: _Chunk, taken: int) -> int:
