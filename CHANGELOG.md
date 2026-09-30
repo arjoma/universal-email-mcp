@@ -53,6 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Variation selectors U+E0100–E01EF (and a few more invisible format characters)
   are stripped from mail text.
 
+### Fixed
+
+- A timed-out account no longer blocks the server until the read time-out, and
+  retries against a stalling server share one connection attempt.
+- Paging no longer skips messages deleted between pages; cursors stop retrying
+  persistently failing accounts after three pages.
+- `has_attachment` also finds attachments in signed, related and report mail
+  (results marked approximate); listings show current flags; conversations are
+  in arrival order; shared folders do not get special roles; deeply nested MIME
+  is reported as unparseable; `list_folders` keeps its tree indentation.
+
 ## [0.0.1] - 2026-09-30
 
 ### Added
