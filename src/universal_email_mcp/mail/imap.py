@@ -73,6 +73,8 @@ DEFAULT_MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_BODY_CHARS = 20_000
 MAX_CLIENT_FILTER = 2_000
 """Most candidates checked client-side (charset fallback, attachment filter)."""
+MAX_RELATED_IDS = 30
+"""Most Message-IDs per :meth:`ImapSession.search_related` call."""
 
 _HEADER_FIELDS = "BODY.PEEK[HEADER.FIELDS (" + " ".join(h.upper() for h in SUMMARY_HEADERS) + ")]"
 _SUMMARY_ITEMS = ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE", "BODYSTRUCTURE", _HEADER_FIELDS]
@@ -531,6 +533,11 @@ class ImapSession:
         except Exception:  # noqa: BLE001 - connection may already be gone
             _quiet_shutdown(self._client)
 
+    def abort(self) -> None:
+        """Tear the connection down without LOGOUT. Safe to call from another
+        thread: a blocked call in the owning thread then fails promptly."""
+        _quiet_shutdown(self._client)
+
     def __enter__(self) -> ImapSession:
         return self
 
@@ -813,6 +820,34 @@ class ImapSession:
             order=cast(Literal["arrival", "uid"], order),
             exact=exact,
             notes=tuple(notes),
+        )
+
+    def search_related(self, folder: str, message_ids: Sequence[str]) -> SearchResult:
+        """Messages whose Message-ID, In-Reply-To or References header contains one
+        of ``message_ids`` (for conversation lookup), newest first.
+
+        At most ``MAX_RELATED_IDS`` ids are used per call; ids are sanitised like
+        any other search value (they come from mail and are untrusted).
+        """
+        wire, uidvalidity, exists = self._examine(folder)
+        ids = [c for c in (_clean_search_value(m) for m in message_ids) if c][:MAX_RELATED_IDS]
+        if exists == 0 or not ids:
+            return SearchResult(self.account_name, wire, uidvalidity, (), "uid")
+        keys: list[list[bytes]] = []
+        for mid in ids:
+            for header in (b"Message-ID", b"In-Reply-To", b"References"):
+                keys.append([b"HEADER", header, _astring(mid)])
+        args: list[bytes] = [b"UNDELETED"] + [b"OR"] * (len(keys) - 1)
+        for key in keys:
+            args += key
+        needs_utf8 = any(not m.isascii() for m in ids)
+        uids, order = self._search_call(args, "UTF-8" if needs_utf8 else None)
+        return SearchResult(
+            account=self.account_name,
+            folder=wire,
+            uidvalidity=uidvalidity,
+            uids=tuple(uids),
+            order=cast(Literal["arrival", "uid"], order),
         )
 
     def _search_call(self, args: list[bytes], charset: str | None) -> tuple[list[int], str]:

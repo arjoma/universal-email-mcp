@@ -25,6 +25,7 @@ max_body_chars = 20000                # characters of body text per call
 max_message_bytes = 10485760          # larger messages are fetched partially
 max_accounts_per_call = 10
 account_timeout = 30                  # seconds per account in a fan-out
+max_headers_scanned = 2000            # headers per account for fuzzy search / contacts
 
 # ---------------------------------------------------------------- accounts
 # kind: "imap" (default) or "pop3". server: a preset name (united-domains) or a
