@@ -33,7 +33,7 @@ from .fakes import Connector, FakeSession, config, summary
 
 def test_cursor_roundtrip_and_binding():
     codec = CursorCodec(b"k" * 32)
-    cur = Cursor("list_messages", "q1", {("A", "INBOX"): SourcePos(7, 20, 99)})
+    cur = Cursor("list_messages", "q1", {("A", "INBOX"): SourcePos(7, 20, 99, 42)})
     text = codec.encode(cur)
     assert codec.decode(text, tool="list_messages", query="q1") == cur
     with pytest.raises(InvalidCursor, match="search_messages"):
@@ -294,3 +294,18 @@ async def test_permanent_failure_does_not_keep_paging():
     assert [h.summary.ref.uid for h in page.hits] == [2, 1]
     assert [(p.account, p.code) for p in page.problems] == [("B", "FOLDER_NOT_FOUND")]
     assert page.cursor is None
+
+
+async def test_paging_survives_expunge_between_pages():
+    a = FakeSession("A", {"INBOX": list(range(1, 11))})
+    svc, _ = _service(A=a)
+    first = await _page(svc, limit=3)
+    assert [h.summary.ref.uid for h in first.hits] == [10, 9, 8]
+    del a.folders["INBOX"][10], a.folders["INBOX"][9]  # expunged meanwhile
+    second = await _page(svc, first.cursor, limit=3)
+    assert [h.summary.ref.uid for h in second.hits] == [7, 6, 5]  # not 5, 4, 3
+    del a.folders["INBOX"][5]  # the resume point itself vanished
+    third = await _page(svc, second.cursor, limit=3)
+    assert [h.summary.ref.uid for h in third.hits] == [4, 3, 2]
+    fourth = await _page(svc, third.cursor, limit=3)
+    assert [h.summary.ref.uid for h in fourth.hits] == [1] and fourth.cursor is None

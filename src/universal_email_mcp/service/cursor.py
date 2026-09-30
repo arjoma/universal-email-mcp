@@ -2,8 +2,9 @@
 
 A cursor carries the paging position of a multi-account, multi-folder listing:
 per source ``(account, folder)`` its UIDVALIDITY, how many messages were already
-returned, and the highest UID seen on the first page (newer arrivals are left out
-of later pages, so offsets stay stable). It is bound to the tool and a hash of
+returned, the last UID returned (the next page resumes right after it in a fresh
+SEARCH, so expunged messages cannot shift the position), and the highest UID seen
+on the first page (newer arrivals are left out of later pages). It is bound to the tool and a hash of
 the query arguments, and signed with HMAC-SHA256.
 
 The key is per process in local mode (cursors die with the process — fine for a
@@ -37,6 +38,8 @@ class SourcePos:
     offset: int
     max_uid: int
     """Highest UID of the first page's snapshot (0 = no limit)."""
+    last_uid: int = 0
+    """Last UID passed in this source (0 = none yet): the next page starts after it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +81,7 @@ class CursorCodec:
             "q": cursor.query,
             "o": cursor.offset,
             "s": [
-                [acc, folder, p.uidvalidity, p.offset, p.max_uid]
+                [acc, folder, p.uidvalidity, p.offset, p.max_uid, p.last_uid]
                 for (acc, folder), p in sorted(cursor.sources.items())
             ],
         }
@@ -102,8 +105,8 @@ class CursorCodec:
         try:
             data = cast(dict[str, Any], json.loads(payload.decode("utf-8")))
             sources: dict[tuple[str, str], SourcePos] = {}
-            for acc, folder, uv, off, mx in cast(list[list[Any]], data["s"]):
-                sources[(str(acc), str(folder))] = SourcePos(int(uv), int(off), int(mx))
+            for acc, folder, uv, off, mx, last in cast(list[list[Any]], data["s"]):
+                sources[(str(acc), str(folder))] = SourcePos(int(uv), int(off), int(mx), int(last))
             cur = Cursor(
                 tool=str(data["t"]), query=str(data["q"]), sources=sources, offset=int(data["o"])
             )
