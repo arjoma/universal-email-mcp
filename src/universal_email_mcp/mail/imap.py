@@ -474,6 +474,11 @@ class ImapSession:
                     client.plain_login(username, password)
             except LoginError as e:
                 raise AuthFailed(f"login rejected by the server: {_server_text(e)}") from e
+            except UnicodeError as e:  # LOGIN cannot carry non-ASCII credentials
+                raise AuthFailed(
+                    "user name or password contains characters this server's LOGIN "
+                    "command cannot transmit (no AUTH=PLAIN offered)"
+                ) from e
             login_seconds = time.monotonic() - t1
             caps = tuple(_s(c).upper() for c in client.capabilities())
         except MailError:
