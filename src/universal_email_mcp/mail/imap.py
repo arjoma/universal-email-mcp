@@ -943,6 +943,18 @@ class ImapSession:
             return []
         return self._summaries(wire, current, list(uids))
 
+    def fetch_flags(
+        self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
+    ) -> dict[int, tuple[str, ...]]:
+        """Current flags of ``uids`` (vanished UIDs are missing from the result)."""
+        wire, current, _exists = self._examine(folder)
+        if uidvalidity is not None and uidvalidity != current:
+            raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")
+        if not uids:
+            return {}
+        fetched = self._fetch_raw(list(uids), ["UID", "FLAGS"])
+        return {uid: tuple(_s(f) for f in f_.get(b"FLAGS", ())) for uid, f_ in fetched.items()}
+
     def _summaries(self, wire: str, uidvalidity: int, uids: list[int]) -> list[MessageSummary]:
         try:
             fetched = self._fetch_raw(uids, _SUMMARY_ITEMS)

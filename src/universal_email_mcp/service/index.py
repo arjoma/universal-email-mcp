@@ -5,8 +5,8 @@ A pure speed-up — correctness never depends on it. Entries are keyed by
 UIDVALIDITY drops the entry. New mail is added incrementally with
 :meth:`ImapSession.fetch_summaries_since_uid`; UIDs older than the cached range
 are fetched on demand. Bounded: max summaries per folder (lowest UIDs evicted
-first), LRU over folders, and a TTL after which an entry is rebuilt (so flags
-shown from the cache are at most ``ttl`` seconds old).
+first), LRU over folders, and a TTL after which an entry is rebuilt. Callers that
+show results pass ``refresh_flags=True`` so cached entries get current flags.
 
 Which UIDs exist is always decided by a fresh server SEARCH in the caller; the
 index only supplies their headers. Thread-safe (worker threads of different
@@ -19,7 +19,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from universal_email_mcp.errors import UidValidityChanged
 from universal_email_mcp.mail.imap import ImapSession
@@ -97,14 +97,30 @@ class HeaderIndex:
         folder: str,
         uidvalidity: int,
         uids: Sequence[int],
+        *,
+        refresh_flags: bool = False,
     ) -> list[MessageSummary]:
         """Summaries for ``uids`` (same order; vanished UIDs are skipped).
 
         ``folder`` is the wire name and ``uidvalidity`` comes from the caller's
         SEARCH; raises :class:`UidValidityChanged` if the folder changed since.
+        ``refresh_flags``: re-read the flags of entries served from the cache (one
+        cheap FETCH FLAGS) — for results shown to the user (unread, flagged).
         """
         key = (session.account_name, folder)
         entry = self._entry(key, uidvalidity)
+        cached = [u for u in uids if u in entry.items]
+        if refresh_flags and cached:
+            flags = session.fetch_flags(folder, cached, uidvalidity=uidvalidity)
+            with self._lock:
+                for u in cached:
+                    s = entry.items.get(u)
+                    if s is None:
+                        continue
+                    if u not in flags:  # expunged meanwhile
+                        del entry.items[u]
+                    elif flags[u] != s.flags:
+                        entry.items[u] = replace(s, flags=flags[u])
         missing = [u for u in uids if u not in entry.items]
         if missing and 0 < entry.last_uid < max(missing) <= entry.last_uid + INCREMENTAL_WINDOW:
             try:
