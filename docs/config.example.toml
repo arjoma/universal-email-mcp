@@ -1,0 +1,80 @@
+# universal-email-mcp — local-mode configuration (example)
+#
+# Default location: ~/.config/universal-email-mcp/config.toml (Linux; the platform
+# config directory elsewhere). Override with --config or the UEM_CONFIG variable.
+#
+# Passwords are NEVER written here. Each account either names an environment
+# variable (password_env) or uses the OS keyring:
+#   keyring set universal-email-mcp <account name or keyring_key>
+
+[settings]
+# Local mode may reach mail servers on private networks (LAN, containers).
+allow_private_networks = true
+connect_timeout = 15   # seconds
+read_timeout = 60      # seconds
+
+[policy]
+read_only = false
+send = "confirm"                      # off | confirm | confirm-external | on
+allowed_recipient_domains = []        # empty = any domain
+max_recipients = 20
+
+[limits]
+max_results = 50                      # messages per tool call
+max_body_chars = 20000                # characters of body text per call
+max_message_bytes = 10485760          # larger messages are fetched partially
+max_accounts_per_call = 10
+account_timeout = 30                  # seconds per account in a fan-out
+
+# ---------------------------------------------------------------- accounts
+# kind: "imap" (default) or "pop3". server: a preset name (united-domains) or a
+# host name (then 993/995/465 with implicit TLS). [accounts.imap|pop3|smtp]
+# tables override single endpoints: host, port, tls = "tls" | "starttls".
+# permissions: read, organize (mark/move), delete (move to Trash), drafts.
+
+[[accounts]]
+name = "Work"
+server = "united-domains"
+username = "alice@example.com"
+password_env = "UEM_WORK_PASSWORD"
+permissions = ["read", "organize", "drafts"]
+
+[[accounts]]
+name = "Archive"
+username = "alice"
+# no password_env → OS keyring, key "Archive" (or set keyring_key = "...")
+permissions = ["read"]
+[accounts.imap]
+host = "mail.example.net"
+port = 143
+tls = "starttls"
+# Folder role overrides when detection (SPECIAL-USE flags, EN/DE names) fails.
+# Roles: inbox, sent, drafts, trash, junk, archive.
+[accounts.folders]
+sent = "INBOX.Gesendet"
+
+[[accounts]]
+name = "Old POP"
+kind = "pop3"
+server = "mail.example.org"
+username = "alice@example.org"
+password_env = "UEM_OLDPOP_PASSWORD"
+# tls_verify = false              # only for local test servers; prefer tls_ca_file
+# tls_ca_file = "~/certs/my-ca.pem"
+
+# ---------------------------------------------------------------- identities
+# Senders (used from milestone M2 on). account = SMTP transport and credentials
+# plus the IMAP account that receives Drafts/Sent copies (override separately
+# with smtp_account / store_account). Exactly one identity is the default; if
+# none is marked, the first one is.
+
+[[identities]]
+address = "alice@example.com"
+display_name = "Alice Example"
+account = "Work"
+default = true
+send = false
+signature = """
+--
+Alice Example
+"""

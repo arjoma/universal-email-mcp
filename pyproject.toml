@@ -12,7 +12,10 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50",
     "imapclient>=4.1",
+    "inscriptis>=2.7.5",
+    "keyring>=25.7.0",
     "mcp>=2.2,<3",
+    "platformdirs>=4.12.2",
     "pydantic>=2.13",
     "starlette>=1.7",
     "uvicorn>=0.54",

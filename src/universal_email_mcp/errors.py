@@ -1,0 +1,109 @@
+"""Error hierarchy with stable machine-readable codes.
+
+Every error the mail layer raises on purpose is a :class:`MailError` with a stable
+``code`` (for tools and logs) and a human ``hint`` (what the user can do about it).
+Messages never contain passwords; callers should still avoid putting mail content
+into them.
+"""
+
+from __future__ import annotations
+
+from typing import ClassVar
+
+
+class MailError(Exception):
+    """Base class. ``code`` is stable API; ``str(err)`` and ``hint`` are for humans."""
+
+    code: ClassVar[str] = "MAIL_ERROR"
+    default_hint: ClassVar[str] = ""
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.hint = hint if hint is not None else self.default_hint
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialisable form for tool error results: ``{"code", "message", "hint"}``."""
+        return {"code": self.code, "message": self.message, "hint": self.hint}
+
+
+class ConfigError(MailError):
+    code = "CONFIG_INVALID"
+    default_hint = "Fix the configuration file and try again."
+
+
+class AuthFailed(MailError):
+    code = "AUTH_FAILED"
+    default_hint = "Check the username and password (an app password may be required)."
+
+
+class ServerUnreachable(MailError):
+    code = "SERVER_UNREACHABLE"
+    default_hint = "Check host name, port and network connectivity; the server may be down."
+
+
+class TlsError(MailError):
+    code = "TLS_ERROR"
+    default_hint = (
+        "The TLS handshake or certificate check failed. Check host name and port "
+        "(993 = implicit TLS, 143 = STARTTLS) and the server certificate."
+    )
+
+
+class AddressNotAllowed(MailError):
+    code = "ADDRESS_NOT_ALLOWED"
+    default_hint = (
+        "The server resolves to an address that is not allowed "
+        "(private, loopback, link-local or otherwise non-public)."
+    )
+
+
+class ProtocolError(MailError):
+    code = "SERVER_ERROR"
+    default_hint = "The mail server rejected the request or answered unexpectedly."
+
+
+class UnsupportedByServer(MailError):
+    code = "UNSUPPORTED_BY_SERVER"
+    default_hint = "The mail server lacks a capability this operation needs."
+
+
+class UidValidityChanged(MailError):
+    code = "UIDVALIDITY_CHANGED"
+    default_hint = (
+        "The folder was rebuilt on the server, so old message references are void. "
+        "Search or list the messages again."
+    )
+
+
+class FolderNotFound(MailError):
+    code = "FOLDER_NOT_FOUND"
+    default_hint = "List the folders to see which exist."
+
+
+class MessageNotFound(MailError):
+    code = "MESSAGE_NOT_FOUND"
+    default_hint = "The message may have been moved or deleted. Search again."
+
+
+class TooLarge(MailError):
+    code = "TOO_LARGE"
+    default_hint = "The result exceeds a configured size limit."
+
+
+class InvalidRef(MailError):
+    code = "INVALID_REF"
+    default_hint = "Use a message id exactly as returned by a list or search result."
+
+
+class NotPermitted(MailError):
+    code = "NOT_PERMITTED"
+    default_hint = "The account's permissions or the policy do not allow this."
+
+
+class CredentialMissing(MailError):
+    code = "CREDENTIAL_MISSING"
+    default_hint = (
+        "Set the environment variable named in the config (password_env) or store "
+        "the password in the OS keyring (service 'universal-email-mcp', key = account name)."
+    )
