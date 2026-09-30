@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Development process: review subagent after larger work, periodic TODO/code cleanup.
-
 ## [0.0.1] - 2026-09-30
 
 ### Added

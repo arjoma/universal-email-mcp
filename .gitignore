@@ -10,5 +10,6 @@ build/
 htmlcov/
 .env
 .env.*
+!.env.example
 *.local.toml
 .claude/settings.local.json

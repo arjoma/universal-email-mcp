@@ -33,7 +33,9 @@ Design and scope: `docs/plans/2026-09-30-design.md`; parked ideas: `TODO.md`.
   items, merge duplicates) and tidy the code base with the `simplify` routine
   (reuse, simplification, efficiency) — as its own PR.
 - Commits are authored as `Harald Schilly <info@arjoma.at>` (set in the repo's
-  local git config).
+  local git config). Merge PRs with `gh pr merge --rebase` (keeps the commit
+  authors); a GitHub squash merge would re-author the commit with the GitHub
+  account's e-mail.
 
 ## Checks (same as CI)
 
@@ -52,7 +54,7 @@ CI (`.github/workflows/ci.yml`) runs these on Python 3.12 and 3.14 plus
 1. Move the `[Unreleased]` entries in `CHANGELOG.md` to a new `## [X.Y.Z] - YYYY-MM-DD`
    section and update the compare links.
 2. Set `version` in `pyproject.toml` (`uv version X.Y.Z`), commit via PR.
-3. Tag `vX.Y.Z` on `main` and push the tag. `.github/workflows/release.yml` runs
+3. Tag `vX.Y.Z` on a commit that is on `main` (enforced) and push the tag. `.github/workflows/release.yml` runs
    CI, checks that tag, `pyproject.toml` and `CHANGELOG.md` agree, builds, publishes
    to PyPI via Trusted Publishing (GitHub environment `pypi`, no API tokens) and
    creates the GitHub release with the changelog section as notes.

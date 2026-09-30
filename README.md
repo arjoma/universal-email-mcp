@@ -1,7 +1,7 @@
 # universal-email-mcp
 
 > **Status: under development — not usable yet.** Version 0.0.1 only reserves the
-> package name. Follow the [design plan](docs/plans/2026-09-30-design.md).
+> package name. Follow the [design plan](https://github.com/arjoma/universal-email-mcp/blob/main/docs/plans/2026-09-30-design.md).
 
 A vendor-neutral [Model Context Protocol](https://modelcontextprotocol.io) server that
 connects AI assistants (Claude, ChatGPT, any MCP client) to ordinary mailboxes over
@@ -24,5 +24,5 @@ Planned highlights:
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0 — see [LICENSE](https://github.com/arjoma/universal-email-mcp/blob/main/LICENSE) and [NOTICE](https://github.com/arjoma/universal-email-mcp/blob/main/NOTICE).
 Copyright 2026 ARJOMA FlexCo.
