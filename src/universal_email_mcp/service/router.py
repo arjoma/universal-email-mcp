@@ -17,7 +17,9 @@ accounts are reported as not supported yet.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -84,6 +86,9 @@ class _Slot:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session: Any = None
     last_used: float = 0.0
+    connecting: asyncio.Future[Any] | None = None
+    """The one in-flight connect attempt; a retry awaits it instead of starting
+    another (a tarpitting server must not pile up connector threads)."""
 
 
 def _close_quietly(session: Any) -> None:
@@ -100,6 +105,24 @@ def _abort_quietly(session: Any) -> None:
         log.debug("aborting session failed", exc_info=True)
 
 
+def _discard(session: Any) -> None:
+    """Abort, then release (after the owning thread is done with the session)."""
+    _abort_quietly(session)
+    _close_quietly(session)
+
+
+def _in_thread(fn: Callable[[Any], None], session: Any) -> None:
+    """Run cleanup on its own daemon thread: never on the event loop, and not
+    queued behind worker threads that may all be blocked on dead servers."""
+    threading.Thread(target=fn, args=(session,), name="uem-cleanup", daemon=True).start()
+
+
+def _release_after(session: Any, fut: asyncio.Future[Any]) -> None:
+    if not fut.cancelled():
+        fut.exception()  # retrieved: the caller is gone, the error was expected
+    _in_thread(_close_quietly, session)
+
+
 class AccountRouter:
     def __init__(
         self,
@@ -114,6 +137,7 @@ class AccountRouter:
         self._slots: dict[str, _Slot] = {}
         self._idle_ttl = idle_ttl
         self._clock = clock
+        self._closed = False
 
     # ------------------------------------------------------------ selection
 
@@ -194,22 +218,38 @@ class AccountRouter:
             slot = self._slots[account.name] = _Slot(account)
         return slot
 
-    async def _connect(self, account: Account) -> Any:
+    async def _connect(self, slot: _Slot) -> Any:
+        """Session from the slot's in-flight connect, starting one if needed.
+
+        A deadline cancels only the wait: the attempt keeps running, the next call
+        for the account awaits the same future, and a session it produces after
+        everybody gave up is adopted by the slot (or closed).
+        """
+        account = slot.account
         connector = self._connectors.get(account.kind)
         if connector is None:
             raise NotSupportedYet(f"{account.kind.upper()} accounts are not supported yet")
-        loop = asyncio.get_running_loop()
-        fut = loop.run_in_executor(None, connector, account, self.config)
-        try:
-            return await asyncio.shield(fut)
-        except asyncio.CancelledError:
-            # The thread keeps connecting; close whatever it produces.
-            def _cleanup(f: asyncio.Future[Any]) -> None:
-                if not f.cancelled() and f.exception() is None:
-                    _close_quietly(f.result())
+        fut = slot.connecting
+        if fut is None:
+            loop = asyncio.get_running_loop()
+            fut = loop.run_in_executor(None, connector, account, self.config)
+            slot.connecting = fut
+            fut.add_done_callback(functools.partial(self._connected, slot))
+        return await asyncio.shield(fut)
 
-            fut.add_done_callback(_cleanup)
-            raise
+    def _connected(self, slot: _Slot, fut: asyncio.Future[Any]) -> None:
+        if slot.connecting is fut:
+            slot.connecting = None
+        if fut.cancelled() or fut.exception() is not None:
+            return
+        session = fut.result()
+        if self._closed:
+            _in_thread(_close_quietly, session)
+        elif slot.session is None:
+            slot.session = session
+            slot.last_used = self._clock()
+        elif slot.session is not session:  # pragma: no cover - defensive
+            _in_thread(_close_quietly, session)
 
     async def _ensure(self, slot: _Slot) -> tuple[Any, bool]:
         now = self._clock()
@@ -218,9 +258,10 @@ class AccountRouter:
             await asyncio.to_thread(_close_quietly, old)
         if slot.session is not None:
             return slot.session, False
-        slot.session = await self._connect(slot.account)
+        session = await self._connect(slot)
+        slot.session = session
         slot.last_used = self._clock()
-        return slot.session, True
+        return session, True
 
     async def call[T](self, account: Account, fn: Callable[[Any], T]) -> T:
         """Run ``fn(session)`` in a worker thread with the account's session.
@@ -236,12 +277,15 @@ class AccountRouter:
                 try:
                     result = await asyncio.shield(fut)
                 except asyncio.CancelledError:
+                    # Deadline: cut the connection so the worker fails promptly
+                    # (never on the loop thread), release it once the worker is done.
                     slot.session = None
-                    _abort_quietly(session)
+                    _in_thread(_abort_quietly, session)
+                    fut.add_done_callback(functools.partial(_release_after, session))
                     raise
                 except ServerUnreachable:
                     slot.session = None
-                    await asyncio.to_thread(_abort_quietly, session)
+                    await asyncio.to_thread(_discard, session)
                     if fresh or attempt == 2:
                         raise
                     log.info("account %s: connection lost, reconnecting", account.name)
@@ -251,7 +295,7 @@ class AccountRouter:
                     raise
                 except Exception as e:
                     slot.session = None
-                    await asyncio.to_thread(_abort_quietly, session)
+                    await asyncio.to_thread(_discard, session)
                     log.exception("account %s: unexpected backend error", account.name)
                     raise ProtocolError(f"unexpected backend error: {type(e).__name__}") from e
                 slot.last_used = self._clock()
@@ -290,6 +334,7 @@ class AccountRouter:
         return out
 
     async def aclose(self) -> None:
+        self._closed = True
         sessions = [s.session for s in self._slots.values() if s.session is not None]
         for s in self._slots.values():
             s.session = None

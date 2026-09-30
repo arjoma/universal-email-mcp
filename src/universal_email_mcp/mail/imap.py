@@ -534,9 +534,22 @@ class ImapSession:
             _quiet_shutdown(self._client)
 
     def abort(self) -> None:
-        """Tear the connection down without LOGOUT. Safe to call from another
-        thread: a blocked call in the owning thread then fails promptly."""
-        _quiet_shutdown(self._client)
+        """Cut the connection without LOGOUT. Safe to call from another thread and
+        never blocks: a call blocked in the owning thread then fails promptly.
+
+        Only the socket is shut down here. ``imaplib``'s own ``shutdown()`` closes
+        its buffered reader first, and that reader's lock is held by a thread
+        blocked in ``readline()`` — closing would wait until the read timeout. The
+        base-class ``socket.shutdown`` is used so an ``SSLSocket`` keeps its SSL
+        object for the reader that is still inside it. Releasing file and socket
+        is left to :meth:`close` once the owning thread has returned.
+        """
+        sock = getattr(getattr(self._client, "_imap", None), "sock", None)
+        if isinstance(sock, socket.socket):
+            try:
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+            except OSError:
+                pass  # already closed or never connected
 
     def __enter__(self) -> ImapSession:
         return self

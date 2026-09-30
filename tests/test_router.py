@@ -47,6 +47,57 @@ async def test_fanout_parallel_with_partial_failures():
     # the hung connection was torn down so its worker thread stops
     assert conn.sessions["C"].aborted.wait(2.0)
     await router.aclose()
+    await asyncio.sleep(0.1)
+    assert all(not s.called_on_loop for s in conn.sessions.values())
+
+
+async def test_deadline_abort_never_runs_on_the_event_loop():
+    router, conn = _router("A", timeout=0.2)
+    acc = router.account("A")
+    s = conn.sessions["A"]
+    s.hang = 5.0
+    s.close_delay = 1.0  # a blocking close/abort would stall the loop for a second
+
+    async def work(a):  # noqa: ANN001, ANN202
+        return await router.call(a, lambda x: x.search("INBOX").uids)
+
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    t = asyncio.create_task(ticker())
+    t0 = time.monotonic()
+    with pytest.raises(AccountTimeout):
+        await router.run_one(acc, work)
+    assert time.monotonic() - t0 < 0.6
+    await asyncio.sleep(0.3)
+    t.cancel()
+    assert ticks >= 15  # the loop kept running during abort and cleanup
+    assert s.called_on_loop == []
+    assert s.aborted.wait(3.0)
+
+
+async def test_retries_share_one_in_flight_connect():
+    router, conn = _router("A", timeout=0.1)
+    conn.delay = 0.6  # tarpit: every connect outlives the deadline
+    acc = router.account("A")
+
+    async def work(a):  # noqa: ANN001, ANN202
+        return await router.call(a, lambda s: s.search("INBOX").uids)
+
+    for _ in range(4):
+        with pytest.raises(AccountTimeout):
+            await router.run_one(acc, work)
+    assert conn.connects == ["A"] and conn.peak == 1
+    await asyncio.sleep(0.7)  # the attempt finishes; its session is adopted
+    conn.delay = 0.0
+    assert await router.run_one(acc, work) == (2, 1)
+    assert conn.connects == ["A"]
+    await router.aclose()
 
 
 async def test_timeout_discards_session_and_reconnects_next_time():
