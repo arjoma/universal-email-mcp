@@ -22,6 +22,14 @@ Design and scope: `docs/plans/2026-09-30-design.md`; parked ideas: `TODO.md`.
   before merging. No direct feature commits to `main`.
 - Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`
   ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, SemVer).
+- **Review after every larger piece of work.** Once the work is done and CI is
+  green, start a separate review subagent on the recent commits (a second pair of
+  eyes on all aspects: correctness, security, robustness, tests, design, docs).
+  Act on the high-priority findings right away; lower-priority ones are either
+  skipped or noted in `TODO.md`.
+- **Regular cleanup.** From time to time compact `TODO.md` (drop done or obsolete
+  items, merge duplicates) and tidy the code base with the `simplify` routine
+  (reuse, simplification, efficiency) — as its own PR.
 - Commits are authored as `Harald Schilly <info@arjoma.at>` (set in the repo's
   local git config).
 
