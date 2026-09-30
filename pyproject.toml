@@ -62,6 +62,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: needs a real IMAP server (container); skipped when none is available",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -21,6 +21,16 @@ jobs:
       matrix:
         # Supported floor (requires-python) and the newest release.
         python-version: ["3.12", "3.14"]
+    services:
+      # Real IMAP server for the integration tests (tests/integration).
+      # Any user name logs in with USER_PASSWORD. Pinned by digest.
+      dovecot:
+        image: dovecot/dovecot:2.4.5@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553
+        env:
+          USER_PASSWORD: uem-test-password
+        ports:
+          - 31993:31993
+          - 31143:31143
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -37,8 +47,17 @@ jobs:
       - name: Type check
         run: uv run --locked basedpyright
 
-      - name: Tests
-        run: uv run --locked pytest -q
+      - name: Unit tests
+        run: uv run --locked pytest -q -m "not integration"
+
+      - name: Integration tests (Dovecot service)
+        env:
+          UEM_TEST_IMAP_HOST: 127.0.0.1
+          UEM_TEST_IMAPS_PORT: "31993"
+          UEM_TEST_STARTTLS_PORT: "31143"
+          UEM_TEST_IMAP_PASSWORD: uem-test-password
+          UEM_TEST_REQUIRE_INTEGRATION: "1"
+        run: uv run --locked pytest -q -m integration
 
   audit:
     runs-on: ubuntu-latest
