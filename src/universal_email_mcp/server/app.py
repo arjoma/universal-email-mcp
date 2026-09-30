@@ -399,8 +399,9 @@ def build_server(service: MailService) -> MCPServer:
 
             def walk(ns: list[FolderNode], depth: int, acc: str = r.account) -> None:
                 for n in ns:
-                    label = ("  " * depth + "↳ " if depth else "") + n.name
-                    row = [escape_cell(acc, 30), escape_cell(label, 60)]
+                    # The tree prefix is added after escaping (which collapses spaces).
+                    prefix = "│ " * (depth - 1) + "└ " if depth else ""
+                    row = [escape_cell(acc, 30), prefix + escape_cell(n.name, 60)]
                     row.append(escape_cell(n.path, 60) if n.selectable else "(group)")
                     row.append(n.role or "")
                     if counts:
