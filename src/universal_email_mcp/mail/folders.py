@@ -3,7 +3,9 @@
 Precedence for each role: explicit override (operator preset or user config) →
 RFC 6154 SPECIAL-USE flag → name heuristics (English + German). The heuristics
 only look at top-level folders and direct children of INBOX, so a user folder like
-``Projects/Archive`` is not mistaken for the archive.
+``Projects/Archive`` is not mistaken for the archive. Folders in other users' or
+shared namespaces never get a role from flags or names (a shared ``\\Sent`` folder
+is not the user's Sent).
 """
 
 from __future__ import annotations
@@ -99,9 +101,16 @@ def assign_roles(
     *,
     overrides: Mapping[FolderRole, str] | None = None,
     use_special_use: bool = True,
+    foreign_prefixes: Iterable[str] = (),
 ) -> tuple[dict[str, FolderRole], list[str]]:
-    """Return ``({wire_name: role}, warnings)``; each role goes to at most one folder."""
+    """Return ``({wire_name: role}, warnings)``; each role goes to at most one folder.
+
+    ``foreign_prefixes``: wire-name prefixes of the other-users and shared
+    namespaces; folders under them are only eligible through an explicit override.
+    """
     items = [f for f in folders if _is_selectable(f)]
+    foreign = tuple(p for p in foreign_prefixes if p)
+    own = [f for f in items if not f.name.startswith(foreign)] if foreign else items
     by_role: dict[FolderRole, str] = {}
     warnings: list[str] = []
 
@@ -118,7 +127,7 @@ def assign_roles(
             by_role[role] = match.name
 
     if use_special_use:
-        for f in items:
+        for f in own:
             for flag in f.flags:
                 role = ROLE_FLAGS.get(flag.lower())
                 if role is not None and role not in by_role:
@@ -128,7 +137,7 @@ def assign_roles(
         if role in by_role:
             continue
         best: tuple[int, str] | None = None
-        for f in items:
+        for f in own:
             if f.name in by_role.values():
                 continue
             leaf = _heuristic_leaf(f)
