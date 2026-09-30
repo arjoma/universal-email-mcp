@@ -356,3 +356,17 @@ async def test_pages_show_current_flags_not_cached_ones():
     again = await _page(svc, limit=3)
     assert [h.summary.flagged for h in again.hits] == [True, False, False]
     assert "FLAGS INBOX 3" in a.calls and not any(c.startswith("FETCH") for c in a.calls)
+
+
+async def test_cursor_stops_retrying_a_persistently_failing_account():
+    a, b = FakeSession("A", {"INBOX": [1]}), FakeSession("B", {"INBOX": [1]})
+    svc, conn = _service(A=a, B=b)
+    conn.fail["B"] = ServerUnreachable("down")
+    page = await _page(svc, limit=5)
+    pages = 1
+    while page.cursor is not None:
+        assert pages < 10, "endless empty pages"
+        page = await _page(svc, page.cursor, limit=5)
+        pages += 1
+    assert pages == 4  # the first page + 3 retry pages (MAX_CURSOR_RETRIES), then no cursor
+    assert any("stopped retrying" in n for n in page.notes)

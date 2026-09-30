@@ -52,6 +52,8 @@ class Cursor:
     )
     offset: int = 0
     """Offset into a ranked (fuzzy / contact) result list."""
+    retries: int = 0
+    """Consecutive pages issued only to retry failed accounts (capped)."""
 
 
 def query_hash(args: Mapping[str, Any]) -> str:
@@ -80,6 +82,7 @@ class CursorCodec:
             "t": cursor.tool,
             "q": cursor.query,
             "o": cursor.offset,
+            "r": cursor.retries,
             "s": [
                 [acc, folder, p.uidvalidity, p.offset, p.max_uid, p.last_uid]
                 for (acc, folder), p in sorted(cursor.sources.items())
@@ -108,7 +111,11 @@ class CursorCodec:
             for acc, folder, uv, off, mx, last in cast(list[list[Any]], data["s"]):
                 sources[(str(acc), str(folder))] = SourcePos(int(uv), int(off), int(mx), int(last))
             cur = Cursor(
-                tool=str(data["t"]), query=str(data["q"]), sources=sources, offset=int(data["o"])
+                tool=str(data["t"]),
+                query=str(data["q"]),
+                sources=sources,
+                offset=int(data["o"]),
+                retries=int(data.get("r", 0)),
             )
         except (ValueError, KeyError, TypeError) as e:
             raise InvalidCursor("cursor is corrupted") from e
