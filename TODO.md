@@ -18,3 +18,8 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] More provider presets (IONOS, Strato, World4You, Hetzner, all-inkl, …),
       each validated with `probe`.
 - [ ] JMAP backend.
+
+## Repository
+- [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,
+      bypass: repository admin) so only admins can trigger PyPI releases. The `pypi`
+      environment is already restricted to `v*` tags.
