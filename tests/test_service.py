@@ -370,3 +370,16 @@ async def test_cursor_stops_retrying_a_persistently_failing_account():
         pages += 1
     assert pages == 4  # the first page + 3 retry pages (MAX_CURSOR_RETRIES), then no cursor
     assert any("stopped retrying" in n for n in page.notes)
+
+
+async def test_list_folders_keeps_tree_indentation():
+    a = FakeSession(
+        "A", {"INBOX": [1], "Clients": [], "Clients/Huber": [], "Clients/Huber/2025": []}
+    )
+    svc, _ = _service(A=a)
+    async with Client(build_server(svc)) as c:
+        r = await c.call_tool("list_folders", {})
+        text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
+    rows = {line.split(" | ")[1] for line in text.splitlines() if line.startswith("| A ")}
+    assert {"Clients", "└ Huber", "│ └ 2025"} <= rows
+    await svc.aclose()

@@ -274,7 +274,7 @@ async def test_list_folders_tree(seeded: Seeded):
         assert clients["Huber"]["path"] == "Clients/Huber" and clients["Huber"]["messages"] == 1
         assert top["Archive"]["children"][0]["path"] == "Archive/2025"
         assert top["Sent"]["role"] == "sent"
-        assert "↳ Maier GmbH" in md
+        assert "└ Maier GmbH" in md
 
 
 async def test_list_messages_today_across_accounts(seeded: Seeded):
