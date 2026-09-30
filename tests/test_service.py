@@ -3,7 +3,8 @@ time windows, and the MCP tool surface (schemas, error results)."""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -309,3 +310,37 @@ async def test_paging_survives_expunge_between_pages():
     assert [h.summary.ref.uid for h in third.hits] == [4, 3, 2]
     fourth = await _page(svc, third.cursor, limit=3)
     assert [h.summary.ref.uid for h in fourth.hits] == [1] and fourth.cursor is None
+
+
+# ---------------------------------------------------------------- threads
+
+
+def _msg(folder: str, uid: int, *, hours: int, msgid: str, **kw: Any):
+    when = datetime(2026, 9, 1, tzinfo=UTC) + timedelta(hours=hours)
+    return replace(summary("A", folder, uid), received=when, date=when, message_id=msgid, **kw)
+
+
+async def test_thread_forged_duplicate_cannot_hide_sent_and_order_is_arrival():
+    a = FakeSession("A", {"INBOX": [], "Sent": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<root@x>")
+    a.folders["Sent"][1] = _msg("Sent", 1, hours=2, msgid="<reply@x>", in_reply_to="<root@x>")
+    # forged: reuses the Sent message's Message-ID, backdates its Date header
+    forged = _msg("INBOX", 2, hours=3, msgid="<reply@x>", in_reply_to="<root@x>")
+    a.folders["INBOX"][2] = replace(forged, date=datetime(2020, 1, 1, tzinfo=UTC))
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    got = [(h.summary.ref.folder, h.summary.ref.uid) for h in res.hits]
+    assert got == [("INBOX", 1), ("Sent", 1), ("INBOX", 2)]
+
+
+async def test_thread_search_prioritises_own_ids_and_latest_references():
+    a = FakeSession("A", {"INBOX": []})
+    refs = tuple(f"<r{i:02d}@x>" for i in range(40))
+    a.folders["INBOX"][1] = _msg(
+        "INBOX", 1, hours=1, msgid="<me@x>", in_reply_to="<r39@x>", references=refs
+    )
+    svc, _ = _service(A=a)
+    await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    first = a.related_queries[0]
+    assert first[:4] == ["<me@x>", "<r39@x>", "<r38@x>", "<r37@x>"]
+    assert "<r00@x>" not in first[:30]
