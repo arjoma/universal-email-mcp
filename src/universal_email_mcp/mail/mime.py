@@ -410,7 +410,7 @@ def _tidy(text: str) -> str:
 class ParsedMessage:
     headers: HeaderFields
     text: str
-    text_source: Literal["plain", "html", "none"]
+    text_source: Literal["plain", "html", "none", "unparseable"]
     attachments: tuple[Attachment, ...]
 
 
@@ -483,8 +483,20 @@ def _part_size(part: Message) -> int:
 
 
 def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessage:
-    """Parse a full RFC 5322 message: headers, best text body, attachments."""
+    """Parse a full RFC 5322 message: headers, best text body, attachments.
+
+    A structure too deeply nested for the parser (``RecursionError``, e.g. thousands
+    of nested multiparts) degrades to headers only with ``text_source="unparseable"``
+    instead of failing the call or the session.
+    """
     headers = header_fields_from_message(BytesHeaderParser(policy=policy.compat32).parsebytes(raw))
+    try:
+        return _parse_body(raw, headers, max_html_chars)
+    except RecursionError:
+        return ParsedMessage(headers=headers, text="", text_source="unparseable", attachments=())
+
+
+def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> ParsedMessage:
     msg = BytesParser(policy=policy.default).parsebytes(raw)
 
     plain_part = html_part = None

@@ -211,3 +211,15 @@ def test_html_links_never_become_markdown_links():
 def test_line_and_paragraph_separators():
     assert sanitize_text("a\u2028b\u2029c\x85d") == "a\nb\nc\nd"
     assert sanitize_line("a\u2028b") == "a b"
+
+
+def test_deeply_nested_mime_degrades_to_unparseable():
+    body = "".join(
+        f'Content-Type: multipart/mixed; boundary="b{i}"\r\n\r\n--b{i}\r\n' for i in range(3000)
+    )
+    body += "Content-Type: text/plain\r\n\r\nhi\r\n"
+    body += "".join(f"--b{i}--\r\n" for i in reversed(range(3000)))
+    raw = ("From: a@example.com\r\nSubject: deep\r\nMIME-Version: 1.0\r\n" + body).encode()
+    m = parse_message(raw)
+    assert m.text_source == "unparseable" and m.text == "" and m.attachments == ()
+    assert m.headers.subject == "deep"
