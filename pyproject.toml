@@ -1,0 +1,72 @@
+[project]
+name = "universal-email-mcp"
+version = "0.0.1"
+description = "Vendor-neutral MCP server for IMAP, POP3 and SMTP mailboxes: multi-account, multi-user, self-hostable"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Harald Schilly", email = "info@arjoma.at" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50",
+    "imapclient>=4.1",
+    "mcp>=2.2",
+    "pydantic>=2.13",
+    "starlette>=1.7",
+    "uvicorn>=0.54",
+]
+
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Email",
+]
+keywords = ["mcp", "model-context-protocol", "imap", "smtp", "pop3", "email"]
+
+[project.urls]
+Homepage = "https://github.com/arjoma/universal-email-mcp"
+Issues = "https://github.com/arjoma/universal-email-mcp/issues"
+Changelog = "https://github.com/arjoma/universal-email-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+universal-email-mcp = "universal_email_mcp.__main__:main"
+
+[project.optional-dependencies]
+gcp = [
+    "google-cloud-firestore>=2.33",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.18,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["src"]

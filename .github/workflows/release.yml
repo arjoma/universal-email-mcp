@@ -1,0 +1,83 @@
+name: Release
+
+# Push a tag "vX.Y.Z" (equal to the version in pyproject.toml) to publish to PyPI.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Tag must match pyproject.toml version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(uv version --short)
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::Tag $TAG does not match pyproject.toml version $VERSION"
+            exit 1
+          fi
+
+      - name: CHANGELOG must have an entry for this version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: grep -q "^## \[${TAG#v}\]" CHANGELOG.md || { echo "::error::No CHANGELOG.md entry for ${TAG#v}"; exit 1; }
+
+      - name: Build
+        run: uv build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/universal-email-mcp/
+    permissions:
+      id-token: write  # PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v v="${TAG#v}" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > /tmp/notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: /tmp/notes.md
+          files: dist/*

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Supported floor (requires-python) and the newest release.
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Lint
+        run: |
+          uv run --locked ruff check src tests
+          uv run --locked ruff format --check src tests
+
+      - name: Type check
+        run: uv run --locked basedpyright
+
+      - name: Tests
+        run: uv run --locked pytest -q
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - name: Audit locked dependencies (all extras)
+        run: |
+          uv export --locked --all-extras --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt
+          uvx pip-audit --disable-pip --no-deps --require-hashes --requirement /tmp/requirements.txt
