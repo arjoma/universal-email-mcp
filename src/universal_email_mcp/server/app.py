@@ -238,7 +238,7 @@ def build_server(service: MailService) -> MCPServer:
             else f"no messages ({page.total} total)"
         ]
         if page.cursor:
-            foot.append(f"more: cursor={page.cursor}")
+            foot.append(f"more: cursor=`{page.cursor}`")
         if not page.exact:
             foot.append("approximate/partial matching")
         foot += [escape_cell(n, 200) for n in page.notes]

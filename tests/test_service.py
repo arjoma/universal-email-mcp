@@ -284,3 +284,13 @@ async def test_mcp_tools_schema_and_errors():
         assert r.is_error and r.structured_content is not None
         assert r.structured_content["problems"][0]["code"] == "AUTH_FAILED"
     await svc.aclose()
+
+
+async def test_permanent_failure_does_not_keep_paging():
+    a = FakeSession("A", {"INBOX": [1], "Clients": [1, 2]})
+    b = FakeSession("B", {"INBOX": [1]})
+    svc, _ = _service(A=a, B=b)
+    page = await _page(svc, limit=5, folders=["Clients"])
+    assert [h.summary.ref.uid for h in page.hits] == [2, 1]
+    assert [(p.account, p.code) for p in page.problems] == [("B", "FOLDER_NOT_FOUND")]
+    assert page.cursor is None

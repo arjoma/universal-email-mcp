@@ -62,6 +62,15 @@ Code must treat it that way everywhere:
   TLS on the host name). `mail/imap.py` — synchronous read-only `ImapSession`
   (run it via `asyncio.to_thread`). `mail/mime.py` — parsing, HTML→text,
   `fence_untrusted`. `mail/folders.py` — role detection.
+- `service/` — async core behind the tools: `router.py` (per-account sessions and
+  locks, worker threads, deadlines, reconnect, parallel fan-out with partial
+  results; backends per account kind), `mail.py` (`MailService`: the read
+  operations), `index.py` (header cache per folder + UIDVALIDITY), `fuzzy.py`
+  (rapidfuzz matching, umlaut variants, folder resolution), `cursor.py` (signed
+  paging cursors), `timewindow.py` (`today`, `this_week` …).
+- `server/` — MCP layer: `app.py` (`build_server()`: tools, instructions, error
+  results), `schemas.py` (output schemas), `render.py` (**`escape_cell()` — the one
+  place that makes mail text safe in Markdown**), `local.py` (stdio mode).
 - `probe.py`, `cli.py` — command line (`probe`, `local`).
 
 ## Checks (same as CI)

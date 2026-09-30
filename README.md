@@ -35,6 +35,44 @@ UEM_PASSWORD=... uv run universal-email-mcp probe --server mail.example.com --us
 and `--port` select other connection modes, `--account NAME` uses an account from
 the local config file (see [`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml)).
 
+## Local mode (stdio)
+
+`universal-email-mcp local` runs the MCP server over stdio for one user, with the
+accounts from the config file ([`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml);
+default `~/.config/universal-email-mcp/config.toml`, or `--config PATH` / `UEM_CONFIG`).
+Passwords come from environment variables (`password_env`) or the OS keyring —
+never from the file. Milestone M1 is **read-only**: `account_info`, `list_folders`,
+`list_messages`, `search_messages` (exact or `fuzzy`), `get_message`, `get_thread`,
+`find_contacts`.
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "email": {
+      "command": "uvx",
+      "args": ["universal-email-mcp", "local"],
+      "env": { "UEM_WORK_PASSWORD": "…" }
+    }
+  }
+}
+```
+
+Claude Code:
+
+```bash
+claude mcp add email -e UEM_WORK_PASSWORD=… -- uvx universal-email-mcp local
+```
+
+Add `"--config", "/path/to/config.toml"` to the arguments for a non-default config
+file. Until the first functional release is on PyPI, run it from a checkout
+instead: `"command": "uv", "args": ["run", "--directory", "/path/to/universal-email-mcp", "universal-email-mcp", "local"]`.
+
+Results come as Markdown tables (mail text escaped, links defanged) plus
+structured JSON; message bodies are fenced as untrusted content, so the assistant
+can tell mail from instructions.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](https://github.com/arjoma/universal-email-mcp/blob/main/LICENSE) and [NOTICE](https://github.com/arjoma/universal-email-mcp/blob/main/NOTICE).

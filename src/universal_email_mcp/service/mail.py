@@ -15,13 +15,15 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from universal_email_mcp.config import Config
+from universal_email_mcp.config import Config, Limits
 from universal_email_mcp.errors import (
+    AccountTimeout,
     AmbiguousFolder,
     FolderNotFound,
     InvalidArgument,
     InvalidRef,
     MailError,
+    ServerUnreachable,
     StaleCursor,
     UidValidityChanged,
 )
@@ -58,6 +60,10 @@ MAX_CONTACT_DAYS = 730
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
 _THREAD_ROLES: tuple[FolderRole, ...] = ("inbox", "sent")
 _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "drafts"})
+
+
+_TRANSIENT = frozenset({AccountTimeout.code, ServerUnreachable.code})
+"""Failures worth retrying on the next page."""
 
 
 # =========================================================================== results
@@ -215,7 +221,7 @@ class MailService:
         self._prefixes: dict[str, str] = {}
 
     @property
-    def limits(self):  # noqa: ANN201 - Limits
+    def limits(self) -> Limits:
         return self.config.limits
 
     def viewer_url(self, ref: MessageRef) -> str | None:
@@ -357,7 +363,7 @@ class MailService:
         # stays available so a later page can retry them; a stale position is
         # dropped (that account starts over).
         stale = {p.account for p in fan.problems if p.code == StaleCursor.code}
-        retry = any(p.code != StaleCursor.code for p in fan.problems)
+        retry = any(p.code in _TRANSIENT for p in fan.problems)
         next_cursor = None
         if retry or any(next_sources[c.key].offset < c.total for c in chunks):
             sources = {k: v for k, v in (cur.sources if cur else {}).items() if k[0] not in stale}
