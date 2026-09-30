@@ -1,0 +1,14 @@
+Message-ID: <reply-3@example.com>
+In-Reply-To: <reply-2@example.com>
+References: <root-1@example.com>
+ <reply-2@example.com>
+Date: 24 Sep 2026 07:00:00
+From: alice@example.org
+To: undisclosed-recipients:;
+Cc: =?UTF-8?B?w5ZsZmEgw5Z6dMO8cms=?= <oelfa@example.com>, "Doe, John" <john@example.com>
+Subject: Re: =?UTF-8?Q?Projekt_=C3=9Cbersicht?=
+ continued
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Reply body.

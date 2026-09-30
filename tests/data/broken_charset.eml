@@ -1,0 +1,10 @@
+Message-ID: <broken-1@example.com>
+Date: Sun, 27 Sep 2026 12:00:00 +0200
+From: "Stra√üe Sender" <strasse@example.com>
+To: alice@example.org
+Subject: =?x-bogus-charset?Q?Bogus_=E4?= and raw Gr√º√üe
+MIME-Version: 1.0
+Content-Type: text/plain; charset="x-unknown-foo"
+Content-Transfer-Encoding: 8bit
+
+Gr¸ﬂe in Latin-1 mit unbekanntem Zeichensatz.
