@@ -107,3 +107,45 @@ class CredentialMissing(MailError):
         "Set the environment variable named in the config (password_env) or store "
         "the password in the OS keyring (service 'universal-email-mcp', key = account name)."
     )
+
+
+class InvalidCursor(MailError):
+    code = "INVALID_CURSOR"
+    default_hint = (
+        "Pass the cursor exactly as returned, together with the same arguments; "
+        "or start again without a cursor."
+    )
+
+
+class StaleCursor(MailError):
+    code = "STALE_CURSOR"
+    default_hint = "The mailbox changed in a way that voids the cursor. Start again without it."
+
+
+class AccountTimeout(MailError):
+    code = "TIMEOUT"
+    default_hint = "The mail server did not answer in time. Try again, or narrow the request."
+
+
+class NotSupportedYet(MailError):
+    code = "NOT_SUPPORTED_YET"
+    default_hint = "This account type or operation is not implemented yet."
+
+
+class AmbiguousFolder(MailError):
+    code = "AMBIGUOUS_FOLDER"
+    default_hint = "Several folders match. Repeat the call with one of the listed folder names."
+
+    def __init__(self, message: str, choices: list[str], *, hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
+        self.choices = choices
+
+    def to_dict(self) -> dict[str, str]:
+        d = super().to_dict()
+        d["choices"] = "; ".join(self.choices)
+        return d
+
+
+class InvalidArgument(MailError):
+    code = "INVALID_ARGUMENT"
+    default_hint = "Check the tool arguments."
