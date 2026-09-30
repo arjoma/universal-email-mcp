@@ -29,7 +29,17 @@ from universal_email_mcp.models import Address, Attachment, TextSlice
 # --------------------------------------------------------------------------- text hygiene
 
 # Zero-width, bidi overrides/isolates, invisible separators, tag characters, BOM …
-_INVISIBLE = re.compile("[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁤⁦-⁯ㅤ︀-️﻿ﾠ￹-￻\U000e0000-\U000e007f]")
+# Zero-width, bidi overrides/isolates, invisible separators and fillers (Hangul),
+# variation selectors (incl. the supplement U+E0100–E01EF, which can smuggle one
+# byte per character), tag characters, BOM, interlinear annotations, shorthand and
+# musical format controls. U+2028/2029 are handled as line breaks.
+_INVISIBLE = re.compile(
+    "[\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f"
+    "\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0"
+    "\ufff9-\ufffb\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+    "\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
+)
+_LINE_SEP = re.compile("[\u2028\u2029\x85]")
 _CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _CONTROL_ALL = re.compile("[\x00-\x1f\x7f-\x9f]")
 
@@ -37,12 +47,14 @@ _CONTROL_ALL = re.compile("[\x00-\x1f\x7f-\x9f]")
 def sanitize_text(text: str) -> str:
     """Normalise newlines and drop invisible/bidi/control characters (keeps \\t, \\n)."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _LINE_SEP.sub("\n", text)
     text = _INVISIBLE.sub("", text)
     return _CONTROL.sub("", text)
 
 
 def sanitize_line(text: str) -> str:
     """Like :func:`sanitize_text` for single-line values (headers): no line breaks."""
+    text = _LINE_SEP.sub(" ", text)
     text = _INVISIBLE.sub("", text)
     text = _CONTROL_ALL.sub(" ", text)
     return re.sub(r" {2,}", " ", text).strip()
@@ -318,11 +330,12 @@ def _is_hidden(el: object) -> bool:
 
 
 def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
-    """Convert HTML mail to readable text: visible content only, links as text."""
+    """Convert HTML mail to readable text: visible content only, links as
+    ``text (url)`` (plain text, not Markdown links)."""
     from inscriptis import Inscriptis
     from inscriptis.model.config import ParserConfig
     from lxml import html as lxml_html
-    from lxml.etree import ParserError
+    from lxml.etree import ParserError, SubElement
 
     html = html[:max_input_chars]
     html = re.sub(r"^\s*<\?xml[^>]*\?>", "", html)
@@ -363,7 +376,18 @@ def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
                 else:
                     parent.text = (parent.text or "") + tail
 
-    text = Inscriptis(tree, ParserConfig(display_links=True)).get_text()
+    # Link targets are kept as plain text after the link text ("text (url)") —
+    # never as Markdown link syntax with attacker-chosen link text; callers defang
+    # the URLs before showing them.
+    for a in tree.iter("a"):
+        href = " ".join(str(a.get("href") or "").split())[:2000]
+        if not href or href.startswith("#"):
+            continue
+        label = " ".join(a.text_content().split())
+        if label == href or label.rstrip("/") == href.rstrip("/"):
+            continue
+        SubElement(a, "span").text = f" ({href})"
+    text = Inscriptis(tree, ParserConfig(display_links=False)).get_text()
     return _tidy(text)
 
 
