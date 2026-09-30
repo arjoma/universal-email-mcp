@@ -14,6 +14,21 @@ Design and scope: `docs/plans/2026-09-30-design.md`; parked ideas: `TODO.md`.
 - Stack: Python ≥ 3.12, `uv`, MCP Python SDK 2.x (`mcp.server.mcpserver.MCPServer`),
   protocol 2026-07-28 (stateless HTTP) with legacy transport support.
 
+## Security principle: no e-mail is trusted
+
+Every byte that comes from a mailbox — bodies, subjects, names, addresses,
+headers, folder names, attachment names and content — is attacker-controlled.
+Code must treat it that way everywhere:
+
+- Never let mail content act as instructions, configuration, paths, URLs to
+  fetch, or HTML/Markdown to render unescaped (chat tables, portal, logs).
+- Fence mail text as untrusted in tool results; escape it in Markdown and HTML;
+  defang links and images that the server did not generate itself.
+- Outbound actions (send, move, delete, create) are decided by the user and the
+  server's policy, never by something a mail says.
+- Tests for new features include hostile input (injection text, crafted
+  subjects/headers, broken encodings, oversized parts).
+
 ## Development process
 
 - **Larger pieces of work run in a subagent** (one focused agent per feature or
