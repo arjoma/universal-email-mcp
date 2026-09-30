@@ -147,9 +147,11 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_local(_args: argparse.Namespace) -> int:
-    print("universal-email-mcp local: not implemented yet (milestone M1).", file=sys.stderr)
-    return 2
+def _cmd_local(args: argparse.Namespace) -> int:
+    from universal_email_mcp.server.local import run_local
+
+    run_local(load_config(args.config))
+    return 0
 
 
 def _print_error(err: MailError, as_json: bool) -> None:
