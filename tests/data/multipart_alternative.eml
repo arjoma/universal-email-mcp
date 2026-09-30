@@ -1,0 +1,23 @@
+Return-Path: <juergen@example.com>
+Message-ID: <alt-1@example.com>
+Date: Tue, 29 Sep 2026 10:15:00 +0200
+From: =?ISO-8859-1?Q?J=FCrgen_M=FCller?= <juergen@example.com>
+To: Alice Example <alice@example.org>, bob@example.org
+Subject: =?UTF-8?B?R3LDvMOfZSBhdXMgV2llbg==?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Hallo Alice,
+
+sch=C3=B6ne Gr=C3=BC=C3=9Fe aus Wien!
+
+J=C3=BCrgen
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Hallo Alice,</p><p>HTML version</p></body></html>
+--ALT--

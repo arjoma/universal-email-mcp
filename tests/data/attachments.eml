@@ -1,0 +1,46 @@
+Message-ID: <att-1@example.com>
+Date: Sat, 26 Sep 2026 09:30:00 +0200
+From: Billing <billing@example.com>
+To: alice@example.org
+Subject: Ihre Rechnung
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIX"
+
+--MIX
+Content-Type: multipart/related; boundary="REL"
+
+--REL
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+
+Anbei die Rechnung.
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<p>Anbei die Rechnung. <img src="cid:logo@example.com"></p>
+--ALT--
+--REL
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: <logo@example.com>
+Content-Disposition: inline
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgAAACAAFUok9dAAAAAElFTkSuQmCC
+--REL--
+--MIX
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename*=UTF-8''Rechnung%20M%C3%A4rz.pdf
+
+JVBERi0xLjQKMSAwIG9iajw8Pj5lbmRvYmoKdHJhaWxlcjw8Pj4KJSVFT0YKJVBERi0xLjQKMSAw
+IG9iajw8Pj5lbmRvYmoKdHJhaWxlcjw8Pj4KJSVFT0YKJVBERi0xLjQKMSAwIG9iajw8Pj5lbmRv
+YmoKdHJhaWxlcjw8Pj4KJSVFT0YK
+
+--MIX
+Content-Type: text/plain; charset=utf-8; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+
+some notes
+--MIX--

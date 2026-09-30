@@ -1,0 +1,521 @@
+"""MIME parsing: robust header decoding, body text selection, attachment listing,
+text windows, and fencing of untrusted content.
+
+Everything here treats mail as hostile input: bad charsets fall back instead of
+raising, invisible/bidi control characters are removed, HTML is reduced to visible
+text (hidden elements, scripts, styles, images and tracking pixels are dropped),
+and :func:`fence_untrusted` marks content so a model can tell data from instructions.
+"""
+
+from __future__ import annotations
+
+import codecs
+import email.errors
+import email.header
+import email.utils
+import html as html_mod
+import re
+import secrets
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email import policy
+from email.message import EmailMessage, Message
+from email.parser import BytesHeaderParser, BytesParser
+from typing import Literal
+
+from universal_email_mcp.models import Address, Attachment, TextSlice
+
+# --------------------------------------------------------------------------- text hygiene
+
+# Zero-width, bidi overrides/isolates, invisible separators, tag characters, BOM …
+_INVISIBLE = re.compile("[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁤⁦-⁯ㅤ︀-️﻿ﾠ￹-￻\U000e0000-\U000e007f]")
+_CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+_CONTROL_ALL = re.compile("[\x00-\x1f\x7f-\x9f]")
+
+
+def sanitize_text(text: str) -> str:
+    """Normalise newlines and drop invisible/bidi/control characters (keeps \\t, \\n)."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _INVISIBLE.sub("", text)
+    return _CONTROL.sub("", text)
+
+
+def sanitize_line(text: str) -> str:
+    """Like :func:`sanitize_text` for single-line values (headers): no line breaks."""
+    text = _INVISIBLE.sub("", text)
+    text = _CONTROL_ALL.sub(" ", text)
+    return re.sub(r" {2,}", " ", text).strip()
+
+
+_FENCE_TAG = re.compile(r"<(\s*/?\s*untrusted[\s_-]*content)", re.IGNORECASE)
+
+
+def fence_untrusted(text: str, *, source: str = "email", nonce: str | None = None) -> str:
+    """Wrap untrusted mail content in explicit markers.
+
+    The markers carry a random nonce, so content cannot close the fence even if it
+    imitates the tag; imitations are defused anyway (``<`` → ``‹``). Invisible and
+    bidi control characters are removed.
+    """
+    nonce = nonce or secrets.token_hex(6)
+    src = re.sub(r"[^A-Za-z0-9 ._:-]", "", source)[:64] or "email"
+    clean = _FENCE_TAG.sub(r"‹\1", sanitize_text(text))
+    return (
+        f'<untrusted-content source="{src}" nonce="{nonce}">\n'
+        f"{clean}\n"
+        f'</untrusted-content nonce="{nonce}">'
+    )
+
+
+def slice_text(text: str, max_chars: int, offset: int = 0) -> TextSlice:
+    """Return a window of ``text`` starting at ``offset`` with at most ``max_chars``."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    total = len(text)
+    offset = max(0, min(offset, total))
+    end = min(total, offset + max_chars)
+    return TextSlice(
+        text=text[offset:end],
+        offset=offset,
+        total_chars=total,
+        next_offset=end if end < total else None,
+    )
+
+
+# --------------------------------------------------------------------------- headers
+
+
+def _decode_bytes(data: bytes, charset: str | None) -> str:
+    """Decode with the declared charset, falling back to UTF-8, then Windows-1252."""
+    candidates: list[str] = []
+    if charset:
+        cs = charset.strip().strip('"').lower()
+        if cs in ("unknown-8bit", "x-unknown", "us-ascii", "ascii"):
+            cs = ""
+        if cs:
+            try:
+                codecs.lookup(cs)
+                candidates.append(cs)
+            except LookupError:
+                pass
+    candidates += ["utf-8", "cp1252"]
+    for cs in candidates:
+        try:
+            return data.decode(cs)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("latin-1", errors="replace")  # pragma: no cover - latin-1 never fails
+
+
+def _fix_surrogates(s: str) -> str:
+    """Raw 8-bit header bytes arrive as surrogate escapes; decode them properly."""
+    if not any("\udc80" <= c <= "\udcff" for c in s):
+        return s
+    return _decode_bytes(s.encode("ascii", "surrogateescape"), None)
+
+
+def _unfold(value: str) -> str:
+    return re.sub(r"\r?\n(?=[ \t])", "", value)
+
+
+def decode_header(value: str | bytes | None) -> str:
+    """Decode an RFC 2047 header value robustly; always returns a clean single line."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = _decode_bytes(value, None)
+    value = _unfold(_fix_surrogates(str(value)))
+    try:
+        chunks = email.header.decode_header(value)
+    except (email.errors.HeaderParseError, ValueError, LookupError):
+        return sanitize_line(value)
+    out: list[str] = []
+    for chunk, charset in chunks:
+        if isinstance(chunk, bytes):
+            out.append(_decode_bytes(chunk, charset))
+        else:
+            out.append(_fix_surrogates(chunk))
+    return sanitize_line("".join(out))
+
+
+_EMAIL_RE = re.compile(r"[^\s<>\"',;:()\[\]]+@[^\s<>\"',;:()\[\]]+")
+
+
+def parse_addresses(*values: str | None) -> tuple[Address, ...]:
+    """Parse one or more address-list header values into :class:`Address` items."""
+    raw = [_unfold(_fix_surrogates(v)) for v in values if v]
+    if not raw:
+        return ()
+    result: list[Address] = []
+    pairs = email.utils.getaddresses(raw)
+    for name, addr in pairs:
+        addr = sanitize_line(addr)
+        if not addr:
+            continue
+        result.append(Address(name=decode_header(name), email=addr))
+    if not result:  # strict parser gave up: salvage bare addresses
+        for v in raw:
+            for m in _EMAIL_RE.findall(v):
+                result.append(Address(name="", email=sanitize_line(m)))
+    return tuple(result)
+
+
+_MSGID_RE = re.compile(r"<[^<>\s]+>")
+
+
+def parse_msgid_list(value: str | None) -> tuple[str, ...]:
+    """Message-IDs (with angle brackets) in order of appearance, deduplicated."""
+    if not value:
+        return ()
+    ids: list[str] = []
+    for m in _MSGID_RE.findall(_unfold(_fix_surrogates(value))):
+        m = sanitize_line(m)
+        if m not in ids:
+            ids.append(m)
+    return tuple(ids)
+
+
+def parse_msgid(value: str | None) -> str | None:
+    ids = parse_msgid_list(value)
+    if ids:
+        return ids[0]
+    cleaned = sanitize_line(_unfold(value or ""))
+    return cleaned or None
+
+
+def parse_date(value: str | None) -> datetime | None:
+    """RFC 5322 date → aware datetime (naive/-0000 dates are taken as UTC)."""
+    if not value:
+        return None
+    try:
+        dt = email.utils.parsedate_to_datetime(sanitize_line(_unfold(value)))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+@dataclass(frozen=True, slots=True)
+class HeaderFields:
+    """Decoded header fields used for summaries, threading and search."""
+
+    from_: tuple[Address, ...] = ()
+    to: tuple[Address, ...] = ()
+    cc: tuple[Address, ...] = ()
+    reply_to: tuple[Address, ...] = ()
+    subject: str = ""
+    date: datetime | None = None
+    message_id: str | None = None
+    in_reply_to: str | None = None
+    references: tuple[str, ...] = ()
+
+
+SUMMARY_HEADERS = (
+    "From",
+    "To",
+    "Cc",
+    "Reply-To",
+    "Subject",
+    "Date",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+)
+
+
+def _all(msg: Message, name: str) -> list[str]:
+    # raw_items() keeps raw 8-bit bytes as surrogate escapes (get_all() would turn
+    # them into replacement characters); _fix_surrogates() decodes them later.
+    wanted = name.lower()
+    return [str(v) for k, v in msg.raw_items() if k.lower() == wanted]
+
+
+def _first(msg: Message, name: str) -> str | None:
+    values = _all(msg, name)
+    return values[0] if values else None
+
+
+def header_fields_from_message(msg: Message) -> HeaderFields:
+    """Extract :class:`HeaderFields` from a message parsed with ``policy.compat32``."""
+    return HeaderFields(
+        from_=parse_addresses(*_all(msg, "From")),
+        to=parse_addresses(*_all(msg, "To")),
+        cc=parse_addresses(*_all(msg, "Cc")),
+        reply_to=parse_addresses(*_all(msg, "Reply-To")),
+        subject=decode_header(_first(msg, "Subject")),
+        date=parse_date(_first(msg, "Date")),
+        message_id=parse_msgid(_first(msg, "Message-ID")),
+        in_reply_to=parse_msgid(_first(msg, "In-Reply-To")),
+        references=parse_msgid_list(" ".join(_all(msg, "References"))),
+    )
+
+
+def parse_header_block(raw: bytes) -> HeaderFields:
+    """Parse a raw header block (e.g. ``BODY[HEADER.FIELDS (...)]``)."""
+    msg = BytesHeaderParser(policy=policy.compat32).parsebytes(raw)
+    return header_fields_from_message(msg)
+
+
+# --------------------------------------------------------------------------- HTML
+
+_HIDDEN_STYLE = re.compile(
+    r"display\s*:\s*none"
+    r"|visibility\s*:\s*(hidden|collapse)"
+    r"|opacity\s*:\s*0*(\.0+)?\s*(;|!|$)"
+    r"|font-size\s*:\s*0+(\.0+)?\s*(px|pt|em|rem|%)?\s*(;|!|$)"
+    r"|max-(height|width)\s*:\s*0+\s*(px)?\s*(;|!|$)"
+    r"|mso-hide\s*:\s*all"
+    r"|text-indent\s*:\s*-\d{3,}",
+    re.IGNORECASE,
+)
+_ZERO_BOX = re.compile(r"(^|;)\s*(height|width)\s*:\s*0+\s*(px)?\s*(;|!|$)", re.IGNORECASE)
+_OVERFLOW_HIDDEN = re.compile(r"overflow\s*:\s*hidden", re.IGNORECASE)
+
+_DROP_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "head",
+        "title",
+        "meta",
+        "link",
+        "template",
+        "noscript",
+        "object",
+        "embed",
+        "iframe",
+        "frame",
+        "svg",
+        "math",
+        "img",
+        "picture",
+        "video",
+        "audio",
+        "canvas",
+        "map",
+        "input",
+        "select",
+        "textarea",
+        "button",
+    }
+)
+
+
+def _is_hidden(el: object) -> bool:
+    attrib = getattr(el, "attrib", {})
+    if "hidden" in attrib:
+        return True
+    if str(attrib.get("aria-hidden", "")).lower() == "true":
+        return True
+    style = str(attrib.get("style", ""))
+    if style and (
+        _HIDDEN_STYLE.search(style) or (_ZERO_BOX.search(style) and _OVERFLOW_HIDDEN.search(style))
+    ):
+        return True
+    return False
+
+
+def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
+    """Convert HTML mail to readable text: visible content only, links as text."""
+    from inscriptis import Inscriptis
+    from inscriptis.model.config import ParserConfig
+    from lxml import html as lxml_html
+    from lxml.etree import ParserError
+
+    html = html[:max_input_chars]
+    html = re.sub(r"^\s*<\?xml[^>]*\?>", "", html)
+    if not html.strip():
+        return ""
+    try:
+        tree = lxml_html.fromstring(html)
+    except (ParserError, ValueError):
+        try:
+            tree = lxml_html.fromstring(html.encode("utf-8", "replace"))
+        except (ParserError, ValueError):
+            return _strip_tags(html)
+
+    doomed: list[lxml_html.HtmlElement] = []
+    for el in tree.iter():
+        tag = el.tag
+        if not isinstance(tag, str):  # comments, processing instructions
+            doomed.append(el)
+            continue
+        local = tag.rsplit("}", 1)[-1].lower()
+        if local in _DROP_TAGS or _is_hidden(el):
+            doomed.append(el)
+    for el in doomed:
+        if el is tree:
+            return ""
+        parent = el.getparent()
+        if parent is None:
+            continue
+        if isinstance(el, lxml_html.HtmlElement):
+            el.drop_tree()  # keeps the tail text
+        else:
+            tail = el.tail
+            prev = el.getprevious()
+            parent.remove(el)
+            if tail:
+                if prev is not None:
+                    prev.tail = (prev.tail or "") + tail
+                else:
+                    parent.text = (parent.text or "") + tail
+
+    text = Inscriptis(tree, ParserConfig(display_links=True)).get_text()
+    return _tidy(text)
+
+
+def _strip_tags(html: str) -> str:
+    text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>", " ", html)
+    text = re.sub(r"(?s)<[^>]*>", " ", text)
+    return _tidy(html_mod.unescape(text))
+
+
+def _tidy(text: str) -> str:
+    lines = [line.rstrip() for line in sanitize_text(text).split("\n")]
+    text = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+# --------------------------------------------------------------------------- bodies
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedMessage:
+    headers: HeaderFields
+    text: str
+    text_source: Literal["plain", "html", "none"]
+    attachments: tuple[Attachment, ...]
+
+
+def _part_bytes(part: Message) -> bytes:
+    try:
+        payload = part.get_payload(decode=True)
+    except Exception:  # noqa: BLE001 - broken transfer encodings must not abort parsing
+        payload = None
+    if isinstance(payload, bytes):
+        return payload
+    raw = part.get_payload()
+    return raw.encode("utf-8", "surrogateescape") if isinstance(raw, str) else b""
+
+
+def part_text(part: Message) -> str:
+    """Decoded text of a leaf part with charset fallback."""
+    return _decode_bytes(_part_bytes(part), part.get_content_charset())
+
+
+def iter_parts(msg: Message, prefix: str = "") -> Iterator[tuple[str, Message]]:
+    """Yield ``(imap_section, leaf_part)``; message/rfc822 parts are leaves."""
+    if msg.is_multipart() and msg.get_content_type() != "message/rfc822":
+        payload = msg.get_payload()
+        if not isinstance(payload, list):  # pragma: no cover - defensive
+            return
+        for i, sub in enumerate(payload, 1):
+            if not isinstance(sub, Message):
+                continue
+            section = f"{prefix}.{i}" if prefix else str(i)
+            if sub.is_multipart() and sub.get_content_type() != "message/rfc822":
+                yield from iter_parts(sub, section)
+            else:
+                yield section, sub
+    else:
+        yield (prefix or "1"), msg
+
+
+def _filename(part: Message) -> str | None:
+    name: str | None
+    try:
+        name = part.get_filename() or part.get_param("name")  # pyright: ignore[reportAssignmentType]
+    except Exception:  # noqa: BLE001
+        name = None
+    if isinstance(name, tuple):  # RFC 2231 triple from get_param
+        name = email.utils.collapse_rfc2231_value(name)
+    if not name:
+        return None
+    decoded = decode_header(str(name)).replace("/", "_").replace("\\", "_")
+    return decoded[:255] or None
+
+
+def _disposition(part: Message) -> str | None:
+    try:
+        value = part.get_content_disposition()
+    except Exception:  # noqa: BLE001
+        return None
+    return value.lower() if value else None
+
+
+def _part_size(part: Message) -> int:
+    if part.get_content_type() == "message/rfc822":
+        inner = part.get_payload()
+        if isinstance(inner, list) and inner and isinstance(inner[0], Message):
+            try:
+                return len(inner[0].as_bytes())
+            except Exception:  # noqa: BLE001
+                return 0
+        return 0
+    return len(_part_bytes(part))
+
+
+def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessage:
+    """Parse a full RFC 5322 message: headers, best text body, attachments."""
+    headers = header_fields_from_message(BytesHeaderParser(policy=policy.compat32).parsebytes(raw))
+    msg = BytesParser(policy=policy.default).parsebytes(raw)
+
+    plain_part = html_part = None
+    if isinstance(msg, EmailMessage):
+        try:
+            plain_part = msg.get_body(preferencelist=("plain",))
+            html_part = msg.get_body(preferencelist=("html",))
+        except Exception:  # noqa: BLE001 - odd structures: fall back to a walk
+            plain_part = html_part = None
+
+    leaves = list(iter_parts(msg))
+    if plain_part is None and html_part is None:
+        for _section, part in leaves:
+            if _disposition(part) == "attachment" or _filename(part):
+                continue
+            ctype = part.get_content_type()
+            if ctype == "text/plain" and plain_part is None:
+                plain_part = part
+            elif ctype == "text/html" and html_part is None:
+                html_part = part
+
+    text, source = "", "none"
+    if plain_part is not None:
+        text, source = _tidy(part_text(plain_part)), "plain"
+    if not text.strip() and html_part is not None:
+        text, source = html_to_text(part_text(html_part), max_input_chars=max_html_chars), "html"
+    if not text.strip():
+        text, source = "", "none"
+
+    attachments: list[Attachment] = []
+    body_parts = {id(p) for p in (plain_part, html_part) if p is not None}
+    for section, part in leaves:
+        if id(part) in body_parts:
+            continue
+        ctype = part.get_content_type()
+        disp = _disposition(part)
+        filename = _filename(part)
+        if ctype in ("text/plain", "text/html") and disp != "attachment" and not filename:
+            continue  # alternative body or inline text fragment
+        if part.is_multipart() and ctype != "message/rfc822":
+            continue
+        cid = part.get("Content-ID")
+        attachments.append(
+            Attachment(
+                part_id=section,
+                filename=filename,
+                content_type=ctype,
+                size=_part_size(part),
+                inline=disp == "inline" or (disp is None and cid is not None),
+                content_id=parse_msgid(str(cid)) if cid else None,
+            )
+        )
+    return ParsedMessage(
+        headers=headers,
+        text=text,
+        text_source=source,  # pyright: ignore[reportArgumentType]
+        attachments=tuple(attachments),
+    )
