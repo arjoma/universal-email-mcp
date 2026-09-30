@@ -617,6 +617,17 @@ class ImapSession:
 
         return Namespace(personal=conv(ns[0]), other=conv(ns[1]), shared=conv(ns[2]))
 
+    def _foreign_prefixes(self) -> tuple[str, ...]:
+        """Prefixes of the other-users and shared namespaces (role detection skips
+        them). Without NAMESPACE, or if it fails, nothing is excluded."""
+        try:
+            ns = self.namespace()
+        except (ProtocolError, ServerUnreachable):
+            return ()
+        if ns is None:
+            return ()
+        return tuple(p for p, _d in (*ns.other, *ns.shared) if p)
+
     def quota(self) -> list[QuotaInfo] | None:
         """Quota of the INBOX quota root(s), or ``None`` without the QUOTA extension."""
         if not self.features.quota:
@@ -649,6 +660,7 @@ class ImapSession:
                 items,
                 overrides=self._folder_role_overrides,
                 use_special_use=True,
+                foreign_prefixes=self._foreign_prefixes(),
             )
             self.role_warnings = warnings
             folders: list[FolderInfo] = []

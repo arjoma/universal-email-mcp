@@ -89,3 +89,20 @@ def test_overrides_take_precedence_and_warn():
 def test_special_use_can_be_disabled():
     roles, _ = assign_roles(folders(("INBOX", ()), ("X", ("\\Sent",))), use_special_use=False)
     assert roles == {"INBOX": "inbox"}
+
+
+def test_roles_ignore_other_users_and_shared_namespaces():
+    folders = [
+        RawFolder("INBOX", "INBOX", "/", ()),
+        RawFolder("Shared/team/Sent", "Shared/team/Sent", "/", ("\\Sent",)),
+        RawFolder("Other Users/bob/Trash", "Other Users/bob/Trash", "/", ("\\Trash",)),
+        RawFolder("Shared", "Shared", "/", ("\\Noselect",)),
+        RawFolder("Gesendet", "Gesendet", "/", ()),
+    ]
+    roles, _ = assign_roles(folders, foreign_prefixes=("Shared/", "Other Users/", ""))
+    assert roles == {"INBOX": "inbox", "Gesendet": "sent"}
+    # an explicit override may still point into a shared namespace
+    roles, _ = assign_roles(
+        folders, overrides={"trash": "Other Users/bob/Trash"}, foreign_prefixes=("Other Users/",)
+    )
+    assert roles["Other Users/bob/Trash"] == "trash"
