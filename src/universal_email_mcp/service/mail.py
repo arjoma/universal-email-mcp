@@ -399,7 +399,9 @@ class MailService:
         last_uid = pos.last_uid if pos is not None else 0
         start = _resume_index(uids, last_uid)
         window = uids[start : start + limit]
-        summaries = self.index.summaries(session, res.folder, res.uidvalidity, window)
+        summaries = self.index.summaries(
+            session, res.folder, res.uidvalidity, window, refresh_flags=True
+        )
         return _Chunk(key, res.uidvalidity, max_uid, start, len(uids), window, summaries, last_uid)
 
     # ------------------------------------------------------------ fuzzy search
@@ -550,7 +552,11 @@ class MailService:
                         continue
                     room = cap * 2 - len(found)
                     for s in self.index.summaries(
-                        session, res.folder, res.uidvalidity, fresh[: max(0, room)]
+                        session,
+                        res.folder,
+                        res.uidvalidity,
+                        fresh[: max(0, room)],
+                        refresh_flags=True,
                     ):
                         found[(s.ref.folder, s.ref.uid)] = s
                         for i in _thread_ids(s):
@@ -578,7 +584,11 @@ class MailService:
                         continue
                     res = session.search_related(f.name, ids)
                     out += self.index.summaries(
-                        session, res.folder, res.uidvalidity, list(res.uids[:cap])
+                        session,
+                        res.folder,
+                        res.uidvalidity,
+                        list(res.uids[:cap]),
+                        refresh_flags=True,
                     )
                 return out
 

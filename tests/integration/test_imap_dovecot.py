@@ -304,6 +304,14 @@ def test_fetch_summaries(session: ImapSession):
     assert threaded.references == ("<root-1@example.com>", "<reply-2@example.com>")
 
 
+def test_fetch_flags(session: ImapSession):
+    flags = session.fetch_flags("INBOX", [4, 7, 999])
+    assert set(flags) == {4, 7}  # vanished/unknown UIDs are left out
+    assert "\\Flagged" in flags[4] and {"\\Seen", "\\Flagged"} <= set(flags[7])
+    with pytest.raises(UidValidityChanged):
+        session.fetch_flags("INBOX", [4], uidvalidity=1)
+
+
 def test_fetch_summaries_stale_uidvalidity(session: ImapSession):
     current = session.search("INBOX").uidvalidity
     with pytest.raises(UidValidityChanged):

@@ -344,3 +344,15 @@ async def test_thread_search_prioritises_own_ids_and_latest_references():
     first = a.related_queries[0]
     assert first[:4] == ["<me@x>", "<r39@x>", "<r38@x>", "<r37@x>"]
     assert "<r00@x>" not in first[:30]
+
+
+async def test_pages_show_current_flags_not_cached_ones():
+    a = FakeSession("A", {"INBOX": [1, 2, 3]})
+    svc, _ = _service(A=a)
+    first = await _page(svc, limit=3)
+    assert all(not h.summary.flagged for h in first.hits)
+    a.folders["INBOX"][3] = replace(a.folders["INBOX"][3], flags=("\\Flagged", "\\Seen"))
+    a.calls.clear()
+    again = await _page(svc, limit=3)
+    assert [h.summary.flagged for h in again.hits] == [True, False, False]
+    assert "FLAGS INBOX 3" in a.calls and not any(c.startswith("FETCH") for c in a.calls)
