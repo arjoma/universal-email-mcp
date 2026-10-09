@@ -230,4 +230,4 @@ def format_report(r: ProbeReport) -> str:
     out.append("Bridge plan:")
     for line in r.plan:
         out.append(f"  - {line}")
-    return "\n".join(out)
+    return "\n".join(printable(line) for line in out)

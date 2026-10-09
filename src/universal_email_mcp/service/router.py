@@ -139,6 +139,8 @@ def _run_daemon[**P, T](
         if fut.cancelled():
             return
         if error is not None:
+            if isinstance(error, StopIteration):  # not allowed in a future
+                error = RuntimeError("worker raised StopIteration")
             fut.set_exception(error)
         else:
             fut.set_result(result)  # pyright: ignore[reportArgumentType]
