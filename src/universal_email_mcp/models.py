@@ -174,38 +174,72 @@ class FolderInfo:
 # --------------------------------------------------------------------------- messages
 
 _REF_PREFIX = "m1."
+_POP3_REF_PREFIX = "p1."
 _MAX_REF_LEN = 4096
 _MAX_U32 = 2**32 - 1
+_MAX_UIDL = 70
+"""RFC 1939: a unique-id is 1 to 70 printable characters (0x21-0x7E)."""
+
+POP3_FOLDER = "INBOX"
+"""The one pseudo folder of a POP3 account."""
+POP3_UIDVALIDITY = 1
+"""POP3 has no UIDVALIDITY; the pseudo folder always reports this one."""
 
 
 def _has_control(s: str) -> bool:
     return any(ord(c) < 0x20 or ord(c) == 0x7F for c in s)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class MessageRef:
-    """Stable identity of an IMAP message: (account, folder, UIDVALIDITY, UID).
+    """Stable identity of a message.
 
-    ``encode()`` produces an opaque, URL-safe id; ``MessageRef.decode(id)`` reverses
-    it and raises :class:`InvalidRef` for anything malformed. The id is not a
-    security token: callers must still check that the account is accessible.
+    IMAP: (account, folder, UIDVALIDITY, UID). POP3 (``uidl`` set): (account, UIDL) -
+    the server's unique id is the identity, ``folder`` is the pseudo folder
+    ``INBOX`` and ``uid`` is only a number the process assigned to the UIDL (it
+    differs between runs and is ``0`` in a ref decoded from an id), so it takes no
+    part in equality, hashing or the id.
+
+    ``encode()`` produces an opaque, URL-safe id (IMAP and POP3 ids differ in their
+    prefix, so they cannot be confused); ``MessageRef.decode(id)`` reverses it and
+    raises :class:`InvalidRef` for anything malformed. The id is not a security
+    token: callers must still check that the account is accessible.
     """
 
     account: str
     folder: str
     uidvalidity: int
     uid: int
+    uidl: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_ref_fields(self.account, self.folder, self.uidvalidity, self.uid)
+        _validate_ref_fields(self.account, self.folder, self.uidvalidity, self.uid, self.uidl)
+
+    @property
+    def is_pop3(self) -> bool:
+        return self.uidl is not None
+
+    def _identity(self) -> tuple[object, ...]:
+        if self.uidl is not None:
+            return (self.account, self.uidl)
+        return (self.account, self.folder, self.uidvalidity, self.uid)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MessageRef) and self._identity() == other._identity()
+
+    def __hash__(self) -> int:
+        return hash(self._identity())
 
     def encode(self) -> str:
-        payload = json.dumps(
-            [self.account, self.folder, self.uidvalidity, self.uid],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return _REF_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+        if self.uidl is not None:
+            prefix, fields = _POP3_REF_PREFIX, [self.account, self.uidl]
+        else:
+            prefix, fields = (
+                _REF_PREFIX,
+                [self.account, self.folder, self.uidvalidity, self.uid],
+            )
+        payload = json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return prefix + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
     @property
     def id(self) -> str:
@@ -213,11 +247,17 @@ class MessageRef:
 
     @classmethod
     def decode(cls, ref_id: str) -> MessageRef:
-        if not isinstance(ref_id, str) or not ref_id.startswith(_REF_PREFIX):
+        if not isinstance(ref_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise InvalidRef("not a message id (unknown format or version)")
+        if ref_id.startswith(_REF_PREFIX):
+            prefix = _REF_PREFIX
+        elif ref_id.startswith(_POP3_REF_PREFIX):
+            prefix = _POP3_REF_PREFIX
+        else:
             raise InvalidRef("not a message id (unknown format or version)")
         if len(ref_id) > _MAX_REF_LEN:
             raise InvalidRef("message id is too long")
-        body = ref_id[len(_REF_PREFIX) :]
+        body = ref_id[len(prefix) :]
         if not body or any(c not in _B64URL for c in body):
             raise InvalidRef("message id contains invalid characters")
         try:
@@ -225,17 +265,26 @@ class MessageRef:
             data = json.loads(raw.decode("utf-8"))
         except (binascii.Error, ValueError, UnicodeDecodeError) as e:
             raise InvalidRef("message id is corrupted") from e
-        if not (isinstance(data, list) and len(data) == 4):  # pyright: ignore[reportUnknownArgumentType]
-            raise InvalidRef("message id has an unexpected structure")
-        account, folder, uidvalidity, uid = data  # pyright: ignore[reportUnknownVariableType]
-        if not (
-            type(account) is str
-            and type(folder) is str
-            and type(uidvalidity) is int
-            and type(uid) is int
-        ):
-            raise InvalidRef("message id has an unexpected structure")
-        ref = cls(account, folder, uidvalidity, uid)
+        ref: MessageRef
+        if prefix == _POP3_REF_PREFIX:
+            if not (isinstance(data, list) and len(data) == 2):  # pyright: ignore[reportUnknownArgumentType]
+                raise InvalidRef("message id has an unexpected structure")
+            account, uidl = data  # pyright: ignore[reportUnknownVariableType]
+            if not (type(account) is str and type(uidl) is str):
+                raise InvalidRef("message id has an unexpected structure")
+            ref = cls(account, POP3_FOLDER, POP3_UIDVALIDITY, 0, uidl)
+        else:
+            if not (isinstance(data, list) and len(data) == 4):  # pyright: ignore[reportUnknownArgumentType]
+                raise InvalidRef("message id has an unexpected structure")
+            account, folder, uidvalidity, uid = data  # pyright: ignore[reportUnknownVariableType]
+            if not (
+                type(account) is str
+                and type(folder) is str
+                and type(uidvalidity) is int
+                and type(uid) is int
+            ):
+                raise InvalidRef("message id has an unexpected structure")
+            ref = cls(account, folder, uidvalidity, uid)
         if ref.encode() != ref_id:  # one canonical id per message
             raise InvalidRef("message id is not in canonical form")
         return ref
@@ -244,11 +293,19 @@ class MessageRef:
 _B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
-def _validate_ref_fields(account: str, folder: str, uidvalidity: int, uid: int) -> None:
+def _validate_ref_fields(
+    account: str, folder: str, uidvalidity: int, uid: int, uidl: str | None = None
+) -> None:
     if not account or len(account) > 200 or _has_control(account):
         raise InvalidRef("invalid account name in message reference")
     if not folder or len(folder) > 1000 or _has_control(folder):
         raise InvalidRef("invalid folder name in message reference")
+    if uidl is not None:
+        if not 1 <= len(uidl) <= _MAX_UIDL or any(not 0x21 <= ord(c) <= 0x7E for c in uidl):
+            raise InvalidRef("invalid unique id in message reference")
+        if type(uid) is not int or not 0 <= uid <= _MAX_U32:
+            raise InvalidRef("invalid number in message reference")
+        return
     for label, value in (("UIDVALIDITY", uidvalidity), ("UID", uid)):
         if type(value) is not int or not 1 <= value <= _MAX_U32:
             raise InvalidRef(f"invalid {label} in message reference")

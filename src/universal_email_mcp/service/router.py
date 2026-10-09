@@ -10,8 +10,10 @@ Fan-out runs one task per account in parallel, each under its own deadline.
 Failures and time-outs of single accounts never fail the whole call: they are
 collected as :class:`AccountProblem` entries and reported with the partial result.
 
-Backends plug in per account kind (``connectors``); M1 has IMAP only, POP3
-accounts are reported as not supported yet.
+Backends plug in per account kind (``connectors``): IMAP, and POP3 (read-only,
+:mod:`universal_email_mcp.mail.pop3`; the router keeps one :class:`Pop3State` per
+account so the UIDL numbering and the header cache outlive reconnects). A kind
+without a connector is reported as not supported.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from universal_email_mcp.config import Config, resolve_password
 from universal_email_mcp.errors import (
     AccountTimeout,
     ConfigError,
+    InvalidRef,
     MailError,
     NotPermitted,
     NotSupportedYet,
@@ -36,7 +39,8 @@ from universal_email_mcp.errors import (
     ServerUnreachable,
 )
 from universal_email_mcp.mail.imap import ImapSession
-from universal_email_mcp.models import Account, AccountKind
+from universal_email_mcp.mail.pop3 import Pop3Session, Pop3State
+from universal_email_mcp.models import Account, AccountKind, MessageRef
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +58,12 @@ def connect_imap(account: Account, config: Config) -> ImapSession:
 
 
 DEFAULT_CONNECTORS: Mapping[AccountKind, Connector] = {"imap": connect_imap}
+
+
+def ensure_ref_matches(ref: MessageRef, account: Account) -> None:
+    """A POP3 id belongs to a POP3 account and an IMAP id to an IMAP account."""
+    if ref.is_pop3 != (account.kind == "pop3"):
+        raise InvalidRef("the message id does not match the kind of its account")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,9 +144,25 @@ class AccountRouter:
     ) -> None:
         self.config = config
         self._connectors = dict(DEFAULT_CONNECTORS if connectors is None else connectors)
+        self._pop3_states: dict[str, Pop3State] = {}
+        if connectors is None:
+            self._connectors["pop3"] = self._connect_pop3
         self._slots: dict[str, _Slot] = {}
         self._idle_ttl = idle_ttl
         self._clock = clock
+
+    def _connect_pop3(self, account: Account, config: Config) -> Pop3Session:
+        state = self._pop3_states.get(account.name)
+        if state is None:
+            lim = config.limits
+            state = self._pop3_states[account.name] = Pop3State(
+                max_headers=lim.max_headers_scanned,
+                header_budget=max(1.0, 0.4 * lim.account_timeout),
+                max_message_bytes=lim.max_message_bytes,
+            )
+        return Pop3Session.for_account(
+            account, resolve_password(account), net=config.net_policy(), state=state
+        )
 
     # ------------------------------------------------------------ selection
 
@@ -168,11 +194,12 @@ class AccountRouter:
                 permission != "read" and self.config.policy.read_only
             ):
                 if names:
-                    problems.append(
-                        AccountProblem.from_error(
-                            acc.name, NotPermitted(f"no {permission!r} permission")
-                        )
+                    why = (
+                        "POP3 accounts are read-only"
+                        if acc.kind == "pop3" and permission != "read"
+                        else f"no {permission!r} permission"
                     )
+                    problems.append(AccountProblem.from_error(acc.name, NotPermitted(why)))
                 continue
             if acc.kind not in self._connectors:
                 problems.append(
@@ -180,7 +207,6 @@ class AccountRouter:
                         acc.name,
                         NotSupportedYet(
                             f"{acc.kind.upper()} accounts are not supported yet",
-                            hint="POP3 support is planned for milestone M2.",
                         ),
                     )
                 )

@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `export_user` / `delete_user`. Backends: in-memory and Firestore (extra `gcp`).
   Secrets are sealed with an AES-256-GCM key ring (versioned keys, blobs bound to user,
   record and field, `rotate_keys`). See `docs/stored-data.md`.
+- POP3 accounts (`kind = "pop3"`, read-only) in the read tools: `account_info`,
+  `list_folders` (INBOX only), `find_messages` (also in one fan-out with IMAP
+  accounts), `get_message` (with `thread=true` inside the POP3 inbox),
+  `get_attachment`, `find_contacts`, and `save_draft(reply_to_id/forward_id=...)` of a POP3 message (the draft goes to an IMAP account). `mail/pop3.py`: a synchronous POP3 session
+  over `mail/net.py` (implicit TLS or mandatory `STLS`, verified, TLS >= 1.2;
+  `USER`/`PASS`, or `AUTH PLAIN`), `UIDL` required (message ids are
+  `p1.`-prefixed and built from the UIDL, stable across sessions and distinct from
+  IMAP ids), headers by pipelined `TOP n 0` under a time budget, newest first and
+  cached per account by UIDL (a UIDL diff reads only new mail), search evaluated
+  locally on the newest `max_headers_scanned` headers, whole messages by `RETR`
+  with a byte cap enforced while reading (oversize messages: `TOP n <lines>`, an
+  answer past the cap drops the connection). Never sends `DELE` or `RSET`. No
+  read/flagged state (`unread` is `null`), no body search, no download links;
+  write tools and `save_draft(draft_id=...)` refuse POP3 ids. Integration tests
+  run against the Dovecot container with POP3 enabled (CI now starts the container
+  itself instead of as a service, to pass the option).
 - Folder map in the server instructions: in `local` mode the folder lists of all
   accounts are read at startup (in parallel, 3 s overall; a slow or unreachable
   account is shown as "not read at startup" and never blocks the server) and the

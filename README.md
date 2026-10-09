@@ -143,6 +143,30 @@ served as a download with `nosniff` and a sandboxing CSP, and requests with any
 other `Host` header are refused. Set `[downloads] enabled = false` to switch it off
 or `port = …` for a fixed port.
 
+**POP3 accounts** (`kind = "pop3"`, read-only) work in the read tools, in one search
+together with IMAP accounts, but POP3 is a much smaller protocol:
+
+- One folder, `INBOX`. There is no read/unread or flagged state: messages show
+  "unknown", never "unread", and the `unread`/`flagged` criteria are ignored (the
+  result says so).
+- Ids are built from the server's `UIDL`, so they stay valid across sessions (a
+  server without `UIDL` or `TOP` is refused). Headers come from `TOP n 0`, newest
+  first, and are cached per account by UIDL; a later call only reads what is new.
+  `find_messages` with header criteria, time windows or `query` looks at the newest
+  `limits.max_headers_scanned` messages (the notes say so; a call has a time
+  budget for loading headers and continues on the next call). Without criteria all
+  messages are listed. POP3 has no search: `body` and the fuzzy "also in the body"
+  match only see the headers. Dates come from the first `Received` header (POP3 has
+  no arrival date), else `Date`.
+- Whole messages are read with `RETR`, capped by `limits.max_message_bytes`: a larger
+  message is read partially (`TOP`) and marked truncated. Attachments are numbered by
+  this server's own MIME parse and `get_attachment` reads the message again; there
+  are no download links for POP3 mail.
+- Nothing is ever changed or deleted on the server: no `DELE`, no `RSET`, the session
+  ends with `QUIT`, and write tools refuse POP3 ids ("POP3 accounts are read-only").
+  Fresh mail appears after a new connection (a listing older than 20 s reconnects).
+- TLS is mandatory: implicit TLS (995) or `STLS` (110), verified, TLS 1.2 or newer.
+
 Claude Desktop (`claude_desktop_config.json`):
 
 ```json

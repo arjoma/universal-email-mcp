@@ -195,6 +195,15 @@ Sending (irreversible - only when the user explicitly asks to send):
   send whose outcome is unknown (SEND_OUTCOME_UNKNOWN) - ask the user to check Sent.
 """
 
+_INSTRUCTIONS_POP3 = """\
+POP3 accounts (kind pop3 in account_info) are read-only and simpler than IMAP: one
+folder (INBOX), no read/unread or flagged state (shown as unknown, never as unread),
+no body search (body/text criteria and queries match the headers only), search sees
+the newest messages only (the notes say how many), and attachments have no download
+links (get_attachment returns them directly, within the size limit). New mail shows
+up after a moment (a new connection per call).
+"""
+
 
 def instructions(
     *,
@@ -203,6 +212,7 @@ def instructions(
     drafts: bool = False,
     send: bool = False,
     folders: str = "",
+    pop3: bool = False,
 ) -> str:
     """The server instructions for the tool set that is offered. ``folders`` is the
     folder map paragraph (:func:`~universal_email_mcp.service.folder_map.instructions_block`)."""
@@ -216,6 +226,8 @@ def instructions(
         parts.append(_INSTRUCTIONS_DRAFTS)
     if send:
         parts.append(_INSTRUCTIONS_SEND)
+    if pop3:
+        parts.append(_INSTRUCTIONS_POP3)
     if folders:
         parts.append(folders)
     return "".join(parts)
@@ -377,7 +389,12 @@ def _overview_text(ov: Overview | None) -> str:
     if ov is None:
         return "–"
     parts = [f"{ov.folders} folders"]
-    parts += [f"{x.role} {x.unread} unread / {x.messages}" for x in ov.special]
+    parts += [
+        f"{x.role} {x.unread} unread / {x.messages}"
+        if x.unread is not None
+        else f"{x.role} {x.messages} messages"
+        for x in ov.special
+    ]
     return escape_cell(", ".join(parts), 120)
 
 
@@ -504,6 +521,7 @@ def build_server(
             drafts=offer_drafts,
             send=offer_send,
             folders=folder_map.instructions_block(folder_maps or {}),
+            pop3=any(a.kind == "pop3" for a in cfg.accounts),
         ),
         version=__version__,
     )
@@ -1092,7 +1110,14 @@ def build_server(
                 "Flags",
                 ", ".join(
                     x
-                    for x in ("unread" if item.unread else "read", "★ flagged" if s.flagged else "")
+                    for x in (
+                        "read state unknown"
+                        if item.unread is None
+                        else "unread"
+                        if item.unread
+                        else "read",
+                        "★ flagged" if s.flagged else "",
+                    )
                     if x
                 ),
             ],

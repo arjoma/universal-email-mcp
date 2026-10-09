@@ -21,18 +21,6 @@ jobs:
       matrix:
         # Supported floor (requires-python) and the newest release.
         python-version: ["3.12", "3.14"]
-    services:
-      # Real IMAP server for the integration tests (tests/integration).
-      # Any user name logs in with USER_PASSWORD. Pinned by digest.
-      dovecot:
-        image: dovecot/dovecot:2.4.5@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553
-        env:
-          USER_PASSWORD: uem-test-password
-        # Mail on tmpfs: Dovecot fsyncs every write, which makes seeding ~100x slower on disk.
-        options: --tmpfs /srv/vmail:rw,mode=1777
-        ports:
-          - 31993:31993
-          - 31143:31143
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,6 +28,19 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: ${{ matrix.python-version }}
+
+      # Real IMAP + POP3 server for the integration tests (tests/integration). Any
+      # user name logs in with USER_PASSWORD. Pinned by digest; started here rather
+      # than as a service container because POP3 needs a command-line option the
+      # image's default command lacks (tests/dovecot.py: DOVECOT_COMMAND). Mail on
+      # tmpfs: Dovecot fsyncs every write, which makes seeding ~100x slower on disk.
+      - name: Start Dovecot
+        run: |
+          docker run -d --name dovecot --tmpfs /srv/vmail:rw,mode=1777 \
+            -p 31993:31993 -p 31143:31143 -p 31995:31995 -p 31110:31110 \
+            -e USER_PASSWORD=uem-test-password \
+            dovecot/dovecot:2.4.5@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553 \
+            /dovecot/sbin/dovecot -F -o 'protocols=imap pop3 submission lmtp sieve'
 
       - name: Lint
         run: |
@@ -65,6 +66,8 @@ jobs:
           UEM_TEST_IMAP_HOST: 127.0.0.1
           UEM_TEST_IMAPS_PORT: "31993"
           UEM_TEST_STARTTLS_PORT: "31143"
+          UEM_TEST_POP3S_PORT: "31995"
+          UEM_TEST_POP3_PORT: "31110"
           UEM_TEST_IMAP_PASSWORD: uem-test-password
           UEM_TEST_REQUIRE_INTEGRATION: "1"
         run: uv run --locked pytest -q -m integration

@@ -88,6 +88,9 @@ tls = "starttls"
 [accounts.folders]
 sent = "INBOX.Gesendet"
 
+# POP3 accounts are read-only and limited (INBOX only, no read/flagged state, no body
+# search, newest max_headers_scanned messages searched, no download links): see the
+# README. The server must support UIDL and TOP; TLS is mandatory (995 or STLS on 110).
 [[accounts]]
 name = "Old POP"
 kind = "pop3"

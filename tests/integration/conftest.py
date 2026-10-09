@@ -4,7 +4,9 @@ Server selection:
 
 - ``UEM_TEST_IMAP_HOST`` set (CI: a ``services:`` container): use it, with ports
   from ``UEM_TEST_IMAPS_PORT`` (default 31993) and ``UEM_TEST_STARTTLS_PORT``
-  (default 31143) and the password from ``UEM_TEST_IMAP_PASSWORD``.
+  (default 31143), ``UEM_TEST_POP3S_PORT`` (31995), ``UEM_TEST_POP3_PORT`` (31110)
+  and the password from ``UEM_TEST_IMAP_PASSWORD``. The server must have POP3
+  enabled (``tests.dovecot.DOVECOT_COMMAND``).
 - otherwise start ``DOVECOT_IMAGE`` with podman (or a working docker) on random
   local ports and remove it afterwards.
 - neither available: the tests are skipped — unless ``UEM_TEST_REQUIRE_INTEGRATION=1``
@@ -30,6 +32,8 @@ from imapclient import IMAPClient
 from tests.dovecot import (
     DOVECOT_IMAGE,
     IMAPS_PORT,
+    POP3_PORT,
+    POP3S_PORT,
     STARTTLS_PORT,
     ContainerError,
     admin_client,
@@ -53,6 +57,8 @@ class ImapServer:
     imaps_port: int
     starttls_port: int
     password: str
+    pop3s_port: int = POP3S_PORT
+    pop3_port: int = POP3_PORT
 
 
 def _unavailable(reason: str) -> None:
@@ -77,6 +83,8 @@ def imap_server() -> Iterator[ImapServer]:
             imaps_port=int(os.environ.get("UEM_TEST_IMAPS_PORT", "31993")),
             starttls_port=int(os.environ.get("UEM_TEST_STARTTLS_PORT", "31143")),
             password=os.environ.get("UEM_TEST_IMAP_PASSWORD", DEFAULT_PASSWORD),
+            pop3s_port=int(os.environ.get("UEM_TEST_POP3S_PORT", str(POP3S_PORT))),
+            pop3_port=int(os.environ.get("UEM_TEST_POP3_PORT", str(POP3_PORT))),
         )
         _wait_ready(server.host, server.imaps_port)
         yield server
@@ -97,6 +105,8 @@ def imap_server() -> Iterator[ImapServer]:
             imaps_port=host_port(rt, cid, IMAPS_PORT),
             starttls_port=host_port(rt, cid, STARTTLS_PORT),
             password=DEFAULT_PASSWORD,
+            pop3s_port=host_port(rt, cid, POP3S_PORT),
+            pop3_port=host_port(rt, cid, POP3_PORT),
         )
         _wait_ready(server.host, server.imaps_port)
         yield server
