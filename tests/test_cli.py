@@ -38,7 +38,7 @@ async def test_local_serves_mcp_over_stdio(tmp_path: Path):
     )
     async with Client(params) as c:
         names = {t.name for t in (await c.list_tools()).tools}
-        assert {"list_messages", "search_messages", "get_message"} <= names
+        assert {"find_messages", "list_folders", "get_message", "find_contacts"} <= names
         r = await c.call_tool("account_info", {})
         assert r.is_error and r.structured_content is not None
         assert r.structured_content["problems"][0]["code"] == "CREDENTIAL_MISSING"

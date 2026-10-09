@@ -17,6 +17,7 @@ from universal_email_mcp.config import Config, parse_config
 from universal_email_mcp.errors import FolderNotFound, ServerUnreachable, UidValidityChanged
 from universal_email_mcp.mail.imap import (
     MAX_RELATED_IDS,
+    FolderStatus,
     IncrementalBatch,
     SearchCriteria,
     SearchResult,
@@ -128,6 +129,14 @@ class FakeSession:
             FolderInfo(name=n, display_name=n, delimiter="/", flags=(), role=roles.get(n))  # pyright: ignore[reportArgumentType]
             for n in self.folders
         ]
+
+    def folder_status(self, folder: str) -> FolderStatus:
+        self._tick(f"STATUS {folder}")
+        if folder not in self.folders:
+            raise FolderNotFound(f"no folder named {folder!r}")
+        box = self.folders[folder]
+        unseen = sum(1 for m in box.values() if "\\Seen" not in m.flags)
+        return FolderStatus(folder, len(box), unseen, None, self.uidvalidity)
 
     def resolve_folder(self, name: str) -> FolderInfo:
         for f in self.list_folders():

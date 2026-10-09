@@ -1,4 +1,4 @@
-"""Read-only mail operations behind the MCP tools (M1).
+"""Read-only mail operations behind the MCP tools.
 
 :class:`MailService` combines the account router (sessions, fan-out, deadlines),
 the header index and fuzzy matching. Each per-account unit of work is one
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from universal_email_mcp.config import Config, Limits
 from universal_email_mcp.errors import (
@@ -23,6 +23,7 @@ from universal_email_mcp.errors import (
     InvalidArgument,
     InvalidRef,
     MailError,
+    ProtocolError,
     ServerUnreachable,
     StaleCursor,
     UidValidityChanged,
@@ -45,18 +46,24 @@ from universal_email_mcp.models import (
     MessageRef,
     MessageSummary,
 )
-from universal_email_mcp.service import fuzzy
+from universal_email_mcp.service import folder_list, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, SourcePos, query_hash
 from universal_email_mcp.service.index import HeaderIndex
+from universal_email_mcp.service.query import Query, score_message, similar
 from universal_email_mcp.service.router import AccountProblem, AccountRouter, Fanout
-from universal_email_mcp.service.timewindow import Window
 
 DEFAULT_PAGE = 20
 MAX_THREAD_MESSAGES = 50
 MAX_THREAD_FOLDERS = 25
 THREAD_ROUNDS = 3
 DEFAULT_CONTACT_DAYS = 180
+"""How far back a contact search (with a query) looks by default."""
 MAX_CONTACT_DAYS = 730
+OVERVIEW_CONTACT_DAYS = 7
+"""The contact overview (no query): recent correspondents only."""
+OVERVIEW_HEADERS = 150
+"""Headers per account the contact overview reads (newest first, INBOX + Sent)."""
+OVERVIEW_CONTACTS = 20
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
 _THREAD_ROLES: tuple[FolderRole, ...] = ("inbox", "sent")
 _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "drafts"})
@@ -101,6 +108,7 @@ class MessagePage:
     exact: bool = True
     answered: int = 0
     """Accounts that answered (0 with problems = the whole call failed)."""
+    mode: Literal["exact", "wildcard", "fuzzy"] = "exact"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,11 +122,43 @@ class AccountDetails:
     notes: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class AccountFolders:
+@dataclass(slots=True)
+class FolderRow:
     account: str
-    folders: list[FolderInfo]
-    personal_prefix: str
+    node: folder_list.Node
+    level: int
+    """1 = the level listed (top level, or the children of ``parent``)."""
+    score: float | None = None
+    messages: int | None = None
+    unread: int | None = None
+
+
+@dataclass(slots=True)
+class FolderPage:
+    rows: list[FolderRow]
+    total: int
+    offset: int
+    cursor: str | None
+    mode: Literal["top", "children", "wildcard", "fuzzy"]
+    depth: int
+    parent: list[str] = field(default_factory=list[str])
+    """The resolved parent per account (full names), when ``parent`` was given."""
+    similar: list[str] = field(default_factory=list[str])
+    """Close folder names when a query matched nothing."""
+    counts_capped: bool = False
+    notes: list[str] = field(default_factory=list[str])
+    problems: list[AccountProblem] = field(default_factory=list[AccountProblem])
+    answered: int = 0
+
+
+@dataclass(slots=True)
+class _AccountFolderRows:
+    rows: list[FolderRow]
+    parent: str | None = None
+    notes: list[str] = field(default_factory=list[str])
+    similar: list[str] = field(default_factory=list[str])
+    missing: FolderNotFound | None = None
+    ambiguous: AmbiguousFolder | None = None
 
 
 @dataclass(slots=True)
@@ -144,14 +184,22 @@ class Contact:
 @dataclass(slots=True)
 class ContactResult:
     contacts: list[Contact]
+    total: int
+    offset: int
+    cursor: str | None
+    mode: Literal["overview", "wildcard", "fuzzy"]
     days: int
+    scanned: int
+    """Message headers read (all accounts)."""
     notes: list[str]
     problems: list[AccountProblem]
     answered: int
+    similar: list[str] = field(default_factory=list[str])
 
 
 @dataclass(slots=True)
 class ThreadResult:
+    root: MessageSummary
     hits: list[Hit]
     notes: list[str] = field(default_factory=list[str])
     problems: list[AccountProblem] = field(default_factory=list[AccountProblem])
@@ -305,19 +353,135 @@ class MailService:
     # ------------------------------------------------------------ folders
 
     async def list_folders(
-        self, accounts: Sequence[str] | None, *, with_counts: bool = False
-    ) -> tuple[list[AccountFolders], list[AccountProblem]]:
+        self,
+        *,
+        args: dict[str, Any],
+        accounts: Sequence[str] | None,
+        parent: str | None = None,
+        query: Query | None = None,
+        depth: int = 1,
+        counts: bool = True,
+        limit: int | None = None,
+        cursor: str | None = None,
+        tool: str = "list_folders",
+    ) -> FolderPage:
+        """One level of the folder tree (top level, or the children of ``parent``)
+        down to ``depth`` levels, or — with ``query`` — the matching folders at any
+        depth below it. Paged over all accounts; counts only for the page shown."""
+        depth = max(1, min(depth, folder_list.MAX_DEPTH))
+        limit = self.clamp_limit(limit, folder_list.DEFAULT_PAGE)
+        qh = query_hash(args)
+        offset = self.cursors.decode(cursor, tool=tool, query=qh).offset if cursor else 0
         selected, problems = self.router.select(accounts)
 
-        def work(session: ImapSession) -> AccountFolders:
-            return AccountFolders(
-                account=session.account_name,
-                folders=session.list_folders(with_counts=with_counts),
-                personal_prefix=self._prefix(session),
-            )
+        def work(session: ImapSession) -> _AccountFolderRows:
+            acc = session.account_name
+            prefix = self._prefix(session)
+            roots = folder_list.build(session.list_folders(), prefix)
+            out = _AccountFolderRows([])
+            base = roots
+            if parent is not None:
+                try:
+                    node, note = folder_list.resolve_parent(roots, parent, prefix)
+                except FolderNotFound as e:
+                    out.missing = e
+                    return out
+                except AmbiguousFolder as e:
+                    out.ambiguous = e
+                    return out
+                out.parent = node.full_name
+                if note:
+                    out.notes.append(f"{acc}: {note}")
+                base = node.children
+            if query is None:
+                out.rows = [FolderRow(acc, n, lvl) for n, lvl in folder_list.levels(base, depth)]
+                return out
+            matches = folder_list.search(base, query, prefix)
+            out.rows = [FolderRow(acc, m.node, 1, m.score) for m in matches]
+            if not matches:
+                out.similar = folder_list.similar_names(
+                    list(folder_list.walk(base)), query.literal or query.text
+                )
+            return out
 
         fan = await self._fan(selected, work)
-        return list(fan.results.values()), [*problems, *fan.problems]
+        per_account = list(fan.results.values())
+        if parent is not None and per_account and all(r.parent is None for r in per_account):
+            # Not found (or ambiguous) in every account that answered: an error
+            # the model can act on, instead of an empty list.
+            ambiguous = [r.ambiguous for r in per_account if r.ambiguous]
+            if ambiguous:
+                choices = list(dict.fromkeys(c for a in ambiguous for c in a.choices))
+                raise AmbiguousFolder(
+                    f"{parent!r} matches several folders: " + "; ".join(choices[:8]), choices[:8]
+                )
+            raise next(r.missing for r in per_account if r.missing)
+        notes: list[str] = []
+        rows: list[FolderRow] = []
+        near: list[str] = []
+        parents: list[str] = []
+        for name, r in fan.results.items():
+            notes += r.notes
+            if r.missing:
+                notes.append(f"{name}: no folder matches {parent!r}")
+            if r.ambiguous:
+                notes.append(f"{name}: {r.ambiguous.message}")
+            if r.parent:
+                parents.append(r.parent)
+            rows += r.rows
+            near += r.similar
+        if query is not None and query.pattern is None:
+            rows.sort(key=lambda r: -(r.score or 0.0))  # stable: accounts in order on ties
+        page = rows[offset : offset + limit]
+        capped = False
+        if counts and page:
+            capped = await self._folder_counts(selected, page)
+        next_cursor = None
+        if offset + limit < len(rows):
+            next_cursor = self.cursors.encode(Cursor(tool, qh, offset=offset + limit))
+        mode: Literal["top", "children", "wildcard", "fuzzy"]
+        if query is not None:
+            mode = query.mode
+        else:
+            mode = "children" if parent is not None else "top"
+        return FolderPage(
+            rows=page,
+            total=len(rows),
+            offset=offset,
+            cursor=next_cursor,
+            mode=mode,
+            depth=depth,
+            parent=parents,
+            similar=list(dict.fromkeys(near))[:5],
+            counts_capped=capped,
+            notes=notes,
+            problems=[*problems, *fan.problems],
+            answered=len(fan.results),
+        )
+
+    async def _folder_counts(self, selected: Sequence[Account], rows: Sequence[FolderRow]) -> bool:
+        """STATUS (messages, unread) for the selectable folders among ``rows``, at
+        most ``MAX_STATUS``; fills the rows in place. Returns whether it capped."""
+        wanted = [r for r in rows if r.node.selectable and r.node.info is not None]
+        capped = len(wanted) > folder_list.MAX_STATUS
+        wanted = wanted[: folder_list.MAX_STATUS]
+        by_account: dict[str, list[FolderRow]] = {}
+        for r in wanted:
+            by_account.setdefault(r.account, []).append(r)
+
+        def work(session: ImapSession) -> None:
+            for r in by_account.get(session.account_name, []):
+                info = r.node.info
+                assert info is not None
+                try:
+                    st = session.folder_status(info.name)
+                except (FolderNotFound, ProtocolError):
+                    continue
+                r.messages, r.unread = st.messages, st.unseen
+
+        # Failures here only leave counts empty: the folder list itself stands.
+        await self._fan([a for a in selected if a.name in by_account], work)
+        return capped
 
     # ------------------------------------------------------------ list / search (exact)
 
@@ -411,68 +575,117 @@ class MailService:
         )
         return _Chunk(key, res.uidvalidity, max_uid, start, len(uids), window, summaries, last_uid)
 
-    # ------------------------------------------------------------ fuzzy search
+    # ------------------------------------------------------------ find (dispatch)
 
-    async def fuzzy_search(
+    async def find_messages(
+        self,
+        *,
+        args: dict[str, Any],
+        accounts: Sequence[str] | None,
+        folders: Sequence[str] | None,
+        criteria: SearchCriteria,
+        query: Query | None,
+        threshold: float = fuzzy.DEFAULT_THRESHOLD,
+        limit: int | None,
+        cursor: str | None,
+        tool: str = "find_messages",
+    ) -> MessagePage:
+        """Structured criteria only: exact server-side SEARCH, newest first. With a
+        ``query``: the criteria select the candidates on the server, the query is
+        matched against their headers (wildcard or fuzzy), best first."""
+        if query is None:
+            return await self.list_messages(
+                tool=tool,
+                args=args,
+                accounts=accounts,
+                folders=folders,
+                criteria=criteria,
+                limit=limit,
+                cursor=cursor,
+            )
+        return await self.query_search(
+            tool=tool,
+            args=args,
+            accounts=accounts,
+            folders=folders,
+            criteria=criteria,
+            query=query,
+            threshold=threshold,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    # ------------------------------------------------------------ query search
+
+    async def query_search(
         self,
         *,
         tool: str,
         args: dict[str, Any],
         accounts: Sequence[str] | None,
         folders: Sequence[str] | None,
-        base: SearchCriteria,
-        exact: SearchCriteria,
-        query: fuzzy.FuzzyQuery,
+        criteria: SearchCriteria,
+        query: Query,
         threshold: float,
         limit: int | None,
         cursor: str | None,
     ) -> MessagePage:
-        """Exact server SEARCH first (hits score 100), then fuzzy matching over the
-        header index of the newest candidates matching the non-text criteria."""
-        if query.is_empty():
-            raise InvalidArgument(
-                "fuzzy search needs from, to, subject or query",
-                hint="Give at least one text criterion, or set fuzzy=false.",
-            )
+        """``criteria`` select the candidates server-side; the newest of them (up to
+        ``max_headers_scanned`` per account) are matched against ``query``.
+
+        Fuzzy queries also run one exact server-side ``TEXT`` search (headers and
+        body, substring): its hits score 100. Wildcard patterns match headers
+        only (the server cannot evaluate them).
+        """
         limit = self.clamp_limit(limit)
         qh = query_hash(args)
         cur = self.cursors.decode(cursor, tool=tool, query=qh) if cursor else None
         selected, problems = self.router.select(accounts)
         budget = self.limits.max_headers_scanned
+        fuzzy_mode = query.pattern is None
+        exact_criteria = replace(criteria, text=query.text) if fuzzy_mode else None
 
-        def work(session: ImapSession) -> tuple[list[Hit], list[str]]:
+        def work(session: ImapSession) -> tuple[list[Hit], list[str], bool]:
             notes: list[str] = []
+            complete = True
             hits: dict[tuple[str, int], Hit] = {}
             remaining = budget
             for f in self._folders_for(session, folders, notes):
-                exact_res = session.search(f.name, exact)
-                cand = session.search(f.name, base)
-                if cand.uidvalidity != exact_res.uidvalidity:
-                    raise UidValidityChanged("folder changed during the search; try again")
+                cand = session.search(f.name, criteria)
+                notes += [f"{session.account_name}/{f.display_name}: {n}" for n in cand.notes]
+                exact_uids: list[int] = []
+                if exact_criteria is not None:
+                    exact_res = session.search(f.name, exact_criteria)
+                    if cand.uidvalidity != exact_res.uidvalidity:
+                        raise UidValidityChanged("folder changed during the search; try again")
+                    exact_uids = list(exact_res.uids[: limit * 4])
                 scan = list(cand.uids[:remaining])
                 if len(cand.uids) > remaining:
+                    complete = False
                     notes.append(
-                        f"{session.account_name}/{f.display_name}: fuzzy matching checked the "
-                        f"newest {len(scan)} of {len(cand.uids)} messages"
+                        f"{session.account_name}/{f.display_name}: the query was matched "
+                        f"against the newest {len(scan)} of {len(cand.uids)} messages"
                     )
                 remaining -= len(scan)
-                exact_uids = set(exact_res.uids[: limit * 4])
-                uids = list(dict.fromkeys([*exact_res.uids[: limit * 4], *scan]))
+                uids = list(dict.fromkeys([*exact_uids, *scan]))
+                exact_set = set(exact_uids)
                 sums = self.index.summaries(session, cand.folder, cand.uidvalidity, uids)
                 for s in sums:
-                    sc = 100.0 if s.ref.uid in exact_uids else fuzzy.score_message(query, s)
+                    sc = 100.0 if s.ref.uid in exact_set else score_message(query, s)
                     if sc >= threshold:
                         hits[(s.ref.folder, s.ref.uid)] = Hit(s, round(sc, 1))
                 if remaining <= 0:
                     break
-            return list(hits.values()), notes
+            return list(hits.values()), notes, complete
 
         fan = await self._fan(selected, work)
         ranked: list[Hit] = []
         notes: list[str] = []
-        for h, n in fan.results.values():
+        complete = True
+        for h, n, c in fan.results.values():
             ranked += h
             notes += n
+            complete = complete and c
         ranked.sort(key=lambda h: (-round(h.score or 0.0), -_date_key(h.summary)))
         offset = cur.offset if cur else 0
         page = ranked[offset : offset + limit]
@@ -486,8 +699,9 @@ class MailService:
             cursor=next_cursor,
             notes=notes,
             problems=[*problems, *fan.problems],
-            exact=False,
+            exact=complete and not fuzzy_mode,
             answered=len(fan.results),
+            mode=query.mode,
         )
 
     # ------------------------------------------------------------ single message
@@ -527,7 +741,9 @@ class MailService:
         ref, acc = self._ref(message_id)
         cap = max(1, min(limit or MAX_THREAD_MESSAGES, MAX_THREAD_MESSAGES))
 
-        def primary(session: ImapSession) -> tuple[list[MessageSummary], list[str], list[str]]:
+        def primary(
+            session: ImapSession,
+        ) -> tuple[MessageSummary, list[MessageSummary], list[str], list[str]]:
             notes: list[str] = []
             first = session.fetch_summaries(ref.folder, [ref.uid], uidvalidity=ref.uidvalidity)
             if not first:
@@ -536,7 +752,7 @@ class MailService:
             ids = _thread_ids(root)
             if not ids:
                 notes.append("the message has no Message-ID; showing it alone")
-                return [root], ids, notes
+                return root, [root], ids, notes
             all_folders = [f for f in session.list_folders() if f.selectable]
             ordered = sorted(
                 all_folders,
@@ -572,12 +788,14 @@ class MailService:
                                 new_ids = True
                 if not new_ids or len(found) >= cap * 2:
                     break
-            return list(found.values()), ids, notes
+            return root, list(found.values()), ids, notes
 
-        async def work(a: Account) -> tuple[list[MessageSummary], list[str], list[str]]:
+        async def work(
+            a: Account,
+        ) -> tuple[MessageSummary, list[MessageSummary], list[str], list[str]]:
             return await self.router.call(a, primary)
 
-        messages, ids, notes = await self.router.run_one(acc, work)
+        root, messages, ids, notes = await self.router.run_one(acc, work)
         problems: list[AccountProblem] = []
         others, sel_problems = self.router.select(None)
         others = [a for a in others if a.name != acc.name]
@@ -614,31 +832,56 @@ class MailService:
         if len(ordered) > cap:
             notes.append(f"conversation has {len(ordered)} messages; showing the last {cap}")
             ordered = ordered[-cap:]
-        return ThreadResult([Hit(m) for m in ordered], notes, problems)
+        return ThreadResult(root, [Hit(m) for m in ordered], notes, problems)
 
     # ------------------------------------------------------------ contacts
 
     async def find_contacts(
         self,
         *,
-        query: str | None,
+        query: Query | None,
         accounts: Sequence[str] | None,
-        days: int | None,
-        limit: int | None,
+        days: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        args: dict[str, Any] | None = None,
         threshold: float = fuzzy.DEFAULT_THRESHOLD,
         now: datetime | None = None,
+        tool: str = "find_contacts",
     ) -> ContactResult:
-        days = max(1, min(days or DEFAULT_CONTACT_DAYS, MAX_CONTACT_DAYS))
-        limit = self.clamp_limit(limit)
+        """People from the From of INBOX and the To/Cc of Sent.
+
+        Without ``query`` a cheap overview: the last ``OVERVIEW_CONTACT_DAYS`` days,
+        at most ``OVERVIEW_HEADERS`` headers per account, most recent first. With a
+        query a deeper window (``DEFAULT_CONTACT_DAYS``, up to ``MAX_CONTACT_DAYS``;
+        ``max_headers_scanned`` headers per account, served incrementally by the
+        header index), matched on name and address (wildcard or fuzzy).
+        """
+        overview = query is None
+        days = max(
+            1,
+            min(
+                days or (OVERVIEW_CONTACT_DAYS if overview else DEFAULT_CONTACT_DAYS),
+                MAX_CONTACT_DAYS,
+            ),
+        )
+        limit = self.clamp_limit(limit, OVERVIEW_CONTACTS if overview else DEFAULT_PAGE)
+        qh = query_hash(args if args is not None else {"query": query and query.text, "days": days})
+        offset = self.cursors.decode(cursor, tool=tool, query=qh).offset if cursor else 0
         now = now or datetime.now(UTC)
         since = (now - timedelta(days=days)).date()
         selected, problems = self.router.select(accounts)
         budget = self.limits.max_headers_scanned
+        if overview:
+            budget = min(budget, OVERVIEW_HEADERS)
         own = self._own_addresses()
 
-        def work(session: ImapSession) -> tuple[list[tuple[str, MessageSummary]], list[str]]:
+        def work(
+            session: ImapSession,
+        ) -> tuple[list[tuple[str, MessageSummary]], list[str], int]:
             notes: list[str] = []
             out: list[tuple[str, MessageSummary]] = []
+            read = 0
             for role in _CONTACT_ROLES:
                 f = session.folder_for_role(role)
                 if f is None:
@@ -647,21 +890,24 @@ class MailService:
                 res = session.search(f.name, SearchCriteria(since=since))
                 share = budget // 2
                 uids = list(res.uids[:share])
-                if len(res.uids) > share:
+                if len(res.uids) > share and not overview:
                     notes.append(
                         f"{session.account_name}/{f.display_name}: read the newest "
                         f"{share} of {len(res.uids)} messages"
                     )
+                read += len(uids)
                 for s in self.index.summaries(session, res.folder, res.uidvalidity, uids):
                     out.append((role, s))
-            return out, notes
+            return out, notes, read
 
         fan = await self._fan(selected, work)
         notes: list[str] = []
+        scanned = 0
         contacts: dict[str, Contact] = {}
         names: dict[str, dict[str, int]] = {}
-        for acc_name, (items, n) in fan.results.items():
+        for acc_name, (items, n, read) in fan.results.items():
             notes += n
+            scanned += read
             for role, s in items:
                 addrs: Iterable[Address] = (*s.to, *s.cc) if role == "sent" else s.from_
                 for a in addrs:
@@ -690,15 +936,35 @@ class MailService:
             # frequency × recency; mail the user wrote counts double
             c.rank = round((c.received + 2 * c.sent) / (1 + max(0.0, age) / 30), 3)
         result = list(contacts.values())
-        if query and query.strip():
-            for c in result:
-                c.score = round(fuzzy.score_any(query, [c.name, c.email]), 1)
-            result = [c for c in result if (c.score or 0) >= threshold]
-            result.sort(key=lambda c: (-(c.score or 0), -c.rank))
+        near: list[str] = []
+        mode: Literal["overview", "wildcard", "fuzzy"] = "overview"
+        if query is None:
+            result.sort(key=lambda c: (-(c.last.timestamp() if c.last else 0.0), c.email))
         else:
-            result.sort(key=lambda c: (-c.rank, c.email))
+            mode = query.mode
+            for c in result:
+                c.score = round(query.score([c.name, c.email]), 1)
+            matched = [c for c in result if (c.score or 0) >= threshold]
+            matched.sort(key=lambda c: (-(c.score or 0), -c.rank, c.email))
+            if not matched:
+                near = similar(query, [x for c in result for x in (c.name, c.email)])
+            result = matched
+        page = result[offset : offset + limit]
+        next_cursor = None
+        if offset + limit < len(result):
+            next_cursor = self.cursors.encode(Cursor(tool, qh, offset=offset + limit))
         return ContactResult(
-            result[:limit], days, notes, [*problems, *fan.problems], len(fan.results)
+            contacts=page,
+            total=len(result),
+            offset=offset,
+            cursor=next_cursor,
+            mode=mode,
+            days=days,
+            scanned=scanned,
+            notes=notes,
+            problems=[*problems, *fan.problems],
+            answered=len(fan.results),
+            similar=near,
         )
 
     def _own_addresses(self) -> set[str]:
@@ -780,13 +1046,3 @@ def _thread_ids(s: MessageSummary) -> list[str]:
     the last (the direct parent) backwards — searches use only the first ones."""
     ordered = [s.message_id, s.in_reply_to, *reversed(s.references)]
     return list(dict.fromkeys(i for i in ordered if i and 3 <= len(i) <= 998))
-
-
-def window_criteria(window: Window, **kw: Any) -> SearchCriteria:
-    return SearchCriteria(since=window.since, before=window.before, **kw)
-
-
-def text_free(criteria: SearchCriteria) -> SearchCriteria:
-    """The criteria without the header text fields (fuzzy candidates); ``body``
-    stays a server-side filter."""
-    return replace(criteria, from_=None, to=None, cc=None, subject=None, text=None)

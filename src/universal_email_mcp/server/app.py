@@ -1,10 +1,14 @@
-"""The MCP server: read-only mail tools (M1) on the MCP Python SDK 2.x.
+"""The MCP server: read-only mail tools on the MCP Python SDK 2.x.
 
 Every tool returns two forms (design plan §7.3): a compact Markdown table as text
 content — all mail-derived cells escaped with :func:`render.escape_cell` — and
 ``structuredContent`` validated against the tool's output schema. Mail bodies are
 fenced as untrusted content. Errors come back as ``isError`` results carrying
 ``{"error": {"code", "message", "hint"}}`` so the model can act on them.
+
+Lists are overview first: every list result is bounded and its footer says how
+to narrow it or continue (cursor). One ``query`` parameter everywhere —
+wildcard or fuzzy, see :mod:`universal_email_mcp.service.query`.
 """
 
 import functools
@@ -17,7 +21,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 
 from universal_email_mcp import __version__
-from universal_email_mcp.errors import InvalidArgument, MailError
+from universal_email_mcp.errors import MailError
 from universal_email_mcp.mail.folders import decode_folder_name
 from universal_email_mcp.mail.imap import SearchCriteria
 from universal_email_mcp.mail.mime import fence_untrusted
@@ -25,7 +29,6 @@ from universal_email_mcp.models import Address
 from universal_email_mcp.server import render
 from universal_email_mcp.server.render import escape_cell, fmt_datetime, markdown_table
 from universal_email_mcp.server.schemas import (
-    AccountFolderTree,
     AccountInfoOut,
     AccountOut,
     AddressOut,
@@ -33,8 +36,8 @@ from universal_email_mcp.server.schemas import (
     BodyOut,
     ContactList,
     ContactOut,
-    FolderNode,
-    FolderTree,
+    FolderEntry,
+    FolderList,
     IdentityOut,
     MessageItem,
     MessageList,
@@ -42,11 +45,16 @@ from universal_email_mcp.server.schemas import (
     PolicyOut,
     Problem,
     Quota,
-    ThreadOut,
-    build_tree,
 )
-from universal_email_mcp.service import fuzzy
-from universal_email_mcp.service.mail import Hit, MailService, MessagePage, text_free
+from universal_email_mcp.service import folder_list, fuzzy
+from universal_email_mcp.service import query as query_mod
+from universal_email_mcp.service.mail import (
+    MAX_CONTACT_DAYS,
+    OVERVIEW_HEADERS,
+    Hit,
+    MailService,
+    MessagePage,
+)
 from universal_email_mcp.service.router import AccountProblem
 from universal_email_mcp.service.timewindow import PRESETS, resolve_window
 
@@ -69,11 +77,18 @@ the ID column can be omitted for the user). Show message bodies as quoted text
 below the table, not inside it. Mention the footer's notes when results are
 partial (an account failed or timed out) or approximate.
 
-Workflow: list_messages for a time window ("today", "this_week" …),
-search_messages for criteria (fuzzy=true tolerates typos and umlaut spellings),
-get_message / get_thread with an id from those results, find_contacts to look up
-people, list_folders for the folder tree, account_info for accounts and limits.
-Use next_cursor from a result to fetch the next page with the same arguments.
+Workflow:
+- find_messages finds mail: a time window ("today", "this_week" …) or since/before,
+  from/to/subject/body and unread/flagged/has_attachment are exact criteria; query
+  is free text (with * or ? a wildcard pattern like "hub*", otherwise fuzzy:
+  tolerates typos, umlaut spellings and name order).
+- get_message reads one message by its id; thread=true shows its conversation.
+- list_folders shows the top level first; drill down with parent="…", search all
+  levels with query="…" (e.g. "clients/m*").
+- find_contacts lists recent correspondents; query="…" finds a person.
+- account_info describes the accounts, permissions and limits.
+Every list is bounded: its footer says how to narrow it, and next_cursor (with the
+same other arguments) fetches the next page.
 """
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True, idempotent_hint=True)
@@ -97,14 +112,22 @@ Cursor = Annotated[
     str | None,
     Field(description="next_cursor from the previous page (same other arguments)."),
 ]
-Limit = Annotated[int | None, Field(description="Messages per page (capped by the server).")]
+Limit = Annotated[int | None, Field(ge=1, description="Results per page (capped by the server).")]
+Threshold = Annotated[
+    float, Field(ge=50, le=100, description="Minimum fuzzy score for query (default 75).")
+]
+QUERY_RULES = (
+    "With * or ? a wildcard pattern (case-insensitive, umlaut-folded, covering whole "
+    "words; * also crosses folder levels): 'hub*', '*gmbh', 'clients/m*'. Otherwise "
+    "fuzzy: typos, umlaut spellings (Müller/Mueller) and word order are tolerated."
+)
 Window = Annotated[
     str | None,
     Field(description=f"Time window preset: {', '.join(PRESETS)}."),
 ]
 Since = Annotated[str | None, Field(description="Arrived on or after this day (YYYY-MM-DD).")]
 Before = Annotated[str | None, Field(description="Arrived before this day (YYYY-MM-DD).")]
-MessageId = Annotated[str, Field(description="Message id from a list/search result.")]
+MessageId = Annotated[str, Field(description="Message id from a find_messages result.")]
 
 
 # ----------------------------------------------------------------- helpers
@@ -225,24 +248,31 @@ def build_server(service: MailService) -> MCPServer:
             for h in hits
         ]
 
-    def page_result(page: MessagePage, *, heading: str, show_score: bool) -> CallToolResult:
+    def page_result(page: MessagePage, *, heading: str) -> CallToolResult:
         msgs = items(page.hits)
+        show_score = page.mode == "fuzzy"
         data = MessageList(
             messages=msgs,
             total=page.total,
             offset=page.offset,
             next_cursor=page.cursor,
             exact=page.exact,
+            mode=page.mode,
             notes=page.notes,
             problems=_problems(page.problems),
         )
         foot = [
             f"{page.offset + 1}–{page.offset + len(msgs)} of {page.total} shown"
             if msgs
-            else f"no messages ({page.total} total)"
+            else "no messages found"
         ]
         if page.cursor:
             foot.append(f"more: cursor=`{page.cursor}`")
+            foot.append("narrow: add a window, from/subject or a query")
+        if not msgs:
+            foot.append(
+                "try: another window or folders (list_folders), fewer criteria, or a fuzzy query"
+            )
         if not page.exact:
             foot.append("approximate/partial matching")
         foot += [escape_cell(n, 200) for n in page.notes]
@@ -378,119 +408,177 @@ def build_server(service: MailService) -> MCPServer:
         name="list_folders",
         title="List folders",
         description=(
-            "Folders (labels) per account as a tree — groups like 'Clients/…' — with "
-            "special roles (inbox, sent, drafts, trash, junk, archive) and optionally "
-            "message/unread counts."
+            "Folders (labels) of the accounts, overview first. Without arguments: the "
+            "top level, each folder with its number of direct subfolders ('▸ 87') and "
+            "special role (inbox, sent, drafts, trash, junk, archive). parent='Clients' "
+            "lists the children of a folder (approximate names work; ambiguous ones "
+            "return the choices); depth (≤ 3) adds deeper levels. query searches all "
+            "levels and returns a flat list with full names. "
+            + QUERY_RULES
+            + " Message/unread counts for the folders shown (up to 50). Paged: limit "
+            "and next_cursor."
         ),
         annotations=READ_ONLY,
     )
     @_guard
     async def list_folders(
+        parent: Annotated[
+            str | None,
+            Field(description="List the subfolders of this folder (name, path or role)."),
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(description="Search folder names at all levels (wildcard or fuzzy)."),
+        ] = None,
+        depth: Annotated[
+            int, Field(ge=1, description=f"Levels to list (1–{folder_list.MAX_DEPTH}).")
+        ] = 1,
         accounts: Accounts = None,
-        counts: Annotated[bool, Field(description="Include message and unread counts.")] = False,
-    ) -> Annotated[CallToolResult, FolderTree]:
-        results, problems = await service.list_folders(accounts, with_counts=counts)
-        trees: list[AccountFolderTree] = []
-        rows: list[list[str]] = []
-        for r in results:
-            delim = next((f.delimiter for f in r.folders if f.delimiter), None)
-            nodes = build_tree(r.folders, r.personal_prefix)
-            trees.append(AccountFolderTree(account=r.account, delimiter=delim, folders=nodes))
-
-            def walk(ns: list[FolderNode], depth: int, acc: str = r.account) -> None:
-                for n in ns:
-                    # The tree prefix is added after escaping (which collapses spaces).
-                    prefix = "│ " * (depth - 1) + "└ " if depth else ""
-                    row = [escape_cell(acc, 30), prefix + escape_cell(n.name, 60)]
-                    row.append(escape_cell(n.path, 60) if n.selectable else "(group)")
-                    row.append(n.role or "")
-                    if counts:
-                        row += [
-                            str(n.messages) if n.messages is not None else "–",
-                            str(n.unread) if n.unread is not None else "–",
-                        ]
-                    rows.append(row)
-                    walk(n.children, depth + 1)
-
-            walk(nodes, 0)
-        headers = ["Account", "Folder", "Full name", "Role"]
-        if counts:
-            headers += ["Messages", "Unread"]
-        data = FolderTree(accounts=trees, problems=_problems(problems))
-        foot = [f"{len(rows)} folders", *_problem_notes(problems)]
-        text = markdown_table(headers, rows) + "\n\n" + render.footer(foot)
-        return _result(text, data, failed=bool(problems) and not results)
-
-    # ------------------------------------------------------------ list_messages
-
-    @mcp.tool(
-        name="list_messages",
-        title="List messages",
-        description=(
-            "Messages in a time window across accounts, newest first, with cursor "
-            "paging. Use window presets ('today', 'this_week', 'last_7_days' …) or "
-            "since/before dates."
-        ),
-        annotations=READ_ONLY,
-    )
-    @_guard
-    async def list_messages(
-        window: Window = None,
-        since: Since = None,
-        before: Before = None,
-        accounts: Accounts = None,
-        folders: Folders = None,
-        unread_only: Annotated[bool, Field(description="Only unread messages.")] = False,
+        counts: Annotated[
+            bool, Field(description="Message and unread counts (default true).")
+        ] = True,
         limit: Limit = None,
         cursor: Cursor = None,
-    ) -> Annotated[CallToolResult, MessageList]:
-        win = resolve_window(window, since, before)
+    ) -> Annotated[CallToolResult, FolderList]:
+        q = query_mod.parse(query)
+        capped_depth = min(depth, folder_list.MAX_DEPTH)
         args = {
-            "since": win.since,
-            "before": win.before,
+            "parent": parent,
+            "query": q and q.text,
+            "depth": capped_depth,
             "accounts": accounts,
-            "folders": folders,
-            "unread_only": unread_only,
+            "counts": counts,
         }
-        criteria = SearchCriteria(
-            since=win.since, before=win.before, unseen=True if unread_only else None
-        )
-        page = await service.list_messages(
-            tool="list_messages",
+        page = await service.list_folders(
             args=args,
             accounts=accounts,
-            folders=folders,
-            criteria=criteria,
+            parent=parent,
+            query=q,
+            depth=capped_depth,
+            counts=counts,
             limit=limit,
             cursor=cursor,
         )
-        return page_result(page, heading=f"Messages · {win.describe()}", show_score=False)
+        entries = [
+            FolderEntry(
+                account=r.account,
+                name=r.node.name,
+                path=r.node.full_name,
+                level=r.level,
+                role=r.node.role,
+                selectable=r.node.selectable,
+                subfolders=len(r.node.children),
+                descendants=r.node.descendants,
+                messages=r.messages,
+                unread=r.unread,
+                score=r.score,
+            )
+            for r in page.rows
+        ]
+        data = FolderList(
+            folders=entries,
+            total=page.total,
+            offset=page.offset,
+            next_cursor=page.cursor,
+            mode=page.mode,
+            depth=page.depth,
+            parent=page.parent,
+            similar=page.similar,
+            counts_capped=page.counts_capped,
+            notes=page.notes,
+            problems=_problems(page.problems),
+        )
+        multi_account = len({e.account for e in entries}) > 1
+        show_score = page.mode == "fuzzy"
+        headers = (["Account"] if multi_account else []) + ["Folder", "Full name", "Role"]
+        headers.append("Subfolders")
+        if counts:
+            headers += ["Messages", "Unread"]
+        if show_score:
+            headers.append("Score")
+        rows: list[list[str]] = []
+        for e in entries:
+            # The tree prefix is added after escaping (which collapses spaces).
+            prefix = "│ " * (e.level - 2) + "└ " if e.level > 1 else ""
+            row = [escape_cell(e.account, 30)] if multi_account else []
+            row += [
+                prefix + escape_cell(e.name, 60),
+                escape_cell(e.path, 80),
+                e.role or ("(group)" if not e.selectable else ""),
+                f"▸ {e.subfolders}" if e.subfolders else "–",
+            ]
+            if counts:
+                row += [
+                    str(e.messages) if e.messages is not None else "–",
+                    str(e.unread) if e.unread is not None else "–",
+                ]
+            if show_score:
+                row.append(f"{e.score:.0f}" if e.score is not None else "–")
+            rows.append(row)
+        where = (
+            "matching " + escape_cell(q.text, 60)
+            if q
+            else ("in " + escape_cell("; ".join(page.parent), 80) if page.parent else "top level")
+        )
+        foot = [
+            f"{page.offset + 1}–{page.offset + len(entries)} of {page.total} folders {where}"
+            if entries
+            else f"no folders {where}"
+        ]
+        if page.cursor:
+            foot.append(f"more: cursor=`{page.cursor}`")
+        if page.similar:
+            foot.append("similar: " + escape_cell("; ".join(page.similar), 200))
+        if any(e.subfolders for e in entries):
+            foot.append('open a folder with ▸: list_folders(parent="<Full name>")')
+        if not q:
+            foot.append('search all levels: query="name" or a pattern like "clients/m*"')
+        elif not entries:
+            foot.append("try a shorter or fuzzy query, or list_folders() for the top level")
+        if depth > folder_list.MAX_DEPTH:
+            foot.append(f"depth capped at {folder_list.MAX_DEPTH}")
+        if page.counts_capped:
+            foot.append(f"counts only for the first {folder_list.MAX_STATUS} folders shown")
+        foot += [escape_cell(n, 200) for n in page.notes]
+        foot += _problem_notes(page.problems)
+        text = (markdown_table(headers, rows) + "\n\n" if entries else "") + render.footer(foot)
+        return _result(text, data, failed=bool(page.problems) and page.answered == 0)
 
-    # ------------------------------------------------------------ search_messages
+    # ------------------------------------------------------------ find_messages
 
     @mcp.tool(
-        name="search_messages",
-        title="Search messages",
+        name="find_messages",
+        title="Find messages",
         description=(
-            "Search across accounts and folders by sender, recipient, subject, body, "
-            "date, unread/flagged, attachments. Exact (server-side substring) by "
-            "default; fuzzy=true also finds typos, umlaut spellings (Müller/Mueller) "
-            "and swapped names by matching headers approximately, ranked by score."
+            "Find messages across accounts and folders (default: INBOX). The criteria "
+            "— time window or since/before, from, to, subject, body, unread, flagged, "
+            "has_attachment — run as an exact server-side search (case-insensitive "
+            "substring), newest first; with no criteria at all this lists the newest "
+            "messages. query is free text matched against sender, recipients and "
+            "subject: "
+            + QUERY_RULES
+            + " A fuzzy query also finds exact matches in the body. With query the "
+            "other criteria still narrow the candidates on the server, results are "
+            "ranked best first, and only the newest messages per account are checked "
+            "(the notes say so). Paged: limit and next_cursor."
         ),
         annotations=READ_ONLY,
     )
     @_guard
-    async def search_messages(
-        from_: Annotated[
-            str | None, Field(validation_alias="from", description="Sender name/address.")
-        ] = None,
-        to: Annotated[str | None, Field(description="Recipient (To/Cc) name/address.")] = None,
-        subject: Annotated[str | None, Field(description="Words in the subject.")] = None,
+    async def find_messages(
         query: Annotated[
             str | None,
-            Field(description="Free text: headers and body (fuzzy mode: headers only)."),
+            Field(description="Free text: names, addresses, subject words, or a pattern."),
         ] = None,
-        body: Annotated[str | None, Field(description="Text in the body (always exact).")] = None,
+        from_: Annotated[
+            str | None,
+            Field(validation_alias="from", description="Sender name/address (substring)."),
+        ] = None,
+        to: Annotated[
+            str | None, Field(description="Recipient (To/Cc) name/address (substring).")
+        ] = None,
+        subject: Annotated[str | None, Field(description="Text in the subject.")] = None,
+        body: Annotated[str | None, Field(description="Text in the body.")] = None,
         window: Window = None,
         since: Since = None,
         before: Before = None,
@@ -499,25 +587,16 @@ def build_server(service: MailService) -> MCPServer:
         has_attachment: Annotated[bool | None, Field(description="With attachments.")] = None,
         accounts: Accounts = None,
         folders: Folders = None,
-        fuzzy_match: Annotated[
-            bool,
-            Field(
-                validation_alias="fuzzy",
-                description="Approximate matching of from/to/subject/query.",
-            ),
-        ] = False,
-        threshold: Annotated[
-            float, Field(ge=50, le=100, description="Minimum fuzzy score (default 75).")
-        ] = fuzzy.DEFAULT_THRESHOLD,
+        threshold: Threshold = fuzzy.DEFAULT_THRESHOLD,
         limit: Limit = None,
         cursor: Cursor = None,
     ) -> Annotated[CallToolResult, MessageList]:
         win = resolve_window(window, since, before)
+        q = query_mod.parse(query)
         criteria = SearchCriteria(
             from_=from_,
             to=to,
             subject=subject,
-            text=query,
             body=body,
             since=win.since,
             before=win.before,
@@ -526,10 +605,10 @@ def build_server(service: MailService) -> MCPServer:
             has_attachment=has_attachment,
         )
         args: dict[str, Any] = {
+            "query": q and q.text,
             "from": from_,
             "to": to,
             "subject": subject,
-            "query": query,
             "body": body,
             "since": win.since,
             "before": win.before,
@@ -538,51 +617,23 @@ def build_server(service: MailService) -> MCPServer:
             "has_attachment": has_attachment,
             "accounts": accounts,
             "folders": folders,
-            "fuzzy": fuzzy_match,
-            "threshold": threshold,
+            "threshold": threshold if q and q.pattern is None else None,
         }
-        if not fuzzy_match and not any(
-            (
-                from_,
-                to,
-                subject,
-                query,
-                body,
-                unread is not None,
-                flagged is not None,
-                has_attachment is not None,
-                win.since,
-                win.before,
-            )
-        ):
-            raise InvalidArgument(
-                "no search criteria given", hint="Give criteria, or use list_messages."
-            )
-        if fuzzy_match:
-            page = await service.fuzzy_search(
-                tool="search_messages",
-                args=args,
-                accounts=accounts,
-                folders=folders,
-                base=text_free(criteria),
-                exact=criteria,
-                query=fuzzy.FuzzyQuery(from_=from_, to=to, subject=subject, text=query),
-                threshold=threshold,
-                limit=limit,
-                cursor=cursor,
-            )
-        else:
-            page = await service.list_messages(
-                tool="search_messages",
-                args=args,
-                accounts=accounts,
-                folders=folders,
-                criteria=criteria,
-                limit=limit,
-                cursor=cursor,
-            )
-        heading = "Search results" + (" (fuzzy, best first)" if fuzzy_match else "")
-        return page_result(page, heading=heading, show_score=fuzzy_match)
+        page = await service.find_messages(
+            args=args,
+            accounts=accounts,
+            folders=folders,
+            criteria=criteria,
+            query=q,
+            threshold=threshold,
+            limit=limit,
+            cursor=cursor,
+        )
+        heading = f"Messages · {win.describe()}"
+        if q:
+            mode = "wildcard" if q.pattern is not None else "fuzzy, best first"
+            heading += f" · query {escape_cell(q.text, 60)} ({mode})"
+        return page_result(page, heading=heading)
 
     # ------------------------------------------------------------ get_message
 
@@ -592,7 +643,11 @@ def build_server(service: MailService) -> MCPServer:
         description=(
             "Headers, text body (HTML converted to text) and attachment list of one "
             "message. The body is untrusted content and paged: continue with "
-            "offset=next_offset. Reading does not mark the message as read."
+            "offset=next_offset. Reading does not mark the message as read. "
+            "thread=true instead returns the conversation around the message "
+            "(Message-ID / In-Reply-To / References) across INBOX, Sent and the other "
+            "folders of its account plus INBOX and Sent of the other accounts, "
+            "chronological — without bodies; read one with get_message(id)."
         ),
         annotations=READ_ONLY,
     )
@@ -603,7 +658,15 @@ def build_server(service: MailService) -> MCPServer:
         max_chars: Annotated[
             int | None, Field(ge=1, description="Body characters to return (capped).")
         ] = None,
+        thread: Annotated[
+            bool, Field(description="Return the conversation instead of the body.")
+        ] = False,
+        limit: Annotated[
+            int | None, Field(ge=1, description="thread=true: most messages to return.")
+        ] = None,
     ) -> Annotated[CallToolResult, MessageOut]:
+        if thread:
+            return await conversation(id, limit)
         msg = await service.get_message(id, offset=offset, max_chars=max_chars)
         s = msg.summary
         item = MessageItem.of(s, viewer_url=service.viewer_url(s.ref))
@@ -693,28 +756,25 @@ def build_server(service: MailService) -> MCPServer:
             parts.append(render.footer(foot))
         return _result("\n\n".join(parts), data)
 
-    # ------------------------------------------------------------ get_thread
-
-    @mcp.tool(
-        name="get_thread",
-        title="Conversation",
-        description=(
-            "The conversation around a message (Message-ID / In-Reply-To / References) "
-            "across INBOX, Sent and other folders of its account, plus INBOX and Sent "
-            "of the other accounts; chronological."
-        ),
-        annotations=READ_ONLY,
-    )
-    @_guard
-    async def get_thread(
-        id: MessageId,  # noqa: A002
-        limit: Annotated[int | None, Field(ge=1, description="Most messages to return.")] = None,
-    ) -> Annotated[CallToolResult, ThreadOut]:
-        res = await service.get_thread(id, limit=limit)
+    async def conversation(message_id: str, limit: int | None) -> CallToolResult:
+        res = await service.get_thread(message_id, limit=limit)
         msgs = items(res.hits)
-        data = ThreadOut(messages=msgs, notes=res.notes, problems=_problems(res.problems))
+        root = res.root
+        data = MessageOut(
+            message=MessageItem.of(root, viewer_url=service.viewer_url(root.ref)),
+            reply_to=[AddressOut.of(a) for a in root.reply_to],
+            in_reply_to=root.in_reply_to,
+            references=list(root.references),
+            body=None,
+            attachments=[],
+            source_truncated=False,
+            thread=msgs,
+            notes=res.notes,
+            problems=_problems(res.problems),
+        )
         foot = [
             f"{len(msgs)} message{'s' if len(msgs) != 1 else ''}, oldest first",
+            "read one: get_message(id)",
             *[escape_cell(n, 200) for n in res.notes],
             *_problem_notes(res.problems),
         ]
@@ -727,22 +787,35 @@ def build_server(service: MailService) -> MCPServer:
         name="find_contacts",
         title="Find contacts",
         description=(
-            "People the user corresponded with (From of INBOX, To/Cc of Sent) over a "
-            "time window, ranked by frequency × recency; with a query, fuzzy-matched on "
-            "name and address. sent_to=true means the user has written to them."
+            "People the user corresponded with (From of INBOX, To/Cc of Sent). "
+            "Without query a quick overview: the most recent contacts of the last "
+            f"7 days (newest {OVERVIEW_HEADERS} messages per account). With query a "
+            "deeper search (default 180 days, days= up to "
+            f"{MAX_CONTACT_DAYS}) on name and address: "
+            + QUERY_RULES
+            + " Ranked by match, then frequency × recency. sent_to=true means the "
+            "user has written to them. Paged: limit and next_cursor."
         ),
         annotations=READ_ONLY,
     )
     @_guard
     async def find_contacts(
-        query: Annotated[str | None, Field(description="Name or address, approximate.")] = None,
+        query: Annotated[
+            str | None, Field(description="Name or address (wildcard or fuzzy).")
+        ] = None,
         accounts: Accounts = None,
         days: Annotated[
-            int | None, Field(ge=1, description="Look back this many days (default 180).")
+            int | None,
+            Field(ge=1, description="Look back this many days (default 7, with query 180)."),
         ] = None,
         limit: Limit = None,
+        cursor: Cursor = None,
     ) -> Annotated[CallToolResult, ContactList]:
-        res = await service.find_contacts(query=query, accounts=accounts, days=days, limit=limit)
+        q = query_mod.parse(query)
+        args = {"query": q and q.text, "accounts": accounts, "days": days}
+        res = await service.find_contacts(
+            query=q, accounts=accounts, days=days, limit=limit, cursor=cursor, args=args
+        )
         notes, problems = res.notes, res.problems
         out = [
             ContactOut(
@@ -758,9 +831,25 @@ def build_server(service: MailService) -> MCPServer:
             )
             for c in res.contacts
         ]
-        data = ContactList(contacts=out, days=res.days, notes=notes, problems=_problems(problems))
-        rows = [
-            [
+        data = ContactList(
+            contacts=out,
+            total=res.total,
+            offset=res.offset,
+            next_cursor=res.cursor,
+            mode=res.mode,
+            days=res.days,
+            scanned=res.scanned,
+            similar=res.similar,
+            notes=notes,
+            problems=_problems(problems),
+        )
+        show_score = res.mode == "fuzzy"
+        headers = ["#", "Name", "Address", "Sent to", "Sent", "Received", "Last"]
+        if show_score:
+            headers.append("Score")
+        rows: list[list[str]] = []
+        for n, c in enumerate(out, res.offset + 1):
+            row = [
                 str(n),
                 escape_cell(c.name, 40) or "–",
                 escape_cell(c.email, 60),
@@ -769,19 +858,37 @@ def build_server(service: MailService) -> MCPServer:
                 str(c.received),
                 fmt_datetime(c.last),
             ]
-            for n, c in enumerate(out, 1)
-        ]
-        foot = [
-            f"{len(out)} contacts from the last {res.days} days",
-            *[escape_cell(n, 200) for n in notes],
-            *_problem_notes(problems),
-        ]
-        table = markdown_table(
-            ["#", "Name", "Address", "Sent to", "Sent", "Received", "Last"], rows
-        )
+            if show_score:
+                row.append(f"{c.score:.0f}" if c.score is not None else "–")
+            rows.append(row)
+        span = f"the last {res.days} days ({res.scanned} messages read in INBOX and Sent)"
+        foot: list[str] = []
+        if q is None:
+            foot.append(
+                f"{res.offset + 1}–{res.offset + len(out)} of {res.total} recent contacts, "
+                f"most recent first, from {span}"
+                if out
+                else f"no contacts in {span}"
+            )
+            foot.append('find a person: find_contacts(query="name")')
+        elif out:
+            foot.append(
+                f"{res.offset + 1}–{res.offset + len(out)} of {res.total} contacts matching "
+                f"{escape_cell(q.text, 60)} from {span}"
+            )
+        else:
+            foot.append(f"no contact matches {escape_cell(q.text, 60)} in {span}")
+            if res.similar:
+                foot.append("similar: " + escape_cell("; ".join(res.similar), 200))
+        if res.cursor:
+            foot.append(f"more: cursor=`{res.cursor}`")
+        if res.days < MAX_CONTACT_DAYS and not out:
+            foot.append(f"look further back: days={min(MAX_CONTACT_DAYS, res.days * 4)}")
+        foot += [escape_cell(n, 200) for n in notes]
+        foot += _problem_notes(problems)
+        table = markdown_table(headers, rows) + "\n\n" if out else ""
         failed = bool(problems) and res.answered == 0
-        return _result(table + "\n\n" + render.footer(foot), data, failed=failed)
+        return _result(table + render.footer(foot), data, failed=failed)
 
-    _ = (account_info, list_folders, list_messages, search_messages, get_message)
-    _ = (get_thread, find_contacts)
+    _ = (account_info, list_folders, find_messages, get_message, find_contacts)
     return mcp

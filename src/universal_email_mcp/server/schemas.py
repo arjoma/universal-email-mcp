@@ -9,12 +9,12 @@ when the headers were decoded.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from universal_email_mcp.mail.folders import decode_folder_name
-from universal_email_mcp.models import Address, Attachment, FolderInfo, MessageSummary
-from universal_email_mcp.service.fuzzy import folder_path
+from universal_email_mcp.models import Address, Attachment, MessageSummary
 from universal_email_mcp.service.router import AccountProblem
 
 
@@ -45,7 +45,7 @@ class Problem(_Model):
 
 
 class MessageItem(_Model):
-    id: str = Field(description="Opaque message id for get_message / get_thread.")
+    id: str = Field(description="Opaque message id for get_message.")
     account: str
     folder: str = Field(description="Folder (decoded display name).")
     date: datetime | None
@@ -96,14 +96,14 @@ class MessageList(_Model):
     offset: int = Field(description="Messages returned on earlier pages.")
     next_cursor: str | None = Field(description="Pass as 'cursor' for the next page.")
     exact: bool = Field(description="False when matching was approximate or partial.")
+    mode: Literal["exact", "wildcard", "fuzzy"] = Field(
+        description=(
+            "exact: server-side search, newest first; wildcard/fuzzy: 'query' matched "
+            "against the headers, best first."
+        )
+    )
     notes: list[str]
     problems: list[Problem] = Field(description="Accounts that failed or were skipped.")
-
-
-class ThreadOut(_Model):
-    messages: list[MessageItem] = Field(description="Chronological (oldest first).")
-    notes: list[str]
-    problems: list[Problem]
 
 
 class AttachmentOut(_Model):
@@ -143,63 +143,45 @@ class MessageOut(_Model):
     reply_to: list[AddressOut]
     in_reply_to: str | None
     references: list[str]
-    body: BodyOut
+    body: BodyOut | None = Field(description="The text body; null with thread=true.")
     attachments: list[AttachmentOut]
     source_truncated: bool
+    thread: list[MessageItem] | None = Field(
+        default=None,
+        description="With thread=true: the conversation, chronological (oldest first).",
+    )
+    notes: list[str] = Field(default_factory=list[str])
+    problems: list[Problem] = Field(
+        default_factory=list[Problem], description="Accounts the conversation search missed."
+    )
 
 
-class FolderNode(_Model):
+class FolderEntry(_Model):
+    account: str
     name: str = Field(description="Leaf name.")
-    path: str = Field(description="Full folder name to use in other tools.")
-    role: str | None
-    selectable: bool
+    path: str = Field(description="Full folder name: pass it as 'parent' or 'folders'.")
+    level: int = Field(description="1 = the level listed; 2, 3 = deeper (depth > 1).")
+    role: str | None = Field(description="inbox, sent, drafts, trash, junk or archive.")
+    selectable: bool = Field(description="False for groups that only hold subfolders.")
+    subfolders: int = Field(description="Direct subfolders.")
+    descendants: int = Field(description="Subfolders at any depth.")
     messages: int | None
     unread: int | None
-    children: list[FolderNode]
+    score: float | None = Field(description="Fuzzy match score (fuzzy query only).")
 
 
-class AccountFolderTree(_Model):
-    account: str
-    delimiter: str | None
-    folders: list[FolderNode]
-
-
-class FolderTree(_Model):
-    accounts: list[AccountFolderTree]
+class FolderList(_Model):
+    folders: list[FolderEntry]
+    total: int = Field(description="Folders in the whole listing (all pages, all accounts).")
+    offset: int
+    next_cursor: str | None = Field(description="Pass as 'cursor' for the next page.")
+    mode: Literal["top", "children", "wildcard", "fuzzy"]
+    depth: int
+    parent: list[str] = Field(description="The resolved parent folder (per account).")
+    similar: list[str] = Field(description="Close folder names when nothing matched.")
+    counts_capped: bool = Field(description="Only some folders on this page have counts.")
+    notes: list[str]
     problems: list[Problem]
-
-
-def build_tree(folders: list[FolderInfo], personal_prefix: str) -> list[FolderNode]:
-    """Nest folders by their hierarchy (namespace prefix stripped). Missing
-    intermediate levels become non-selectable placeholder nodes."""
-
-    class _N:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.info: FolderInfo | None = None
-            self.children: dict[str, _N] = {}
-
-    root = _N("")
-    for f in folders:
-        node = root
-        for part in folder_path(f, personal_prefix):
-            node = node.children.setdefault(part, _N(part))
-        node.info = f
-
-    def conv(n: _N, parent: str) -> FolderNode:
-        f = n.info
-        path = f.display_name if f else (f"{parent}/{n.name}" if parent else n.name)
-        return FolderNode(
-            name=n.name,
-            path=path,
-            role=f.role if f else None,
-            selectable=f.selectable if f else False,
-            messages=f.messages if f else None,
-            unread=f.unseen if f else None,
-            children=[conv(c, path) for c in n.children.values()],
-        )
-
-    return [conv(c, "") for c in root.children.values()]
 
 
 class Quota(_Model):
@@ -264,6 +246,14 @@ class ContactOut(_Model):
 
 class ContactList(_Model):
     contacts: list[ContactOut]
-    days: int
+    total: int = Field(description="Contacts found (all pages).")
+    offset: int
+    next_cursor: str | None = Field(description="Pass as 'cursor' for the next page.")
+    mode: Literal["overview", "wildcard", "fuzzy"] = Field(
+        description="overview: recent contacts (no query); otherwise how 'query' matched."
+    )
+    days: int = Field(description="How far back the mail was read.")
+    scanned: int = Field(description="Message headers read (INBOX + Sent, all accounts).")
+    similar: list[str] = Field(description="Close names/addresses when nothing matched.")
     notes: list[str]
     problems: list[Problem]
