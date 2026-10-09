@@ -69,6 +69,22 @@ def test_probe_unknown_account(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert main(["probe", "--account", "nope", "--config", str(cfg)]) == 1
     err = capsys.readouterr().err
     assert "CONFIG_INVALID" in err and "Known accounts: a" in err
+    assert f"config: {cfg} (accounts: a)" in err
+
+
+def test_local_reports_the_loaded_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    """--config wins over UEM_CONFIG, and stderr names the file that was loaded."""
+    cfg = tmp_path / "sandbox.toml"
+    cfg.write_text('[[accounts]]\nname = "Sandbox"\nserver = "x.example.com"\nusername = "u"\n')
+    monkeypatch.setenv("UEM_CONFIG", str(tmp_path / "real.toml"))
+    served: list[object] = []
+    monkeypatch.setattr("universal_email_mcp.server.local.run_local", served.append)
+    assert main(["local", "--config", str(cfg)]) == 0
+    assert len(served) == 1
+    captured = capsys.readouterr()
+    assert f"config: {cfg} (accounts: Sandbox)" in captured.err and not captured.out
 
 
 def test_probe_public_only_blocks_loopback(

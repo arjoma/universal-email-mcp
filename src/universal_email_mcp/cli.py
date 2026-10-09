@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from universal_email_mcp import __version__
-from universal_email_mcp.config import load_config, resolve_password
+from universal_email_mcp.config import Config, load_config, resolve_password
 from universal_email_mcp.errors import ConfigError, CredentialMissing, MailError
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, FolderRole, TlsSettings
@@ -68,6 +68,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _load_config(path: str | None) -> Config:
+    """Load the config and say on stderr which file it was (stdout may carry MCP)."""
+    cfg = load_config(path)
+    names = ", ".join(a.name for a in cfg.accounts) or "none"
+    print(f"config: {cfg.path} (accounts: {names})", file=sys.stderr, flush=True)
+    return cfg
+
+
 def _read_password(user: str) -> str:
     env = os.environ.get(PASSWORD_ENV)
     if env:
@@ -90,7 +98,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     )
     folder_roles: dict[FolderRole, str] = {}
     if args.account:
-        cfg = load_config(args.config)
+        cfg = _load_config(args.config)
         account = cfg.account(args.account)
         if account.kind != "imap":
             raise ConfigError(f"account {account.name!r} is not an IMAP account")
@@ -150,7 +158,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 def _cmd_local(args: argparse.Namespace) -> int:
     from universal_email_mcp.server.local import run_local
 
-    run_local(load_config(args.config))
+    run_local(_load_config(args.config))
     return 0
 
 
