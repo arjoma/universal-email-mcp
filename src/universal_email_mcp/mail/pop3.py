@@ -1017,7 +1017,36 @@ class Pop3Session:
             attachments=atts,
             source_truncated=truncated,
             body_notes=tuple(notes),
+            has_html=any(ctype == "text/html" for _s, ctype in parsed.leaves),
         )
+
+    def fetch_raw_message(
+        self, ref: MessageRef, *, max_bytes: int
+    ) -> tuple[tuple[str, ...], bytes]:
+        """``((), raw bytes)`` of the whole message (``RETR``); larger than ``max_bytes``
+        raises :class:`TooLarge` (POP3 has no flags)."""
+        ref = self.resolve_ref(ref)
+        assert ref.uidl is not None
+        size = self._size.get(ref.uidl, 0)
+        if size > max_bytes:
+            raise TooLarge(f"the message is {size} bytes; the limit is {max_bytes}")
+        raw, cut = self._retrieve(ref.uidl, max_bytes + RETR_SLACK, partial=False)
+        if cut:
+            raise TooLarge("the message is larger than the read limit")
+        return (), raw
+
+    def fetch_headers(self, ref: MessageRef, *, max_bytes: int) -> bytes:
+        """The raw header block (``TOP n 0``), at most ``max_bytes``."""
+        ref = self.resolve_ref(ref)
+        assert ref.uidl is not None
+        num = self._num[ref.uidl]
+        ok, text = self._protect(lambda w: w.command(f"TOP {num} 0"))
+        if not ok:
+            raise MessageNotFound(f"the server could not return the message: {text}")
+        data, over = self._protect(lambda w: w.multiline(max_bytes))
+        if over:
+            self._kill()
+        return data
 
     def fetch_attachment(self, ref: MessageRef, section: str, *, max_bytes: int) -> AttachmentData:
         """Decoded bytes of one part, numbered by this server's own MIME parse (POP3

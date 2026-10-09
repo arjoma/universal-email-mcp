@@ -18,6 +18,7 @@ import html as html_mod
 import quopri
 import re
 import secrets
+import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -939,3 +940,60 @@ def safe_mime_type(declared: str) -> str:
         if not d.endswith(("+xml", "+json")):
             return d
     return "application/octet-stream"
+
+
+# --------------------------------------------------------------------------- HTML view
+
+RASTER_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+"""Image types the viewer inlines (as ``data:`` URIs). Never SVG: it can carry markup."""
+
+
+@dataclass(frozen=True, slots=True)
+class HtmlViewParts:
+    html: tuple[str, ...]
+    """Decoded text of every inline ``text/html`` body part, in order."""
+    images: dict[str, tuple[str, bytes]]
+    """Normalised Content-ID -> (content type, bytes) of the raster images that carry one."""
+
+
+def normalize_cid(value: str) -> str:
+    """``<Abc@x>`` / ``cid:abc%40x`` -> ``abc@x`` for matching ``cid:`` references."""
+    value = urllib.parse.unquote(value.strip()).strip()
+    if value.lower().startswith("cid:"):
+        value = value[4:]
+    return value.strip().strip("<>").strip().lower()
+
+
+def html_view_parts(
+    raw: bytes, *, max_html_chars: int = 2_000_000, max_image_bytes: int, max_total_bytes: int
+) -> HtmlViewParts:
+    """The HTML bodies and the inline raster images of a message, for the sandboxed viewer.
+
+    Images are collected up to ``max_image_bytes`` each and ``max_total_bytes`` in all;
+    HTML up to ``max_html_chars`` in all (the rest is dropped). A structure too deep for the
+    parser yields nothing."""
+    html: list[str] = []
+    images: dict[str, tuple[str, bytes]] = {}
+    budget, total = max_html_chars, 0
+    try:
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        for _section, part in iter_parts(msg):
+            ctype = part.get_content_type()
+            if _text_kind(part) == "html":
+                if budget > 0:
+                    text = part_text(part)
+                    html.append(text[:budget])
+                    budget -= len(text)
+                continue
+            cid = part.get("Content-ID")
+            if cid and ctype in RASTER_IMAGE_TYPES:
+                key = normalize_cid(str(cid))
+                if not key or key in images:
+                    continue
+                data = _part_bytes(part)
+                if len(data) <= max_image_bytes and total + len(data) <= max_total_bytes:
+                    images[key] = (ctype, data)
+                    total += len(data)
+    except RecursionError:
+        return HtmlViewParts((), {})
+    return HtmlViewParts(tuple(html), images)

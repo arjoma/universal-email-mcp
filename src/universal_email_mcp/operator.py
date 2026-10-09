@@ -45,6 +45,7 @@ LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 MIN_DEV_TOKEN_LENGTH = 32
 DEFAULT_PORT = 8080
 DEFAULT_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+DEFAULT_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 STORE_BACKENDS = ("memory", "firestore")
 MIN_PSEUDONYM_KEY_BYTES = 32
@@ -143,6 +144,10 @@ class OperatorConfig:
     pseudonym_key: bytes = field(default=b"", repr=False)
     oauth: OAuthSettings = OAuthSettings()
     pool: PoolSettings = PoolSettings()
+    max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES
+    """Largest decoded attachment or ``.eml`` the portal viewer streams."""
+    content_origin: str | None = None
+    """Optional separate origin (own host name) that serves mail HTML (``CONTENT_ORIGIN``)."""
 
     @property
     def oauth_mode(self) -> bool:
@@ -469,6 +474,19 @@ def load_operator_config(
         public_url = origin
         hosts.append(url_host)
         origins.append(origin)
+    content_origin: str | None = None
+    raw_content = _text(env, "CONTENT_ORIGIN")
+    if raw_content is not None:
+        content_origin, content_host = _origin("CONTENT_ORIGIN", raw_content)
+        if public_url is None or content_origin == public_url or content_host in hosts:
+            raise _fail(
+                "CONTENT_ORIGIN",
+                "must be a different origin than PUBLIC_URL (its own host name)",
+                hint="Example: PUBLIC_URL=https://mcp.example.com CONTENT_ORIGIN=https://mcp-content.example.com",
+            )
+        if (public_url.startswith("https://")) != content_origin.startswith("https://"):
+            raise _fail("CONTENT_ORIGIN", "must use the same scheme as PUBLIC_URL")
+        hosts.append(content_host)
     for h in (p for p in (_text(env, "ALLOWED_HOSTS") or "").split(",") if p.strip()):
         hosts.append(_host_name("ALLOWED_HOSTS", h))
     for o in (p for p in (_text(env, "ALLOWED_ORIGINS") or "").split(",") if p.strip()):
@@ -539,4 +557,8 @@ def load_operator_config(
         pseudonym_key=pseudonym_key,
         oauth=_oauth(env),
         pool=_pool(env),
+        max_download_bytes=_number(
+            env, "UEM_MAX_DOWNLOAD_BYTES", DEFAULT_MAX_DOWNLOAD_BYTES, int
+        ),
+        content_origin=content_origin,
     )

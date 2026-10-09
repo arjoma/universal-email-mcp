@@ -51,12 +51,13 @@ from universal_email_mcp.models import (
     CredentialRef,
     Endpoint,
     Identity,
+    MessageRef,
     Permissions,
     ServerProfile,
     TlsSettings,
 )
 from universal_email_mcp.oauth.bearer import Principal
-from universal_email_mcp.oauth.config import permission_of
+from universal_email_mcp.oauth.config import SCOPE_READ, permission_of
 from universal_email_mcp.operator import OperatorConfig
 from universal_email_mcp.presets import resolve_server_entry
 from universal_email_mcp.service.cursor import CursorCodec
@@ -78,6 +79,10 @@ MARK_DEBOUNCE = 5.0
 """A failure flag younger than this is not written again (parallel failing calls)."""
 _NAME_OK = re.compile(r"^[\w][\w .@+-]{0,63}$", re.UNICODE)
 
+VIEWER_GRANT = "portal-viewer"
+"""Grant id of the pseudo grant behind the portal's message viewer: all of the user's own
+accounts with ``read``, no identities, no MCP server."""
+
 ServerFactory = Callable[[MailService, Mapping[str, FolderMap | None]], Any]
 """``build_server``: the MCP server (never run itself) whose tools a context offers."""
 
@@ -97,6 +102,20 @@ def effective_permissions(
     if "read" not in names:
         return None
     return Permissions(**{n: n in names for n in PERMISSION_NAMES})
+
+
+class PortalLinks:
+    """``DownloadLinks`` of remote mode: the portal's viewer routes (``/m/<id>/...``). The
+    links carry no token: opening one needs the portal session of the mailbox's owner."""
+
+    def __init__(self, base: str) -> None:
+        self._base = base.rstrip("/")
+
+    def attachment_url(self, ref: MessageRef, section: str) -> str | None:
+        return f"{self._base}/m/{ref.encode()}/a/{section}"
+
+    def message_url(self, ref: MessageRef) -> str | None:
+        return f"{self._base}/m/{ref.encode()}/eml"
 
 
 def _account_name(rec: MailAccount, taken: set[str], position: int) -> str:
@@ -204,7 +223,7 @@ def build_user_config(
         policy=op.policy,
         limits=op.limits,
         settings=op.settings,
-        downloads=Downloads(enabled=False),
+        downloads=Downloads(enabled=False, max_download_bytes=op.max_download_bytes),
     )
     return config, records
 
@@ -313,6 +332,8 @@ class UserPool:
         accounts: Sequence[MailAccount],
         identities: Sequence[IdentityRecord],
         fp: tuple[Any, ...],
+        *,
+        viewer: bool = False,
     ) -> UserContext:
         config, records = build_user_config(self.op, principal, accounts, identities, self._tls)
         hooks = _Hooks(self)
@@ -325,11 +346,14 @@ class UserPool:
                 "authorizes the client for it."
             ),
         )
+        base = self.op.public_url
         service = MailService(
             config,
             router=router,
             cursors=CursorCodec(self._cursor_key(principal.user_id)),
-            download_status="off (remote mode)",
+            viewer_base=base,
+            download_links=PortalLinks(base) if base else None,
+            download_status="on (portal viewer, sign-in required)" if base else "off",
         )
         ctx = UserContext(
             user_id=principal.user_id,
@@ -339,7 +363,7 @@ class UserPool:
             records=records,
             service=service,
             router=router,
-            server=self._factory(service, {}),
+            server=None if viewer else self._factory(service, {}),
             last_used=self._clock(),
         )
         hooks.ctx = ctx
@@ -349,13 +373,23 @@ class UserPool:
         """The context for this principal, built from the store if it is new or stale."""
         accounts = await self.store.list_for_user(MailAccount, principal.user_id)
         identities = await self.store.list_for_user(IdentityRecord, principal.user_id)
+        return self._context(principal, accounts, identities)
+
+    def _context(
+        self,
+        principal: Principal,
+        accounts: Sequence[MailAccount],
+        identities: Sequence[IdentityRecord],
+        *,
+        viewer: bool = False,
+    ) -> UserContext:
         fp = fingerprint(principal, accounts, identities)
         key = (principal.user_id, principal.grant_id)
         ctx = self._contexts.get(key)
         if ctx is not None and ctx.fingerprint == fp:
             ctx.last_used = self._clock()
             return ctx
-        fresh = self._build(principal, accounts, identities, fp)
+        fresh = self._build(principal, accounts, identities, fp, viewer=viewer)
         if ctx is not None:
             self._retire(ctx)
         self._contexts[key] = fresh
@@ -365,6 +399,28 @@ class UserPool:
     async def lease(self, principal: Principal) -> UserContext:
         """The context for a request; pair with :meth:`release` (it is kept alive meanwhile)."""
         ctx = await self.acquire(principal)
+        ctx.active += 1
+        return ctx
+
+    async def lease_viewer(self, user_id: str) -> UserContext:
+        """The context behind the portal's message viewer: **only the signed-in user's own**
+        accounts (from the store, by ``user_id``) that grant ``read``. Pair with :meth:`release`."""
+        accounts = [
+            a
+            for a in await self.store.list_for_user(MailAccount, user_id)
+            if a.user_id == user_id
+        ]
+        accounts.sort(key=lambda a: (a.created_at, a.id))
+        principal = Principal(
+            user_id=user_id,
+            grant_id=VIEWER_GRANT,
+            client_id="portal",
+            client_name="portal",
+            scopes=(SCOPE_READ,),
+            account_scopes={a.id: "read" for a in accounts},
+            identity_ids=(),
+        )
+        ctx = self._context(principal, accounts, (), viewer=True)
         ctx.active += 1
         return ctx
 

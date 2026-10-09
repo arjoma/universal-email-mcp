@@ -1218,9 +1218,8 @@ class ImapSession:
                 raw = value
                 break
         parsed = parse_message(raw)
-        attachments, att_notes = attachments_for(
-            parsed, leaves(fields.get(b"BODYSTRUCTURE")), truncated=truncated
-        )
+        server_leaves = leaves(fields.get(b"BODYSTRUCTURE"))
+        attachments, att_notes = attachments_for(parsed, server_leaves, truncated=truncated)
         summary = _summary(
             MessageRef(ref.account, wire, current, ref.uid),
             fields,
@@ -1234,6 +1233,9 @@ class ImapSession:
             attachments=attachments,
             source_truncated=truncated,
             body_notes=(*parsed.notes, *att_notes),
+            has_html=any(
+                leaf.content_type == "text/html" and leaf.is_body_text for leaf in server_leaves or ()
+            ),
         )
 
     def _open_message(self, ref: MessageRef) -> tuple[str, int]:
@@ -1325,6 +1327,18 @@ class ImapSession:
             chunks.append(chunk)
             offset += len(chunk)
         return flags, b"".join(chunks)
+
+    def fetch_headers(self, ref: MessageRef, *, max_bytes: int) -> bytes:
+        """The raw header block of one message (``BODY.PEEK[HEADER]``: never sets
+        ``\\Seen``), at most ``max_bytes``. Checks account and UIDVALIDITY."""
+        wire, _current = self._open_message(ref)
+        got = self._fetch_raw([ref.uid], ["UID", f"BODY.PEEK[HEADER]<0.{max_bytes}>"]).get(ref.uid)
+        if got is None:
+            raise MessageNotFound(f"message {ref.uid} not found in {decode_folder_name(wire)!r}")
+        for key, value in got.items():
+            if key.startswith(b"BODY[") and isinstance(value, bytes):
+                return value
+        return b""
 
     def fetch_attachment(self, ref: MessageRef, section: str, *, max_bytes: int) -> AttachmentData:
         """Decoded bytes of one part, or only its metadata when it is bigger than
