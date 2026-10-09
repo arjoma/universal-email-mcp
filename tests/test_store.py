@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -36,6 +36,7 @@ from universal_email_mcp.store import (
     Token,
     TokenReuse,
     User,
+    UserGone,
     hash_token,
     rotate_keys,
 )
@@ -94,6 +95,12 @@ def clock() -> Clock:
 @pytest.fixture
 def store(backend: Backend, clock: Clock) -> Store:
     return Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+
+
+async def with_users(store: Store, *uids: str) -> None:
+    """The users whose records a test writes: per-user writes need the user (Store.create_owned)."""
+    for uid in uids or ("u_1", "u_2"):
+        await store.create(make(User, uid))
 
 
 # --- record factories -------------------------------------------------------------------
@@ -307,6 +314,7 @@ async def test_records_without_expiry_stay(store: Store, clock: Clock) -> None:
 
 
 async def test_portal_session(store: Store, clock: Clock) -> None:
+    await with_users(store)
     raw, rec = await store.create_portal_session("u_1", timedelta(hours=1))
     assert rec.id == hash_token(raw) and raw not in repr(
         await store.backend.get("portal_sessions", rec.id)
@@ -334,6 +342,7 @@ async def test_oauth_client_unused_ttl_and_touch(store: Store, clock: Clock) -> 
 
 
 async def test_auth_code_single_use_and_expiry(store: Store, clock: Clock) -> None:
+    await with_users(store)
     args: dict[str, Any] = dict(user_id="u_1", client_id="c", grant_id="g", redirect_uri="https://c/cb", code_challenge="ch")  # fmt: skip
     raw = await store.issue_auth_code(**args)
     assert (await store.backend.get("auth_codes", hash_token(raw))) is not None
@@ -358,6 +367,7 @@ async def test_auth_code_single_use_and_expiry(store: Store, clock: Clock) -> No
 async def test_auth_code_replay_revokes_the_tokens_issued_from_it(
     store: Store, clock: Clock
 ) -> None:
+    await with_users(store)
     grant = await store.create_grant(user_id="u_1", client_id="c")
     raw = await store.issue_auth_code(
         user_id="u_1", client_id="c", grant_id=grant.id, redirect_uri="https://c/cb",
@@ -375,6 +385,7 @@ async def test_auth_code_replay_revokes_the_tokens_issued_from_it(
 
 
 async def test_portal_session_idle_and_absolute_timeout(store: Store, clock: Clock) -> None:
+    await with_users(store)
     idle = timedelta(minutes=30)
     raw, _ = await store.create_portal_session("u_1", ttl=timedelta(hours=2))
     clock.advance(minutes=20)
@@ -393,6 +404,7 @@ async def test_portal_session_idle_and_absolute_timeout(store: Store, clock: Clo
 
 
 async def test_portal_session_reauth(store: Store, clock: Clock) -> None:
+    await with_users(store)
     window = timedelta(minutes=5)
     raw, rec = await store.create_portal_session("u_1")
     assert not store.reauth_fresh(rec, window)  # nobody typed a password yet
@@ -423,6 +435,7 @@ async def connect(store: Store) -> tuple[Grant, Any]:
 
 
 async def test_token_issue_and_authenticate(store: Store, clock: Clock) -> None:
+    await with_users(store)
     grant, t = await connect(store)
     assert t.access_token.startswith("uem_at_") and t.refresh_token.startswith("uem_rt_")
     # only digests are stored
@@ -441,6 +454,7 @@ async def test_token_issue_and_authenticate(store: Store, clock: Clock) -> None:
 
 
 async def test_pending_grant_expires_without_tokens(store: Store, clock: Clock) -> None:
+    await with_users(store)
     grant = await store.create_grant(user_id="u_1", client_id="c")
     assert grant.last_used is None
     clock.advance(minutes=10)
@@ -450,6 +464,7 @@ async def test_pending_grant_expires_without_tokens(store: Store, clock: Clock) 
 async def test_refresh_rotation_slides_but_stops_at_absolute_max(
     store: Store, clock: Clock
 ) -> None:
+    await with_users(store)
     grant, t = await connect(store)
     refresh = t.refresh_token
     for _ in range(3):  # 3 x 29 days of sliding
@@ -464,6 +479,7 @@ async def test_refresh_rotation_slides_but_stops_at_absolute_max(
 
 
 async def test_refresh_expires_when_idle(store: Store, clock: Clock) -> None:
+    await with_users(store)
     _, t = await connect(store)
     clock.advance(days=30)
     with pytest.raises(InvalidToken):
@@ -471,6 +487,7 @@ async def test_refresh_expires_when_idle(store: Store, clock: Clock) -> None:
 
 
 async def test_refresh_checks_client_and_type(store: Store) -> None:
+    await with_users(store)
     _, t = await connect(store)
     with pytest.raises(InvalidToken):
         await store.rotate_refresh_token(t.refresh_token, client_id="other")
@@ -481,6 +498,7 @@ async def test_refresh_checks_client_and_type(store: Store) -> None:
 
 
 async def test_refresh_rotation_and_replay_revokes_grant(store: Store) -> None:
+    await with_users(store)
     grant, t1 = await connect(store)
     t2 = await store.rotate_refresh_token(t1.refresh_token, client_id="c")
     assert t2.refresh_token != t1.refresh_token
@@ -495,6 +513,7 @@ async def test_refresh_rotation_and_replay_revokes_grant(store: Store) -> None:
 
 
 async def test_concurrent_refresh_yields_one_winner(store: Store) -> None:
+    await with_users(store)
     _, t = await connect(store)
     results = await asyncio.gather(
         *(store.rotate_refresh_token(t.refresh_token, client_id="c") for _ in range(3)),
@@ -505,6 +524,7 @@ async def test_concurrent_refresh_yields_one_winner(store: Store) -> None:
 
 
 async def test_revoke_grant_and_revoke_token(store: Store) -> None:
+    await with_users(store)
     g1, t1 = await connect(store)
     g2, t2 = await connect(store)
     await store.revoke_token(t1.access_token)  # access token only
@@ -522,6 +542,7 @@ async def test_revoke_grant_and_revoke_token(store: Store) -> None:
 async def test_unlimited_policy(backend: Backend, clock: Clock) -> None:
     policy = SessionPolicy(refresh_ttl=timedelta(0), absolute_max=timedelta(0))
     store = Store(backend, KeyRing({"k1": KEY1}), clock=clock, policy=policy)
+    await with_users(store)
     grant, t = await connect(store)
     assert grant.absolute_expires_at is None and t.refresh_expires_at is None
     clock.advance(days=3650)
@@ -530,6 +551,7 @@ async def test_unlimited_policy(backend: Backend, clock: Clock) -> None:
 
 
 async def test_access_use_touches_grant_rarely(store: Store, clock: Clock) -> None:
+    await with_users(store)
     _, t = await connect(store)
     auth = await store.authenticate_access_token(t.access_token)
     assert auth
@@ -545,6 +567,7 @@ async def test_access_use_touches_grant_rarely(store: Store, clock: Clock) -> No
 
 
 async def test_approval_flow(store: Store, clock: Clock) -> None:
+    await with_users(store)
     ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="ref")  # fmt: skip
     assert ap.status == "pending"
     done = await store.decide_approval(ap.id, "u_1", True)
@@ -556,6 +579,7 @@ async def test_approval_flow(store: Store, clock: Clock) -> None:
 
 
 async def test_activity_feed(store: Store, clock: Clock) -> None:
+    await with_users(store)
     for i in range(5):
         await store.record_activity("u_1", "tool.call", tool="search_messages", account="Work", counts={"results": i})  # fmt: skip
         clock.advance(minutes=1)
@@ -568,6 +592,7 @@ async def test_activity_feed(store: Store, clock: Clock) -> None:
 
 
 async def test_coalesced_activity_merges_per_hour(store: Store, clock: Clock) -> None:
+    await with_users(store)
     kw: dict[str, Any] = dict(client="g_1", tool="find_messages", outcome="ok", coalesce=True)
     await store.record_activity("u_1", "tool.call", counts={"messages": 2}, **kw)
     clock.advance(minutes=5)
@@ -584,6 +609,7 @@ async def test_coalesced_activity_merges_per_hour(store: Store, clock: Clock) ->
 
 
 async def test_coalesced_activity_survives_parallel_calls(store: Store) -> None:
+    await with_users(store)
     got = await asyncio.gather(
         *(store.record_activity("u_1", "tool.call", tool="t", coalesce=True) for _ in range(4)),
         return_exceptions=True,
@@ -740,6 +766,7 @@ async def test_delete_user_interrupted_midway_is_safe_and_repeatable(
 
 
 async def test_approval_ownership_and_single_use(store: Store) -> None:
+    await with_users(store)
     ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="r")  # fmt: skip
     assert await store.decide_approval(ap.id, "u_2", True) is None  # foreign user
     assert await store.consume_approval(ap.id, "u_1", "h") is None  # not approved yet
@@ -751,6 +778,7 @@ async def test_approval_ownership_and_single_use(store: Store) -> None:
 
 
 async def test_refresh_survives_concurrent_grant_touch(store: Store, clock: Clock) -> None:
+    await with_users(store)
     grant, t = await connect(store)
     clock.advance(minutes=6)
     # a request touching last_used between the read and the commit of a rotation
@@ -763,6 +791,7 @@ async def test_refresh_survives_concurrent_grant_touch(store: Store, clock: Cloc
 
 
 async def test_issue_tokens_only_once(store: Store) -> None:
+    await with_users(store)
     grant, _ = await connect(store)
     with pytest.raises(InvalidToken):
         await store.issue_tokens(grant)
@@ -818,6 +847,7 @@ async def test_unknown_fields_survive_update(store: Store) -> None:
 
 
 async def test_export_omits_draft_refs(store: Store) -> None:
+    await with_users(store)
     await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="DRAFT-REF-X")  # fmt: skip
     assert "DRAFT-REF-X" not in repr(await store.export_user("u_1"))
 
@@ -849,6 +879,7 @@ async def test_account_failure_flag_follows_the_login(store: Store) -> None:
 
 
 async def test_claim_send_is_once_per_user_and_content(store: Store, clock: Clock) -> None:
+    await with_users(store)
     from datetime import timedelta
 
     ttl = timedelta(minutes=10)
@@ -864,6 +895,7 @@ async def test_claim_send_is_once_per_user_and_content(store: Store, clock: Cloc
 
 
 async def test_expired_records_can_be_read_explicitly(store: Store, clock: Clock) -> None:
+    await with_users(store)
     ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="r")  # fmt: skip
     clock.advance(minutes=11)
     assert await store.get(PendingApproval, ap.id) is None
@@ -888,6 +920,7 @@ def test_derived_secrets_are_stable_distinct_and_follow_the_ring() -> None:
 
 
 async def test_claim_send_expired_marker_is_replaced_once(store: Store, clock: Clock) -> None:
+    await with_users(store)
     import asyncio
     from datetime import timedelta
 
@@ -978,3 +1011,81 @@ async def test_export_marks_a_damaged_record_and_goes_on(
 
     await damage(backend, "users", "u_1")
     assert (await store.export_user("u_1"))["user"] == {"unreadable": True}
+
+
+# --- a write racing delete_user must not leave an orphan -------------------------------------
+
+
+async def test_writes_for_a_deleted_user_are_dropped_or_refused(store: Store) -> None:
+    await with_users(store, "u_1")
+    grant = await store.create_grant(user_id="u_1", client_id="c")
+    await store.delete_user("u_1")
+
+    entry = await store.record_activity("u_1", "tool.call", tool="find_messages")
+    assert entry.user_id == "u_1"  # handed back, but not stored
+    again = await store.record_activity("u_1", "tool.call", tool="find_messages", coalesce=True)
+    assert again.counts == {"calls": 1}
+    assert not await store.claim_send("u_1", "hash", timedelta(minutes=10))
+    for call in (
+        store.create_approval(
+            user_id="u_1", grant_id=grant.id, identity_id="i", content_hash="h", draft_ref="r"
+        ),
+        store.create_grant(user_id="u_1", client_id="c"),
+        store.issue_auth_code(
+            user_id="u_1", client_id="c", grant_id="g", redirect_uri="x", code_challenge="y"
+        ),
+        store.create_portal_session("u_1"),
+    ):
+        with pytest.raises(UserGone):
+            await call
+    for cls in USER_OWNED:
+        assert await store.list_for_user(cls, "u_1", include_expired=True) == [], cls.__name__
+
+
+class DeleteBeforeCreate(MemoryBackend):
+    """Runs a hook just before the first create of a collection lands - after the writer's
+    own "does the user exist" check - as a concurrent ``delete_user`` would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hook: Callable[[], Awaitable[Any]] | None = None
+        self.collection = ""
+
+    async def commit(self, ops: Sequence[Op]) -> None:
+        if self.hook and any(o.kind == "create" and o.collection == self.collection for o in ops):
+            hook, self.hook = self.hook, None
+            await hook()
+        await super().commit(ops)
+
+
+@pytest.mark.parametrize(
+    ("collection", "write"),
+    [
+        ("activity", lambda s: s.record_activity("u_1", "tool.call", tool="find_messages")),
+        ("activity", lambda s: s.record_activity("u_1", "tool.call", tool="x", coalesce=True)),
+        ("approvals", lambda s: s.claim_send("u_1", "hash", timedelta(minutes=10))),
+        (
+            "approvals",
+            lambda s: s.create_approval(
+                user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="r"
+            ),
+        ),
+        ("grants", lambda s: s.create_grant(user_id="u_1", client_id="c")),
+        ("portal_sessions", lambda s: s.create_portal_session("u_1")),
+    ],
+    ids=["activity", "activity-coalesced", "claim_send", "approval", "grant", "portal_session"],
+)
+async def test_a_write_racing_the_delete_leaves_no_orphan(
+    clock: Clock, collection: str, write: Callable[[Store], Awaitable[Any]]
+) -> None:
+    backend = DeleteBeforeCreate()
+    store = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    await with_users(store, "u_1")
+    backend.collection = collection
+    backend.hook = lambda: store.delete_user("u_1")  # the whole delete, sweep included
+    try:
+        await write(store)
+    except UserGone:
+        pass
+    assert [i async for i, _ in backend.scan(collection)] == []
+    assert await backend.get("users", "u_1") is None

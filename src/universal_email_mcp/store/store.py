@@ -67,6 +67,13 @@ class CodeReplay(InvalidToken):
     code = "STORE_CODE_REPLAY"
 
 
+class UserGone(MailError):
+    """The user's record no longer exists (deleted, e.g. through the portal's "delete all my
+    data"): a write for that user is refused instead of leaving an orphan record behind."""
+
+    code = "USER_GONE"
+
+
 class TokenReuse(InvalidToken):
     """A rotated refresh token was presented again: the whole grant was revoked."""
 
@@ -218,6 +225,24 @@ class Store:
         await self.backend.commit([Op("create", rec.KIND, rec.id, self.encode(rec, 1))])
         return replace(rec, version=1)
 
+    async def create_owned(self, rec: R) -> R:
+        """:meth:`create` for a record of a user, but only while the user exists.
+
+        ``delete_user`` removes the user record before its last sweep, and a request in
+        flight (a tool call writing its activity, a send asking for approval ...) must not
+        create records for a user who is gone. So: check before, create, check again - if the
+        user vanished in between, take the record back (the delete's sweep may have run
+        before our create). Either the sweep or this check removes it; none is left behind.
+        Raises :class:`UserGone`."""
+        user_id: str = getattr(rec, "user_id")  # noqa: B009 - all callers pass user-owned records
+        if await self.backend.get(User.KIND, user_id) is None:
+            raise UserGone("the user no longer exists")
+        created = await self.create(rec)
+        if await self.backend.get(User.KIND, user_id) is None:
+            await self.delete(type(rec), rec.id)
+            raise UserGone("the user was deleted meanwhile")
+        return created
+
     async def get(self, cls: type[R], rec_id: str) -> R | None:
         doc = await self.backend.get(cls.KIND, rec_id)
         if doc is None or self._expired(doc):
@@ -305,7 +330,7 @@ class Store:
             reauth_at=now if fresh_login else None,
             expires_at=now + ttl,
         )
-        return raw, await self.create(rec)
+        return raw, await self.create_owned(rec)
 
     def reauth_fresh(self, session: PortalSession, window: timedelta) -> bool:
         """Did the user type the password within ``window``?"""
@@ -389,7 +414,7 @@ class Store:
         scope: str = "",
     ) -> str:
         raw = new_token("uem_ac")
-        await self.create(
+        await self.create_owned(
             AuthCode(
                 id=hash_token(raw),
                 user_id=user_id,
@@ -448,7 +473,7 @@ class Store:
         """Consent result. Lives ``pending_grant_ttl`` until tokens are issued for it."""
         now = self.now()
         absolute = now + self.policy.absolute_max if self.policy.absolute_max else None
-        return await self.create(
+        return await self.create_owned(
             Grant(
                 id="g_" + secrets.token_hex(12),
                 user_id=user_id,
@@ -598,7 +623,7 @@ class Store:
         self, *, user_id: str, grant_id: str, identity_id: str, content_hash: str, draft_ref: str
     ) -> PendingApproval:
         now = self.now()
-        return await self.create(
+        return await self.create_owned(
             PendingApproval(
                 id="a_" + secrets.token_hex(12),
                 user_id=user_id,
@@ -648,7 +673,7 @@ class Store:
         instance). Markers are ``approvals`` records with the status ``sent`` and no draft."""
         now = self.now()
         try:
-            await self.create(
+            await self.create_owned(
                 PendingApproval(
                     id=self._send_marker_id(user_id, content_hash),
                     user_id=user_id,
@@ -661,6 +686,8 @@ class Store:
                     expires_at=now + ttl,
                 )
             )
+        except UserGone:
+            return False  # nothing may go out for a user who is gone
         except AlreadyExists:
             marker = self._send_marker_id(user_id, content_hash)
             stale = await self.get_any(PendingApproval, marker)
@@ -734,11 +761,20 @@ class Store:
             counts=dict(counts),
             expires_at=now + self.policy.activity_ttl,
         )
-        if not coalesce:
-            return await self.create(entry)
+        try:
+            if not coalesce:
+                return await self.create_owned(entry)
+            return await self._coalesce_activity(entry, counts)
+        except UserGone:
+            return entry  # the user is gone: the entry is dropped, not stored
+
+    async def _coalesce_activity(
+        self, entry: ActivityEntry, counts: dict[str, int]
+    ) -> ActivityEntry:
+        entry_id, now = entry.id, entry.at
         for _ in range(3):
             try:
-                return await self.create(entry)
+                return await self.create_owned(entry)
             except AlreadyExists:
                 pass
             current = await self.get(ActivityEntry, entry_id)

@@ -502,6 +502,7 @@ async def test_refresh_expires_when_unused(client, clock):
 async def test_token_for_another_resource_is_refused_on_mcp(client, store):
     a = Authz(client, register(client))
     a.exchange(a.code())
+    await store.get_or_create_user("u_x", "x@example.org")
     grant = await store.create_grant(user_id="u_x", client_id="c", scope="mail.read")
     issued = await store.issue_tokens(grant, resource="https://other.example/mcp")
     assert client.post("/mcp", json={}, headers=bearer(issued.access_token)).status_code == 401

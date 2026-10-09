@@ -81,7 +81,12 @@ ones, in the order of `records.DELETE_ORDER`: grants first (an access or refresh
 valid while its grant exists, so every token of the user is dead after the first step), then
 tokens, authorization codes, approvals and send markers, sign-in sessions, mail accounts,
 identities, activity, and the user record last; a final sweep removes what a request in flight
-wrote meanwhile. It returns counts per kind. Every step is a delete by id, so a crash midway
+wrote meanwhile. Writes of a request in flight cannot create orphans after that: the per-user
+writes of the store (activity entries, approvals and send markers, grants, authorization codes,
+sign-in sessions) go through `Store.create_owned`, which checks that the user record exists
+before and after the create and takes the record back if the user vanished in between
+(`UserGone`; an activity entry is dropped silently, a send claim answers "no"). It returns
+counts per kind. Every step is a delete by id, so a crash midway
 leaves a user who can sign in again and repeat the deletion; the second run finishes the job.
 OAuth clients are shared across users and not personal data (they expire when unused). The
 tests fail when a record type is added without deciding whether it is per-user and where it
