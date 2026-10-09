@@ -541,3 +541,27 @@ async def test_pop3_accounts_can_be_viewed_too(env: Env):
         att = b.get(f"/m/{mid}/a/3")
         assert att.status_code == 200
         assert att.content in (BLOB, b"<script>alert(1)</script>", PNG)
+
+
+async def test_raw_headers_label_forged_authentication_and_survive_8bit(env: Env):
+    # security review L7: only auth lines above the first Received are the own server's;
+    # raw 8-bit header bytes must not make the page unavailable
+    addr = env.address("hdr")
+    raw = (
+        b"Authentication-Results: mail.example.org; dkim=pass header.d=own.example\r\n"
+        b"Received: from relay.example by mail.example.org; Mon, 1 Jan 2026\r\n"
+        b"Authentication-Results: forged.example; dkim=pass header.d=bank.example\r\n"
+        b"X-Spam-Status: No, score=-99\r\n"
+        b"From: x@example.com\r\nTo: y@example.org\r\nSubject: Gr\xfc\xdfe\r\n"
+        b"X-Mailer: \xe4\r\nMessage-ID: <hdr@example.com>\r\n\r\nbody\r\n"
+    )
+    with env.browser(addr) as b:
+        ref = env.put(addr, raw)
+        r = b.get(f"/m/{ref.encode()}/headers")
+        assert r.status_code == 200
+        page = r.text
+        auth_section = page.split("All headers")[0]
+        assert "own.example" in auth_section
+        assert "bank.example" not in auth_section and "score=-99" not in auth_section
+        assert page.count("from the sender, not checked") == 2
+        assert "Gr\u00fc\u00dfe" in page

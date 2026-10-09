@@ -26,7 +26,7 @@ from universal_email_mcp.errors import AttachmentNotFound, TooLarge
 from universal_email_mcp.mail.bodystructure import SECTION_RE
 from universal_email_mcp.mail.htmlview import HtmlView, build_html_view
 from universal_email_mcp.mail.imap import ImapSession
-from universal_email_mcp.mail.mime import safe_mime_type, sanitize_line
+from universal_email_mcp.mail.mime import fix_surrogates, safe_mime_type, sanitize_line
 from universal_email_mcp.models import Message, MessageRef
 from universal_email_mcp.service.downloads import iter_part, open_part
 from universal_email_mcp.service.mail import MailService, ThreadResult
@@ -56,10 +56,19 @@ class HeaderLine:
     name: str
     value: str
     """Single line, control/invisible characters removed, not decoded (RFC 2047 words stay)."""
+    own: bool = False
+    """Added by the user's own mail server: above the first ``Received`` line (every hop
+    prepends its headers, so anything below was there before and may be forged)."""
+
+    @property
+    def claims_authentication(self) -> bool:
+        """Named like an authentication/spam header, wherever it is."""
+        return self.name.lower() in _AUTH_HEADERS
 
     @property
     def authentication(self) -> bool:
-        return self.name.lower() in _AUTH_HEADERS
+        """An authentication header the own server added: the only ones to trust."""
+        return self.own and self.claims_authentication
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,11 +115,14 @@ class Viewer:
         raw = await self._router.run_one(account, lambda a: self._router.call(a, fn))
         msg = BytesHeaderParser(policy=policy.compat32).parsebytes(raw)
         lines: list[HeaderLine] = []
+        own = True
         for name, value in msg.raw_items():
             if len(lines) >= MAX_HEADER_LINES:
                 break
-            clean = _SPACES.sub(" ", sanitize_line(str(value)))[:MAX_HEADER_VALUE]
-            lines.append(HeaderLine(sanitize_line(str(name))[:80], clean))
+            if str(name).lower() == "received":
+                own = False  # this line and everything below it is older than our server
+            clean = _SPACES.sub(" ", sanitize_line(fix_surrogates(str(value))))[:MAX_HEADER_VALUE]
+            lines.append(HeaderLine(sanitize_line(fix_surrogates(str(name)))[:80], clean, own))
         return lines
 
     async def html(self, message_id: str, *, remote_images: bool) -> HtmlView:

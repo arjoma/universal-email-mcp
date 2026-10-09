@@ -26,7 +26,12 @@ from tests.sandbox import (
     render_config,
 )
 from universal_email_mcp.config import parse_config
-from universal_email_mcp.mail.mime import parse_header_block, parse_message
+from universal_email_mcp.mail.mime import (
+    decode_header,
+    decode_text,
+    parse_header_block,
+    parse_message,
+)
 
 DATA = Path(__file__).parent / "data"
 NOW = datetime(2026, 10, 9, 12, 0).astimezone()
@@ -41,16 +46,16 @@ BARE_HOST = re.compile(
 
 
 def _decoded_text(raw: bytes) -> str:
-    """Unfolded headers and decoded text parts (no transfer-encoding line breaks)."""
-    msg = BytesParser(policy=policy.default).parsebytes(raw)
+    """Headers (RFC 2047 words decoded) and decoded text parts. ``compat32``: some samples
+    are malformed on purpose and the strict policy raises on them."""
+    msg = BytesParser(policy=policy.compat32).parsebytes(raw)
     out: list[str] = []
     for part in msg.walk():
-        out += [f"{k}: {v}" for k, v in part.items()]
+        out += [f"{k}: {decode_header(str(v))}" for k, v in part.raw_items()]
         if part.get_content_maintype() == "text":
-            try:
-                out.append(part.get_content())
-            except (LookupError, ValueError):
-                out.append(raw.decode("utf-8", "replace"))
+            payload = part.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                out.append(decode_text(payload, part.get_content_charset()))
     return "\n".join(out)
 
 

@@ -1,0 +1,17 @@
+From: Params <params@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Malformed MIME parameter
+Message-ID: <param-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="px"
+
+--px
+Content-Type: text/plain; charset=utf-8
+
+This visible text must stay readable.
+--px
+Content-Type: application/pdf; name*0*
+Content-Disposition: attachment; filename*0*
+
+%PDF-1.4 not really
+--px--

@@ -1,0 +1,9 @@
+From: =?utf-7?q?+2D0-?= <lone@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: =?utf-7?q?+2D0-?= half an emoji
+Message-ID: <surrogate-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-7
+Content-Disposition: inline; filename*=utf-7''+2D0-.txt
+
+UTF-7 that decodes to a lone UTF-16 surrogate: +2D0- (a JSON serialiser cannot encode it).

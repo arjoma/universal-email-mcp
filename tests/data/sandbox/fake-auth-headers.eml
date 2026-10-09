@@ -1,0 +1,12 @@
+Received: from relay.attacker.test by mail.hofer-design.example with ESMTPS; Mon, 5 Oct 2026 10:00:00 +0200
+Authentication-Results: forged.attacker.test; dkim=pass header.d=bank.example; spf=pass; dmarc=pass
+X-Spam-Status: No, score=-99.0
+X-Spam-Flag: NO
+From: Bank <service@bank.attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Verified sender (not)
+Message-ID: <authfake-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+The authentication headers of this mail were written by the sender, below the first Received line.

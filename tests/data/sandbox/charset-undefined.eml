@@ -1,0 +1,10 @@
+From: =?undefined?q?Mallory?= <codec@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: =?undefined?q?no_such_codec?=
+Message-ID: <codec-1@attacker.test>
+X-Sender-Name: =?idna?q?aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=undefined
+
+Codecs that exist in Python but cannot decode: "undefined" always raises UnicodeError,
+"idna" rejects long labels. The subject and the sender name must not take the listing down.

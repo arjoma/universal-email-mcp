@@ -87,6 +87,24 @@ class Original:
     body_truncated: bool = False
 
 
+FORWARD_MARKER = "---------- Forwarded message ----------"
+"""First line of the block :func:`forward_block` adds."""
+
+
+@dataclass(frozen=True, slots=True)
+class OriginInfo:
+    """What the server knows about the original behind a reply or forward: the facts
+    shown to the user before the message leaves (everything still untrusted text)."""
+
+    kind: Literal["reply", "forward"]
+    sender: str
+    date: str
+    subject: str
+    """The original's subject."""
+    subject_ok: bool
+    """Does the draft's subject read ``Re:`` / ``Fwd:`` + the original's subject?"""
+
+
 @dataclass(frozen=True, slots=True)
 class FileAttachment:
     """A file taken from an existing message (never from the local disk)."""
@@ -116,6 +134,8 @@ class Draft:
     attachments: tuple[tuple[str, str, int], ...]
     """(file name, content type, size) of the attached files."""
     warnings: tuple[str, ...]
+    origin: OriginInfo | None = None
+    """The original of a reply or forward (``None`` for a new message)."""
 
     @property
     def recipients(self) -> tuple[Address, ...]:
@@ -258,6 +278,36 @@ def forward_subject(subject: str) -> str:
     return f"Fwd: {base}"[:MAX_SUBJECT_CHARS]
 
 
+def _subject_core(subject: str) -> str:
+    """The subject without any reply/forward prefixes, case and spacing normalised."""
+    text = sanitize_line(subject)
+    previous = None
+    while previous != text:
+        previous = text
+        text = _FORWARD_PREFIX.sub("", _REPLY_PREFIX.sub("", text)).strip()
+    return " ".join(text.casefold().split())[: MAX_SUBJECT_CHARS - 10]
+
+
+def subject_matches_original(subject: str, original_subject: str, kind: str) -> bool:
+    """``Re:`` (reply) or ``Fwd:`` (forward) followed by the original's subject. A
+    different subject on a reply or forward is how a message gets sent under a
+    harmless-looking title."""
+    prefix = _REPLY_PREFIX if kind == "reply" else _FORWARD_PREFIX
+    return bool(prefix.match(sanitize_line(subject))) and _subject_core(subject) == _subject_core(
+        original_subject
+    )
+
+
+def origin_info(original: Original, kind: Literal["reply", "forward"], subject: str) -> OriginInfo:
+    return OriginInfo(
+        kind=kind,
+        sender=_addr_line(original.from_, 1) or "(unknown sender)",
+        date=_when(original.date),
+        subject=_line(original.subject) or "(no subject)",
+        subject_ok=subject_matches_original(subject, original.subject, kind),
+    )
+
+
 def reply_recipients(
     original: Original, own: set[str], *, reply_all: bool
 ) -> tuple[list[Address], list[Address], list[str]]:
@@ -333,7 +383,7 @@ def quote_block(original: Original) -> str:
 def forward_block(original: Original) -> str:
     text, _clipped = _clip(original.body)
     lines = [
-        "---------- Forwarded message ----------",
+        FORWARD_MARKER,
         f"From: {_addr_line(original.from_)}",
         f"Date: {_when(original.date)}",
         f"Subject: {_line(original.subject)}",
@@ -442,12 +492,15 @@ def compose(req: Request) -> Draft:
     in_reply_to: str | None = None
     references: tuple[str, ...] = ()
     quoted = ""
+    origin: OriginInfo | None = None
     if req.original is not None:
         if req.kind == "reply":
             in_reply_to, references = thread_headers(req.original)
             quoted = quote_block(req.original)
+            origin = origin_info(req.original, "reply", subject)
         elif req.kind == "forward":
             quoted = forward_block(req.original)
+            origin = origin_info(req.original, "forward", subject)
     else:
         in_reply_to = valid_msgid(req.in_reply_to)
         references = tuple(m for m in map(valid_msgid, req.references) if m)[:MAX_REFERENCES]
@@ -491,6 +544,7 @@ def compose(req: Request) -> Draft:
         quoted=quoted,
         attachments=tuple(attached),
         warnings=tuple(warnings),
+        origin=origin,
     )
 
 

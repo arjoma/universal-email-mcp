@@ -173,7 +173,7 @@ def decode_transfer(data: bytes, encoding: str) -> bytes:
     return data
 
 
-def _fix_surrogates(s: str) -> str:
+def fix_surrogates(s: str) -> str:
     """Raw 8-bit header bytes arrive as surrogate escapes; decode them properly."""
     if not any("\udc80" <= c <= "\udcff" for c in s):
         return s
@@ -203,7 +203,7 @@ def decode_header(value: str | bytes | None, *, max_chars: int = MAX_HEADER_CHAR
         return ""
     if isinstance(value, bytes):
         value = _decode_bytes(value, None)
-    value = _unfold(_fix_surrogates(str(value)[:max_chars]))
+    value = _unfold(fix_surrogates(str(value)[:max_chars]))
     try:
         chunks = email.header.decode_header(value)
     except Exception:  # noqa: BLE001 - stdlib raises HeaderParseError, ValueError, ...
@@ -213,7 +213,7 @@ def decode_header(value: str | bytes | None, *, max_chars: int = MAX_HEADER_CHAR
         if isinstance(chunk, bytes):
             out.append(_decode_bytes(chunk, charset))
         else:
-            out.append(_fix_surrogates(chunk))
+            out.append(fix_surrogates(chunk))
     return sanitize_line("".join(out))
 
 
@@ -222,7 +222,7 @@ _EMAIL_RE = re.compile(r"[^\s<>\"',;:()\[\]]+@[^\s<>\"',;:()\[\]]+")
 
 def parse_addresses(*values: str | None) -> tuple[Address, ...]:
     """Parse one or more address-list header values into :class:`Address` items."""
-    raw = [_unfold(_fix_surrogates(v[:MAX_ADDRESS_HEADER_CHARS])) for v in values if v]
+    raw = [_unfold(fix_surrogates(v[:MAX_ADDRESS_HEADER_CHARS])) for v in values if v]
     if not raw:
         return ()
     result: list[Address] = []
@@ -250,7 +250,7 @@ def parse_msgid_list(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     ids: dict[str, None] = {}
-    for m in _MSGID_RE.findall(_unfold(_fix_surrogates(value[:MAX_ID_HEADER_CHARS]))):
+    for m in _MSGID_RE.findall(_unfold(fix_surrogates(value[:MAX_ID_HEADER_CHARS]))):
         ids.setdefault(sanitize_line(m))
     return tuple(ids)
 
@@ -259,7 +259,7 @@ def parse_msgid(value: str | None) -> str | None:
     ids = parse_msgid_list(value)
     if ids:
         return ids[0]
-    cleaned = sanitize_line(_unfold(_fix_surrogates((value or "")[:MAX_ID_HEADER_CHARS])))
+    cleaned = sanitize_line(_unfold(fix_surrogates((value or "")[:MAX_ID_HEADER_CHARS])))
     return cleaned or None
 
 
@@ -306,7 +306,7 @@ SUMMARY_HEADERS = (
 
 def _all(msg: Message, name: str) -> list[str]:
     # raw_items() keeps raw 8-bit bytes as surrogate escapes (get_all() would turn
-    # them into replacement characters); _fix_surrogates() decodes them later.
+    # them into replacement characters); fix_surrogates() decodes them later.
     wanted = name.lower()
     return [str(v) for k, v in msg.raw_items() if k.lower() == wanted]
 

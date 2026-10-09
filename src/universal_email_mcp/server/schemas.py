@@ -8,6 +8,7 @@ when the headers were decoded.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -22,13 +23,30 @@ class _Model(BaseModel):
     model_config = ConfigDict(populate_by_name=True, frozen=True)
 
 
+MAX_SUBJECT_CHARS = 500
+MAX_NAME_CHARS = 100
+MAX_EMAIL_CHARS = 254
+MAX_LISTED_RECIPIENTS = 20
+MAX_LISTED_REFERENCES = 100
+"""Header fields come from a hostile sender: a listing of 100 messages must not carry
+megabytes of subject or recipients into the client (and the model's context)."""
+
+
+def _cap(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class AddressOut(_Model):
     name: str
     email: str
 
     @classmethod
     def of(cls, a: Address) -> AddressOut:
-        return cls(name=a.name, email=a.email)
+        return cls(name=_cap(a.name, MAX_NAME_CHARS), email=_cap(a.email, MAX_EMAIL_CHARS))
+
+    @classmethod
+    def many(cls, items: Sequence[Address], limit: int = MAX_LISTED_RECIPIENTS) -> list[AddressOut]:
+        return [cls.of(a) for a in items[:limit]]
 
 
 class Problem(_Model):
@@ -55,7 +73,10 @@ class MessageItem(_Model):
     )
     to: list[AddressOut]
     cc: list[AddressOut]
-    subject: str
+    subject: str = Field(description="Capped at 500 characters.")
+    recipients_omitted: int = Field(
+        default=0, description="To/Cc addresses left out of this item (at most 20 each are listed)."
+    )
     unread: bool | None = Field(description="Unread; null when unknown (POP3 has no read state).")
     flagged: bool
     has_attachments: bool
@@ -88,10 +109,12 @@ class MessageItem(_Model):
             folder=decode_folder_name(s.ref.folder),
             date=s.date,
             received=s.received,
-            from_=[AddressOut.of(a) for a in s.from_],
-            to=[AddressOut.of(a) for a in s.to],
-            cc=[AddressOut.of(a) for a in s.cc],
-            subject=s.subject,
+            from_=AddressOut.many(s.from_, 10),
+            to=AddressOut.many(s.to),
+            cc=AddressOut.many(s.cc),
+            subject=_cap(s.subject, MAX_SUBJECT_CHARS),
+            recipients_omitted=max(0, len(s.to) - MAX_LISTED_RECIPIENTS)
+            + max(0, len(s.cc) - MAX_LISTED_RECIPIENTS),
             unread=None if s.ref.is_pop3 else not s.seen,
             flagged=s.flagged,
             has_attachments=s.has_attachments,
@@ -441,7 +464,7 @@ class DraftOut(_Model):
     attachments: list[DraftFile]
     body: str = Field(description="The text written, with the signature (not the quoted original).")
     quoted: str = Field(
-        description="The quoted/forwarded original (untrusted mail content, inert text)."
+        description="The quoted/forwarded original: untrusted mail content, defanged and fenced."
     )
     replaced: Literal["none", "removed", "kept"] = Field(
         description="Update: whether the previous version was removed."

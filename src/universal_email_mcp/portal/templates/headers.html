@@ -13,6 +13,6 @@
 {% endif %}
 <h2>{{ _("All headers") }}</h2>
 <dl class="rawheaders">
-  {% for l in lines %}<dt>{{ l.name }}</dt><dd><code>{{ l.value }}</code></dd>{% endfor %}
+  {% for l in lines %}<dt>{{ l.name }}{% if l.claimed %} <span class="badge danger">{{ _("from the sender, not checked") }}</span>{% endif %}</dt><dd><code>{{ l.value }}</code></dd>{% endfor %}
 </dl>
 {% endblock %}

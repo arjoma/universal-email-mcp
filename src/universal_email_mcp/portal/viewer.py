@@ -348,7 +348,15 @@ class ViewerEndpoints(PortalEndpoints):
                 "headers.html",
                 auth=auth,
                 mid=mid,
-                lines=[{"name": h.name, "value": h.value, "auth": h.authentication} for h in lines],
+                lines=[
+                    {
+                        "name": h.name,
+                        "value": h.value,
+                        "auth": h.authentication,
+                        "claimed": h.claims_authentication and not h.own,
+                    }
+                    for h in lines
+                ],
             )
 
         return await self._guard(request, mid, handler)

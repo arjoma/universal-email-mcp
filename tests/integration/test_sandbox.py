@@ -192,8 +192,11 @@ async def test_every_message_renders_safely(sandbox: Sandbox):
                 md, msg = await call(client, "get_message", id=m["id"])
                 seen += 1
                 body = msg["body"]["text"]
-                nonce = re.search(r'nonce="([0-9a-f]+)"', body)
-                assert nonce and body.count(nonce.group(1)) == 2, m["subject"]
+                if msg["body"]["source"] == "unparseable":  # the MIME bomb: headers only, no text
+                    assert m["subject"] == "Twelve thousand empty parts" and not body
+                else:
+                    nonce = re.search(r'nonce="([0-9a-f]+)"', body)
+                    assert nonce and body.count(nonce.group(1)) == 2, m["subject"]
                 for form in (md, body):
                     assert not any(a in form for a in ACTIVE), (m["subject"], form[:2000])
                 hostile_subjects += "attacker" in str(m["from"])

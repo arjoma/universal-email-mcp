@@ -53,6 +53,7 @@ from universal_email_mcp.models import Address
 from universal_email_mcp.server import render
 from universal_email_mcp.server.render import escape_cell, fmt_datetime, markdown_table
 from universal_email_mcp.server.schemas import (
+    MAX_LISTED_REFERENCES,
     AccountInfoOut,
     AccountOut,
     AddressOut,
@@ -1081,9 +1082,9 @@ def build_server(
         fenced = fence_untrusted(body_text, source="email body") if body_text else ""
         data = MessageOut(
             message=item,
-            reply_to=[AddressOut.of(a) for a in s.reply_to],
+            reply_to=AddressOut.many(s.reply_to, 10),
             in_reply_to=s.in_reply_to,
-            references=list(s.references),
+            references=list(s.references[-MAX_LISTED_REFERENCES:]),
             body=BodyOut(
                 text=fenced,
                 source=msg.body_source,
@@ -1285,9 +1286,9 @@ def build_server(
         root = res.root
         data = MessageOut(
             message=MessageItem.of(root, viewer_url=service.viewer_url(root.ref)),
-            reply_to=[AddressOut.of(a) for a in root.reply_to],
+            reply_to=AddressOut.many(root.reply_to, 10),
             in_reply_to=root.in_reply_to,
-            references=list(root.references),
+            references=list(root.references[-MAX_LISTED_REFERENCES:]),
             body=None,
             attachments=[],
             source_truncated=False,
@@ -1755,7 +1756,9 @@ def build_server(
                     DraftFile(name=n, content_type=t, size=z) for n, t, z in d.attachments
                 ],
                 body=d.body,
-                quoted=d.quoted,
+                quoted=fence_untrusted(render.defang_body(d.quoted), source="quoted original")
+                if d.quoted
+                else "",
                 replaced=res.replaced,
                 replaced_note=res.replaced_note,
                 warnings=res.warnings,
