@@ -57,12 +57,13 @@ from universal_email_mcp.models import (
     TlsSettings,
 )
 from universal_email_mcp.oauth.bearer import Principal
-from universal_email_mcp.oauth.config import SCOPE_READ, permission_of
+from universal_email_mcp.oauth.config import SCOPE_READ, SCOPE_SEND, permission_of
 from universal_email_mcp.operator import OperatorConfig
 from universal_email_mcp.presets import resolve_server_entry
 from universal_email_mcp.service.cursor import CursorCodec
 from universal_email_mcp.service.folder_map import STARTUP_TIMEOUT, FolderMap
 from universal_email_mcp.service.mail import MailService
+from universal_email_mcp.service.remote_send import StoreRemoteSend
 from universal_email_mcp.service.router import AccountRouter
 from universal_email_mcp.store import Identity as IdentityRecord
 from universal_email_mcp.store import MailAccount, Store
@@ -187,6 +188,11 @@ def build_user_config(
         names[rec.id] = name
 
     drafts_accounts = {n for n, a in ((a.name, a) for a in built) if a.permissions.drafts}
+    send_allowed = (
+        SCOPE_SEND in principal.scopes and op.policy.send != "off" and not op.policy.read_only
+    )
+    all_accounts = {a.id: a for a in accounts if a.user_id == principal.user_id}
+    smtp_built: list[Account] = []
     idents: list[Identity] = []
     for ident in identities:
         if ident.user_id != principal.user_id or not ident.addresses:
@@ -197,16 +203,26 @@ def build_user_config(
         # go to an account the grant may write drafts to are usable for drafts.
         if not granted and store_account not in drafts_accounts:
             continue
+        store_name = store_account if store_account in drafts_accounts else None
+        smtp = _smtp_account(ident, all_accounts, tls) if granted and send_allowed else None
+        # Sending: the identity must be granted for it (grant), allow it itself (identity),
+        # be permitted by the operator (policy) and have a drafts-capable copies account
+        # (the draft is the safety net). All of it is rebuilt when any record changes.
+        sends = smtp is not None and ident.send and store_name is not None
+        if sends:
+            assert smtp is not None
+            smtp_built.append(smtp)
         idents.append(
             Identity(
                 name=ident.addresses[0],
                 addresses=tuple(a.lower() for a in ident.addresses),
                 display_name=ident.display_name,
-                smtp_account=None,  # sending in remote mode: WP 3f
-                store_account=store_account if store_account in drafts_accounts else None,
+                smtp_account=smtp.name if sends and smtp else None,
+                store_account=store_name,
                 default=ident.is_default,
-                send=False,
+                send=sends,
                 signature=ident.signature,
+                ref=ident.id,
             )
         )
     if idents and not any(i.default for i in idents):
@@ -220,12 +236,43 @@ def build_user_config(
     config = Config(
         accounts=tuple(built),
         identities=tuple(idents),
+        smtp_accounts=tuple(smtp_built),
         policy=op.policy,
         limits=op.limits,
         settings=op.settings,
         downloads=Downloads(enabled=False, max_download_bytes=op.max_download_bytes),
     )
     return config, records
+
+
+def _smtp_account(
+    ident: IdentityRecord, owned: Mapping[str, MailAccount], tls: TlsSettings
+) -> Account | None:
+    """The outgoing server of an identity as an :class:`Account` (never listed as a mailbox:
+    it goes to ``Config.smtp_accounts``). ``None`` when the identity has no usable login."""
+    if not (ident.smtp_host and ident.smtp_username and ident.smtp_password):
+        return None
+    source = owned.get(ident.smtp_account_id)
+    try:
+        base = resolve_server_entry(source.preset) if source and source.preset else None
+    except MailError:
+        base = None
+    name = f"smtp:{ident.id}"
+    mode = "starttls" if ident.smtp_tls == "starttls" else "tls"
+    server = ServerProfile(
+        name=name,
+        smtp=Endpoint(ident.smtp_host, ident.smtp_port, mode),
+        smtp_saves_sent=bool(base and base.smtp_saves_sent),
+    )
+    return Account(
+        name=name,
+        kind="imap",
+        username=ident.smtp_username,
+        server=server,
+        credential=CredentialRef("inline", name, ident.smtp_password),
+        permissions=Permissions(read=False),
+        tls=tls,
+    )
 
 
 def fingerprint(
@@ -354,6 +401,13 @@ class UserPool:
             viewer_base=base,
             download_links=PortalLinks(base) if base else None,
             download_status="on (portal viewer, sign-in required)" if base else "off",
+            remote_send=StoreRemoteSend(
+                self.store,
+                config.policy,
+                user_id=principal.user_id,
+                grant_id=principal.grant_id,
+                public_url=self.op.public_url,
+            ),
         )
         ctx = UserContext(
             user_id=principal.user_id,

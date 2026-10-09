@@ -264,7 +264,8 @@ class PendingApproval(Record):
     draft_ref: str = field(repr=False)
     """Sealed reference to the draft (never the mail text)."""
     status: str = "pending"
-    """``pending``, ``approved`` or ``declined``."""
+    """``pending``, ``approved`` or ``declined``; ``sent`` marks a message that went out
+    (a replay guard without draft reference, see ``Store.claim_send``)."""
     created_at: datetime
     expires_at: datetime
 

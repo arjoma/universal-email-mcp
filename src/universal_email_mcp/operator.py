@@ -25,10 +25,12 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from universal_email_mcp.config import (
+    SEND_FALLBACKS,
     SEND_POLICIES,
     Config,
     Limits,
     Policy,
+    SendFallback,
     SendPolicy,
     Settings,
 )
@@ -88,6 +90,8 @@ class OAuthSettings:
     absolute_max: timedelta = timedelta(days=90)
     portal_idle: timedelta = timedelta(minutes=30)
     portal_max: timedelta = timedelta(hours=12)
+    approval_ttl: timedelta = timedelta(minutes=10)
+    """How long a send waits in the portal for the user's approval."""
     reauth_window: timedelta = timedelta(minutes=5)
     """How long after typing the password again a sensitive portal action may be done."""
     max_accounts: int = 10
@@ -272,6 +276,15 @@ def _policy(env: Mapping[str, str], base: Policy) -> Policy:
                 f"Use one of: {', '.join(SEND_POLICIES)}.",
             )
         changes["send"] = cast(SendPolicy, send)
+    fallback = _text(env, "SEND_FALLBACK")
+    if fallback is not None:
+        if fallback not in SEND_FALLBACKS:
+            raise _fail(
+                "SEND_FALLBACK",
+                f"{fallback!r} is invalid",
+                f"Use one of: {', '.join(SEND_FALLBACKS)}.",
+            )
+        changes["send_fallback"] = cast(SendFallback, fallback)
     for var, name in (
         ("UEM_ALLOWED_RECIPIENT_DOMAINS", "allowed_recipient_domains"),
         ("UEM_INTERNAL_DOMAINS", "internal_domains"),
@@ -387,6 +400,7 @@ def _oauth(env: Mapping[str, str]) -> OAuthSettings:
         portal_idle=_seconds(env, "UEM_PORTAL_IDLE_TIMEOUT", base.portal_idle, zero_ok=False),
         portal_max=_seconds(env, "UEM_PORTAL_SESSION_MAX", base.portal_max, zero_ok=False),
         reauth_window=_seconds(env, "UEM_REAUTH_WINDOW", base.reauth_window, zero_ok=False),
+        approval_ttl=_seconds(env, "UEM_APPROVAL_TTL", base.approval_ttl, zero_ok=False),
         max_accounts=_number(env, "UEM_MAX_ACCOUNTS_PER_USER", base.max_accounts, int),
         max_identities=_number(env, "UEM_MAX_IDENTITIES_PER_USER", base.max_identities, int),
         default_language=lang,
@@ -538,6 +552,17 @@ def load_operator_config(
             hint="Example: PUBLIC_URL=https://mcp.example.com",
         )
 
+    policy = _policy(env, base.policy if base else Policy())
+    if store_settings is None and policy.send_fallback != "draft":
+        raise _fail(
+            "SEND_FALLBACK",
+            f"{policy.send_fallback!r} needs the portal (OAuth mode)",
+            hint="The dev mode keeps unconfirmed sends as drafts: unset SEND_FALLBACK.",
+        )
+    if store_settings is not None and _text(env, "SEND_FALLBACK") is None:
+        # Remote mode: an unconfirmed send waits for the user in the portal, never goes out.
+        policy = replace(policy, send_fallback="portal")
+
     return OperatorConfig(
         host=bind,
         port=port,
@@ -549,7 +574,7 @@ def load_operator_config(
         mail_servers=tuple(mail_servers),
         login_domains=login_domains,
         limits=_limits(env, base.limits if base else Limits()),
-        policy=_policy(env, base.policy if base else Policy()),
+        policy=policy,
         settings=settings,
         max_request_bytes=_number(env, "UEM_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES, int),
         log_level=level,

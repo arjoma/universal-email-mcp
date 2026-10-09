@@ -18,8 +18,12 @@ The order of a send:
    internal, ``on`` asks only when a recipient is a look-alike. A look-alike is never
    sent without the user's confirmation, in any mode;
 5. the confirmation is an MCP elicitation showing sender, recipients with their class
-   and warnings, subject, attachments and the start of the text. Declined, cancelled
-   or - when the client cannot elicit - impossible: the draft stays;
+   and warnings, subject, attachments and the start of the text. Declined or cancelled:
+   the draft stays. When the client cannot elicit, the policy's ``send_fallback`` decides:
+   ``draft`` (the draft stays), and in remote mode ``portal`` (a pending approval in the
+   portal; nothing goes out until the user approves there) or ``send-unless-flagged``
+   (sends directly unless a recipient is new or a look-alike - then it waits in the portal;
+   a look-alike is never sent without a human);
 6. the bytes that were shown are the bytes that are sent (the draft is not re-read);
 7. afterwards, best effort and never turning a delivered mail into an error: copy into
    Sent (and the thread folder, ``file_replies``), remove the draft (UID-scoped),
@@ -35,7 +39,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from universal_email_mcp import audit
 from universal_email_mcp.config import Config, SendPolicy, resolve_password
@@ -68,7 +72,7 @@ from universal_email_mcp.service.trust import SentToIndex
 
 log = logging.getLogger(__name__)
 
-SendStatus = Literal["sent", "draft_kept", "declined"]
+SendStatus = Literal["sent", "draft_kept", "declined", "pending_approval"]
 
 MAX_CONFIRM_CHARS = 6_000
 MAX_HEAD_CHARS = 4_000
@@ -78,6 +82,7 @@ SHOW_ATTACHMENTS = 20
 FIND_ORIGINAL_FOLDERS = 25
 FIND_ORIGINAL_SECONDS = 10.0
 Submit = Callable[..., smtp.SmtpReceipt]
+FINGERPRINT_CHARS = 16
 
 
 # ----------------------------------------------------------------- policy
@@ -152,6 +157,45 @@ class SendLimiter:
 
     def record(self, key: str) -> None:
         self._recent(key).append(self._clock())
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalTicket:
+    """A send that waits for the user in the portal."""
+
+    id: str
+    url: str
+    expires_in_minutes: int
+
+
+class RemoteSend(Protocol):
+    """What remote mode adds to a send (the portal and the store; WP 3f). Local mode has
+    none of it: confirmation is the client's elicitation or the draft stays."""
+
+    async def check_rate(self) -> None:
+        """Raise :class:`RateLimited` when this user sent too much (shared by instances)."""
+        ...
+
+    async def record_send(self) -> None: ...
+
+    async def claim(self, content_hash: str) -> bool:
+        """Reserve "this exact message goes out now"; ``False`` for a replay."""
+        ...
+
+    async def release(self, content_hash: str) -> None: ...
+
+    async def request_approval(
+        self, *, identity: Identity, content_hash: str, draft: MessageRef
+    ) -> ApprovalTicket: ...
+
+    def audit_fields(self) -> Mapping[str, Any]:
+        """Pseudonymous ids added to every audit event of the user's sends."""
+        ...
+
+
+def is_flagged(classified: Sequence[Classified]) -> bool:
+    """Does the recipient check flag something (a new address or a look-alike)?"""
+    return any(c.klass in ("new", "lookalike") for c in classified)
 
 
 # ----------------------------------------------------------------- confirmation text
@@ -271,7 +315,9 @@ class SendResult:
     sent_copy: str = ""
     steps: list[str] = field(default_factory=list[str])
     warnings: list[str] = field(default_factory=list[str])
-    confirmation: Literal["asked", "not_needed", "unavailable"] = "not_needed"
+    confirmation: Literal["asked", "not_needed", "unavailable", "fallback"] = "not_needed"
+    approval: ApprovalTicket | None = None
+    """Set with ``pending_approval``: where the user approves."""
 
 
 @dataclass(slots=True)
@@ -311,12 +357,16 @@ Decision = Literal["accepted", "declined", "cancelled", "unavailable", "not_need
 """What the user (or the client's lack of a way to ask) decided."""
 
 
+def content_hash(raw: bytes) -> str:
+    """Digest of the message content (not of Message-ID and Date, which a recomposition
+    changes): what a confirmation, an approval and the replay guard are bound to."""
+    return hashlib.sha256(strip_headers(raw, frozenset({"message-id", "date"}))).hexdigest()
+
+
 def fingerprint(raw: bytes) -> str:
-    """Short digest of the message content (not of Message-ID and Date, which a
-    recomposition changes), shown in the confirmation so that the question - and
-    with it the user's answer - is bound to exactly this message."""
-    body = strip_headers(raw, frozenset({"message-id", "date"}))
-    return hashlib.sha256(body).hexdigest()[:10]
+    """Short form of :func:`content_hash`, shown in the confirmation so that the question -
+    and with it the user's answer - is bound to exactly this message."""
+    return content_hash(raw)[:FINGERPRINT_CHARS]
 
 
 class Sender:
@@ -331,8 +381,10 @@ class Sender:
         *,
         submit: Submit = smtp.submit,
         clock: Callable[[], float] = time.time,
+        remote: RemoteSend | None = None,
     ) -> None:
         self.config = config
+        self.remote = remote
         self.router = router
         self.index = index
         self.drafter = drafter
@@ -467,8 +519,10 @@ class Sender:
         sender_reason: str,
     ) -> Prepared:
         ident = self._identity(out.sender.email)
-        smtp_acc = self.config.account(ident.smtp_account or "")
+        smtp_acc = self.config.smtp_account(ident.smtp_account or "")
         self._hard_checks(out, smtp_acc.name)
+        if self.remote is not None:
+            await self.remote.check_rate()
         pairs: list[tuple[Field, Address]] = [
             *(("to", a) for a in out.to),
             *(("cc", a) for a in out.cc),
@@ -521,6 +575,7 @@ class Sender:
             attachments=len(out.attachments),
             size=audit.size_bucket(len(out.raw)),
             mode=self.config.policy.send,
+            **(self.remote.audit_fields() if self.remote else {}),
         )
         audit.event("send.requested", **base)
         result = SendResult(
@@ -560,14 +615,40 @@ class Sender:
                 audit.event("send.declined", **base, outcome=decision)
                 return result
             else:
-                result.confirmation = "unavailable"
-                result.reasons = [
-                    *p.reasons,
-                    "the client cannot ask the user for confirmation, so the mail stays a draft",
-                ]
-                audit.event("send.draft_kept", **base, reason="no_confirmation")
-                return result
+                return await self._fallback(p, result, base)
         return await self._deliver(p, result, base)
+
+    async def _fallback(
+        self, p: Prepared, result: SendResult, base: Mapping[str, Any]
+    ) -> SendResult:
+        """The client cannot ask the user: what ``send_fallback`` says. Nothing here sends
+        without a human, except ``send-unless-flagged`` for recipients the check does not
+        flag (never a new address, never a look-alike)."""
+        mode = self.config.policy.send_fallback if self.remote is not None else "draft"
+        if mode == "send-unless-flagged" and not is_flagged(p.classified):
+            result.confirmation = "fallback"
+            audit.event("send.fallback_send", **base)
+            return await self._deliver(p, result, base)
+        result.confirmation = "unavailable"
+        if mode != "draft" and self.remote is not None and p.ref is not None:
+            ticket = await self.remote.request_approval(
+                identity=p.ident, content_hash=content_hash(p.out.raw), draft=p.ref
+            )
+            result.status = "pending_approval"
+            result.approval = ticket
+            result.reasons = [
+                *p.reasons,
+                "the client cannot ask the user for confirmation here, so the user has to "
+                "approve this message in the portal first",
+            ]
+            audit.event("send.approval_requested", **base, approval=ticket.id)
+            return result
+        result.reasons = [
+            *p.reasons,
+            "the client cannot ask the user for confirmation, so the mail stays a draft",
+        ]
+        audit.event("send.draft_kept", **base, reason="no_confirmation")
+        return result
 
     async def _deliver(
         self, p: Prepared, result: SendResult, base: Mapping[str, Any]
@@ -579,6 +660,17 @@ class Sender:
             self.limiter.check(smtp_acc.name)
             if mid and (mid in self._sent or mid in self._in_flight):
                 raise AlreadySent("this message was already sent (or is being sent) just now")
+            claimed = ""
+            if self.remote is not None:
+                await self.remote.check_rate()
+                claimed = content_hash(out.raw)
+                if not await self.remote.claim(claimed):
+                    audit.event("send.replay_refused", **base)
+                    raise AlreadySent(
+                        "this exact message was sent a moment ago (or is being sent)",
+                        hint="Nothing was sent again. Change the message if a second copy "
+                        "is really wanted, after a few minutes.",
+                    )
             if mid:
                 self._in_flight.add(mid)
             try:
@@ -604,6 +696,7 @@ class Sender:
                     receipt = await asyncio.to_thread(run)
                 except MailError as e:
                     audit.event("send.failed", **base, code=e.code)
+                    await self._unclaim(claimed)
                     if p.ref is not None:
                         e.hint = (e.hint + " " if e.hint else "") + (
                             f"The message is kept as a draft (id {p.ref.encode()})."
@@ -611,10 +704,13 @@ class Sender:
                     raise
                 except Exception:
                     audit.event("send.failed", **base, code="UNEXPECTED")
+                    await self._unclaim(claimed)
                     raise
                 if mid:
                     self._sent.add(mid)
                 self.limiter.record(smtp_acc.name)
+                if self.remote is not None:
+                    await self._record_remote()
             finally:
                 self._in_flight.discard(mid)
         audit.event("send.sent", **base)
@@ -623,6 +719,22 @@ class Sender:
         result.draft_id = None
         await self._afterwards(p, result)
         return result
+
+    async def _unclaim(self, claimed: str) -> None:
+        """The send failed before the server took the message: a retry is fine."""
+        if self.remote is not None and claimed:
+            try:
+                await self.remote.release(claimed)
+            except Exception:  # noqa: BLE001 - the marker expires on its own
+                log.warning("could not release the send marker", exc_info=True)
+
+    async def _record_remote(self) -> None:
+        """Count the send for the shared rate limit; a failure never undoes a delivery."""
+        assert self.remote is not None
+        try:
+            await self.remote.record_send()
+        except Exception:  # noqa: BLE001
+            log.warning("could not record the send for the rate limit", exc_info=True)
 
     # ------------------------------------------------------------ after the send
 

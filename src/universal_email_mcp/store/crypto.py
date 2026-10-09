@@ -93,6 +93,7 @@ class KeyRing:
             if len(key) != KEY_BYTES:
                 raise ConfigError(f"store key {key_id} must be exactly {KEY_BYTES} bytes")
         self._aead = {k: AESGCM(v) for k, v in keys.items()}
+        self._raw = dict(keys)
         self.active = active or max(keys, key=_key_number)
         if self.active not in keys:
             raise ConfigError(f"active store key {self.active!r} is not in the key ring")
@@ -150,6 +151,15 @@ class KeyRing:
             except OSError as e:
                 raise ConfigError(f"cannot read STORE_KEYS_FILE: {e.strerror}") from None
         return cls.parse(inline, env.get("STORE_ACTIVE_KEY", "").strip() or None)
+
+    def derive(self, purpose: str) -> list[bytes]:
+        """One independent 32-byte secret per ring key (active first) for another purpose
+        (e.g. the MCP request-state seal): ``HMAC-SHA256(key, "uem-derive\\0" + purpose)``.
+        The result is stable across instances and follows key rotation; knowing it reveals
+        nothing about the store key."""
+        ids = [self.active, *(k for k in self.key_ids if k != self.active)]
+        label = b"uem-derive\0" + purpose.encode()
+        return [hmac.new(self._raw[k], label, hashlib.sha256).digest() for k in ids]
 
     def seal(self, plaintext: bytes, aad: Aad) -> str:
         nonce = os.urandom(_NONCE_BYTES)

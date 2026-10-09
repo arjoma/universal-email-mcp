@@ -35,7 +35,11 @@ from universal_email_mcp.portal.viewer import viewer_group
 from universal_email_mcp.portal.web import Portal
 from universal_email_mcp.server.app import build_server
 from universal_email_mcp.server.http import RouteGroup, create_app
-from universal_email_mcp.server.peruser import PerUserServer, wrap_routes
+from universal_email_mcp.server.peruser import (
+    PerUserServer,
+    request_state_security,
+    wrap_routes,
+)
 from universal_email_mcp.service.userpool import UserPool
 from universal_email_mcp.store import Backend, MemoryBackend, SessionPolicy, Store, User
 
@@ -74,7 +78,10 @@ def make_store(op: OperatorConfig) -> Store:
     assert op.store is not None
     o = op.oauth
     policy = SessionPolicy(
-        access_ttl=o.access_ttl, refresh_ttl=o.refresh_ttl, absolute_max=o.absolute_max
+        access_ttl=o.access_ttl,
+        refresh_ttl=o.refresh_ttl,
+        absolute_max=o.absolute_max,
+        approval_ttl=o.approval_ttl,
     )
     return Store(make_backend(op), op.store.keys, policy=policy)
 
@@ -138,7 +145,12 @@ async def build_oauth_app(
     cfg = make_config(op, rate_limits=rate_limits)
     svc = build_service(op, store, cfg, fetch_policy=fetch_policy, login=login)
     pool = UserPool(store, op, build_server, tls=mail_tls or TlsSettings())
-    mcp = mcp_group(PerUserServer(pool), op, lambda routes: wrap_routes(routes, pool))
+    assert op.store is not None
+    mcp = mcp_group(
+        PerUserServer(pool, request_state_security(op.store.keys)),
+        op,
+        lambda routes: wrap_routes(routes, pool),
+    )
     portal = PortalService(
         oauth=svc,
         mail_servers=op.mail_servers,
