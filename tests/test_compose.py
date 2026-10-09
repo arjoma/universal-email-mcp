@@ -118,9 +118,11 @@ def test_reply_threading_and_quote() -> None:
     m = parse(d.raw)
     assert m["Subject"] == "Re: Angebot"
     assert m["In-Reply-To"] == "<abc.1@mail.example.com>"
-    assert (
-        m["References"] == "<root@mail.example.com> <mid@mail.example.com> <abc.1@mail.example.com>"
-    )
+    assert m["References"].split() == [
+        "<root@mail.example.com>",
+        "<mid@mail.example.com>",
+        "<abc.1@mail.example.com>",
+    ]
     body = text_of(m)
     assert body.startswith("Gerne.\n\n-- \nMax Müller")
     assert "On 2026-10-01 08:30 UTC, Anna Huber <anna@huber.at> wrote:" in body
