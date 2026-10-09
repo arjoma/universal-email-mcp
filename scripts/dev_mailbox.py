@@ -103,11 +103,12 @@ def _write_generated(path: Path, content: str) -> str:
     return f"wrote {path}"
 
 
-def _env_file(config: Path) -> str:
+def _env_file() -> str:
     return (
         f"{CONFIG_MARKER}: environment for the sandbox mailbox.\n"
+        "# Only the password: the config is passed with --config, because\n"
+        "# `uv run --env-file` does not override an UEM_CONFIG that is already exported.\n"
         "# Throw-away password of the local container, not a secret.\n"
-        f"UEM_CONFIG={config}\n"
         f"{PASSWORD_ENV}={SANDBOX_PASSWORD}\n"
     )
 
@@ -160,8 +161,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     config = args.config.resolve()
     env = args.env_file.resolve()
     print(_write_generated(config, render_config(HOST, imaps, users=USERS)))
-    print(_write_generated(env, _env_file(config)))
-    print(usage(env))
+    print(_write_generated(env, _env_file()))
+    print(usage(config, env))
     return 0
 
 
@@ -198,15 +199,18 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0 if state == "running" else 1
 
 
-def usage(env: Path) -> str:
-    rel = os.path.relpath(env, Path.cwd())
-    envq = shlex.quote(rel if not rel.startswith("..") else str(env))
+def usage(config: Path, env: Path) -> str:
+    """The probe and `claude mcp add` commands: absolute paths, explicit --config."""
+    run = (
+        f"uv run --directory {shlex.quote(str(ROOT))} --env-file {shlex.quote(str(env))} "
+        "universal-email-mcp"
+    )
+    cfg = f"--config {shlex.quote(str(config))}"
     return f"""
 Sandbox ready. Accounts: {WORK!r} ({WORK_USER}), {PRIVATE!r} ({PRIVATE_USER}).
 
-  uv run --env-file {envq} universal-email-mcp probe --account {WORK}
-  claude mcp add email-sandbox -- uv run --directory {shlex.quote(str(ROOT))} \\
-      --env-file {shlex.quote(str(env))} universal-email-mcp local
+  {run} probe {cfg} --account {WORK}
+  claude mcp add email-sandbox -- {run} local {cfg}
 
 Hostile samples carry the header 'X-UEM-Sandbox: hostile <kind>'.
 Stop with: uv run scripts/dev_mailbox.py down"""

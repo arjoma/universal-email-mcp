@@ -129,7 +129,8 @@ the integration-test Dovecot image as container `uem-sandbox` on 127.0.0.1:10993
 (TLS) / 10143 (STARTTLS), seeds two accounts (`Sandbox`, `Sandbox-Private`) with
 realistic and hostile mail plus a large folder tree, and writes the gitignored
 `sandbox.local.toml` and `.env.sandbox` (throw-away password). It prints the
-`probe` and `claude mcp add email-sandbox …` commands. Mail is on a tmpfs: a
+`probe` and `claude mcp add email-sandbox …` commands with an explicit `--config`
+(`uv run --env-file` does not override an exported `UEM_CONFIG`). Mail is on a tmpfs: a
 stopped container comes back freshly seeded. Corpus and config live in
 `tests/sandbox.py`, container helpers in `tests/dovecot.py` (shared with the
 integration tests); hostile mails carry `X-UEM-Sandbox: hostile <kind>`.

@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development sandbox: `scripts/dev_mailbox.py` starts a throw-away local
   Dovecot with realistic and hostile mail and a matching config, for trying the
   server without a real mailbox.
+- `local` and `probe --account` name the config file they loaded on stderr.
 
 ### Security
 
