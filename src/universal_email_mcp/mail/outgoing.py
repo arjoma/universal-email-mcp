@@ -29,7 +29,7 @@ from universal_email_mcp.mail.mime import sanitize_text
 from universal_email_mcp.models import Address
 
 MAX_RECIPIENT_HEADERS = 50
-PREVIEW_CHARS = 700
+MAX_TEXT_CHARS = 300_000
 _EOL = re.compile(rb"\r\n|\r|\n")
 _HEADER_END = re.compile(rb"\r\n\r\n")
 
@@ -48,7 +48,7 @@ class Outgoing:
     attachments: tuple[tuple[str, int], ...]
     """(file name, decoded size)."""
     preview: str
-    """Start of the plain-text body (sanitised, unescaped; escape it for display)."""
+    """The plain-text body (sanitised, unescaped, capped; escape it for display)."""
     has_text_body: bool
 
     @property
@@ -161,7 +161,7 @@ def parse_outgoing(raw: bytes) -> Outgoing:
             text = str(body.get_content())
         except (LookupError, ValueError, UnicodeError):
             text = ""
-    preview = sanitize_text(text).strip()[:PREVIEW_CHARS]
+    preview = sanitize_text(text).strip()[:MAX_TEXT_CHARS]
     return Outgoing(
         raw=raw,
         sender=senders[0],

@@ -144,7 +144,7 @@ class Identity:
     save_sent: SaveSent = "auto"
     """Copy of sent mail into the store account's Sent folder: ``auto`` = yes unless the
     SMTP server saves it itself, ``always``, ``never``."""
-    file_replies: FileReplies = "sent"
+    file_replies: FileReplies = "both"
     """Where the copy of a reply goes when the original lives in a user folder:
     ``sent`` (Sent only), ``thread_folder`` (the original's folder only) or ``both``."""
 

@@ -70,7 +70,11 @@ log = logging.getLogger(__name__)
 
 SendStatus = Literal["sent", "draft_kept", "declined"]
 
-MAX_CONFIRM_CHARS = 4_000
+MAX_CONFIRM_CHARS = 6_000
+MAX_HEAD_CHARS = 4_000
+SHOW_TEXT_CHARS = 3_000
+SHOW_TEXT_LINES = 80
+SHOW_ATTACHMENTS = 20
 FIND_ORIGINAL_FOLDERS = 25
 FIND_ORIGINAL_SECONDS = 10.0
 Submit = Callable[..., smtp.SmtpReceipt]
@@ -179,9 +183,15 @@ def confirmation_text(
     reasons: Sequence[str],
     *,
     note: str = "",
+    text: str | None = None,
+    quoted: str = "",
 ) -> str:
     """The text the user sees before a message leaves. Everything that comes from
-    the message is sanitised (no control or bidi characters, links defanged)."""
+    the message is sanitised (no control or bidi characters, links defanged).
+
+    ``text`` is the new text the message adds (for a composed message: before the
+    quoted original, which is only summarised); without it the whole body is shown.
+    What is cut is announced with numbers, never silently."""
     lines = ["Send this e-mail? It cannot be taken back.", ""]
     lines.append(f"From: {_addr(out.sender)}  (identity {sanitize_line(ident.name)[:40]})")
     by_field: dict[str, list[Classified]] = {"to": [], "cc": [], "bcc": []}
@@ -194,11 +204,14 @@ def confirmation_text(
         lines.append("(Bcc recipients are hidden from the others.)")
     lines.append(f"Subject: {sanitize_line(out.subject)[:200] or '(none)'}")
     if out.attachments:
-        shown = ", ".join(
-            f"{sanitize_line(n)[:60]} ({render.fmt_size(z)})" for n, z in out.attachments[:10]
-        )
-        extra = f" and {len(out.attachments) - 10} more" if len(out.attachments) > 10 else ""
-        lines.append(f"Attachments: {shown}{extra}")
+        n_att = len(out.attachments)
+        lines.append(f"Attachments ({n_att}):")
+        lines += [
+            f"  {sanitize_line(n)[:80]} ({render.fmt_size(z)})"
+            for n, z in out.attachments[:SHOW_ATTACHMENTS]
+        ]
+        if n_att > SHOW_ATTACHMENTS:
+            lines.append(f"  ... and {n_att - SHOW_ATTACHMENTS} more attachment(s) NOT listed")
     warnings = [
         f"! {c.email}: {sanitize_line(n)[:200]}"
         for c in classified
@@ -211,13 +224,28 @@ def confirmation_text(
         lines += ["", "Confirmation needed because " + "; ".join(reasons) + "."]
     if note:
         lines.append(sanitize_line(note)[:200])
-    lines += ["", "Text:"]
-    if out.preview:
-        body = render.defang_body(out.preview)
-        lines += ["> " + ln for ln in sanitize_text(body).split("\n")[:15]]
+    head = "\n".join(lines)
+    if len(head) > MAX_HEAD_CHARS:
+        head = (
+            head[:MAX_HEAD_CHARS] + f"\n... {len(head) - MAX_HEAD_CHARS} more characters NOT shown"
+        )
+    body = render.defang_body(sanitize_text(text if text is not None else out.preview)).strip()
+    out_lines = ["", "Text:"]
+    if body:
+        shown = body[:SHOW_TEXT_CHARS]
+        shown_lines = shown.split("\n")[:SHOW_TEXT_LINES]
+        shown = "\n".join(shown_lines)
+        out_lines += ["> " + ln for ln in shown.split("\n")]
+        cut = len(body) - len(shown)
+        if cut > 0:
+            n_lines = body.count("\n") - shown.count("\n")
+            out_lines.append(f"... {cut} more characters ({n_lines} lines) of the text NOT shown")
     else:
-        lines.append("> (no plain text)" if not out.has_text_body else "> (empty)")
-    return "\n".join(lines)[:MAX_CONFIRM_CHARS]
+        out_lines.append("> (no plain text)" if not out.has_text_body else "> (empty)")
+    if quoted.strip():
+        q_lines = len(quoted.strip().split("\n"))
+        out_lines.append(f"[quoted original: {q_lines} lines, not shown]")
+    return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + MAX_CONFIRM_CHARS]
 
 
 # ----------------------------------------------------------------- results
@@ -455,7 +483,13 @@ class Sender:
         prompt = ""
         if reasons and keep is None:
             prompt = confirmation_text(
-                ident, out, classified, reasons, note=f"Content fingerprint {fingerprint(out.raw)}"
+                ident,
+                out,
+                classified,
+                reasons,
+                note=f"Content fingerprint {fingerprint(out.raw)}",
+                text=built.draft.body if built is not None else None,
+                quoted=built.draft.quoted if built is not None else "",
             )
         return Prepared(
             out=out,
@@ -709,8 +743,8 @@ class Sender:
             acc = self.config.account(ref.account)
         except MailError:
             return "the original was not marked as answered (unknown account)"
-        if not acc.permissions.organize:
-            return "the original was not marked as answered (no 'organize' permission)"
+        if not (acc.permissions.organize or acc.permissions.drafts):
+            return "the original was not marked as answered (no 'organize' or 'drafts' permission)"
 
         def fn(session: ImapSession) -> str:
             res = session.set_flags(

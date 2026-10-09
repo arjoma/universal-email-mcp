@@ -333,13 +333,15 @@ async def test_reply_marks_the_original_answered(env: Env):
     assert any("marked as answered" in s for s in data["steps"])
 
 
-async def test_reply_is_not_marked_without_the_organize_permission(env: Env):
+async def test_reply_is_marked_with_only_the_drafts_permission(env: Env):
     async with connect(env.config(perms=["read", "drafts"]), Answers()) as c:
         mid = await inbox_id(c, "Angebot")
         _md, data = await call(c, "send_message", reply_to_id=mid, body="Gerne.")
     assert data["status"] == "sent"
-    assert any("no 'organize' permission" in s for s in data["steps"])
-    assert "\\Answered" not in {m["Subject"]: f for _u, f, m in env.folder("INBOX")}["Angebot"]
+    assert any("marked as answered" in s for s in data["steps"])
+    flags = {m["Subject"]: f for _u, f, m in env.folder("INBOX")}
+    assert "\\Answered" in flags["Angebot"]
+    assert all("\\Answered" not in f for k, f in flags.items() if k != "Angebot")
 
 
 @pytest.mark.parametrize(
@@ -367,6 +369,31 @@ async def test_file_replies(env: Env, mode: str, in_sent: int, in_folder: int):
     re_sent = [m for _u, _f, m in env.folder("Sent") if m["Subject"] == "Re: Projekt"]
     re_folder = [m for _u, _f, m in env.folder("Kunden/Huber") if m["Subject"] == "Re: Projekt"]
     assert (len(re_sent), len(re_folder)) == (in_sent, in_folder)
+
+
+async def test_file_replies_defaults_to_both(env: Env):
+    env.work.admin().create_folder("Kunden")
+    env.append(
+        "Kunden",
+        _msg("Projekt", "Anna <anna@huber-bau.at>", "Wie weit?").replace(
+            b"To: alice@example.org", b"To: me@example.org"
+        ),
+    )
+    async with connect(env.config(), Answers()) as c:  # no file_replies in the config
+        mid = await inbox_id(c, "Projekt", "Kunden")
+        await call(c, "send_message", reply_to_id=mid, body="Bald.")
+    for folder in ("Sent", "Kunden"):
+        assert [m["Subject"] for _u, _f, m in env.folder(folder)].count("Re: Projekt") == 1
+
+
+async def test_a_long_text_is_shown_to_the_user_in_full_or_with_a_notice(env: Env):
+    answers = Answers(action="decline")
+    body = "\n".join(f"zeile {i}" for i in range(1, 41)) + "\nENDE-MARKER"
+    async with connect(env.config(), answers) as c:
+        await call(c, "send_message", **{**NEW, "body": body})
+        assert "> ENDE-MARKER" in answers.prompts[0] and "NOT shown" not in answers.prompts[0]
+        await call(c, "send_message", **{**NEW, "body": "y" * 3500})
+    assert "500 more characters (0 lines) of the text NOT shown" in answers.prompts[1]
 
 
 async def test_file_replies_finds_the_original_of_a_plain_draft(env: Env):

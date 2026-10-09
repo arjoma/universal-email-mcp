@@ -105,9 +105,12 @@ section 8):
   `max_sends_per_hour` / `max_sends_per_day` per SMTP account, `limits.max_send_bytes`
   and the server's SIZE.
 - Afterwards: a copy in Sent (identity `save_sent`), the draft removed (UID-scoped),
-  `\Answered` on the original of a reply (needs `organize` on its account), and
-  with `file_replies = "both"`/`"thread_folder"` the copy of a reply also goes
-  into the folder the original is filed in.
+  `\Answered` on exactly the replied-to message (its account needs `organize` or
+  `drafts`), and - `file_replies = "both"` is the default - the copy of a reply also
+  goes into the user folder the original is filed in (`sent` / `thread_folder` are options).
+- The confirmation shows the whole new text (up to 3000 characters / 80 lines; what is cut
+  is announced with its size), a one-line summary of a quoted original, and up to 20
+  attachments with sizes.
 - One audit line per attempt on stderr (JSON; counts per class, size bucket,
   outcome - never addresses, subjects or text).
 
