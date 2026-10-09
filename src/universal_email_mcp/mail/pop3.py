@@ -775,9 +775,6 @@ class Pop3Session:
         self.state.store(uidl, summary)
         return summary
 
-    def _summary_of(self, uidl: str) -> MessageSummary | None:
-        return self.state.summaries.get(uidl)
-
     # ------------------------------------------------------------ search
 
     def search(self, folder: str, criteria: SearchCriteria | None = None) -> SearchResult:

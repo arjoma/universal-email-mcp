@@ -34,8 +34,6 @@ from universal_email_mcp.service import fuzzy
 
 MAX_QUERY_CHARS = 200
 """Longest accepted query."""
-MAX_MATCH_CHARS = fuzzy.MAX_TEXT_CHARS
-"""Characters of a candidate text (after folding) that a pattern is compared with."""
 MAX_ADDRESSES = 50
 """Recipients per message that a query is compared with."""
 SIMILAR_THRESHOLD = 50.0

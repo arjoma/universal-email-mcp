@@ -30,9 +30,6 @@ class Principal:
     account_scopes: dict[str, str]
     identity_ids: tuple[str, ...]
 
-    def has_scope(self, scope: str) -> bool:
-        return scope in self.scopes
-
     @classmethod
     def of_grant(cls, grant: Grant) -> Principal:
         """The principal a stored grant stands for (the portal acts for it when the user

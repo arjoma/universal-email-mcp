@@ -62,8 +62,6 @@ user_context_var: ContextVar[UserContext | None] = ContextVar("uem_user_context"
 
 DISCOVERY_METHODS = frozenset({"initialize", "server/discover"})
 
-NO_TOOLS_INSTRUCTIONS = "Not authenticated."
-
 
 class _DynamicInstructionsServer(Server[Any]):
     """The SDK reads ``Server.instructions`` for the handshake and for discovery. Here it is

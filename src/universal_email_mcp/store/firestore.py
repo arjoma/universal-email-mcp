@@ -29,7 +29,6 @@ ID_KEY = "_id"
 _ATTEMPTS = 10
 _TX_ATTEMPTS = 3
 _ROUNDS = 6
-TTL_FIELD = "expires_at"
 
 
 def _doc_id(collection: str, record_id: str) -> str:
