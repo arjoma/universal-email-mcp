@@ -17,8 +17,8 @@ Mail lives on a tmpfs inside the container: stopping the container (or a reboot)
 empties the mailbox, and the next ``up`` seeds it again. Changes made by tools
 (moves, flags, drafts) last until then. Seed dates are relative to the seeding
 time, so on a long-running container ``today`` / ``this_week`` slowly run dry:
-``reset`` seeds afresh. ``up`` also recreates the container when the image, the
-corpus version or the password changed.
+``reset`` seeds afresh. ``up`` also recreates the container when the image or
+``CORPUS_VERSION`` (corpus, seeding or password) changed.
 
 Ports: ``--imaps-port`` / ``--starttls-port`` or ``UEM_SANDBOX_IMAPS_PORT`` /
 ``UEM_SANDBOX_STARTTLS_PORT`` (defaults 10993 / 10143). They are fixed when the
@@ -28,7 +28,6 @@ container is created; use ``reset`` to change them.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import imaplib
 import json
 import os
@@ -81,13 +80,7 @@ LABEL = "io.github.arjoma.universal-email-mcp.sandbox"
 
 def wanted_labels() -> dict[str, str]:
     """Labels of a container this version of the script would create."""
-    password = hashlib.sha256(SANDBOX_PASSWORD.encode()).hexdigest()[:12]
-    return {
-        LABEL: "1",
-        f"{LABEL}.image": DOVECOT_IMAGE,
-        f"{LABEL}.corpus": CORPUS_VERSION,
-        f"{LABEL}.password": password,
-    }
+    return {LABEL: "1", f"{LABEL}.image": DOVECOT_IMAGE, f"{LABEL}.corpus": CORPUS_VERSION}
 
 
 # TODO(M2): SMTP sink. Run a second container (e.g. Mailpit) next to Dovecot,
@@ -113,7 +106,7 @@ class Container:
         return LABEL in self.labels
 
     def outdated(self) -> list[str]:
-        """What differs from a freshly created container (image, corpus, password)."""
+        """What differs from a freshly created container (image, corpus version)."""
         want = wanted_labels()
         return [k.rsplit(".", 1)[1] for k in want if k != LABEL and self.labels.get(k) != want[k]]
 

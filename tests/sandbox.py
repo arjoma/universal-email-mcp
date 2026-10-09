@@ -52,7 +52,8 @@ USERS = {WORK: WORK_USER, PRIVATE: PRIVATE_USER}
 """IMAP user names of the developer sandbox (the tests use fresh ones)."""
 
 CORPUS_VERSION = "3"
-"""Bump when the corpus or the seeding changes: ``up`` then recreates the container."""
+"""Bump when the corpus, the seeding or SANDBOX_PASSWORD changes: ``up`` then
+recreates the container (its labels record the image and this version)."""
 SEEDED_FOLDER = ".uem-sandbox-seeded"
 """Created in the work account after both accounts are seeded: an interrupted seed
 leaves no marker. (Dovecot here has no METADATA, so the marker is an empty folder.)"""
