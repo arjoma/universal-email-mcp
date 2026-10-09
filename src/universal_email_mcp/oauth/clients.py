@@ -26,7 +26,12 @@ from typing import Any
 
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.oauth.config import OAuthConfig
-from universal_email_mcp.oauth.fetch import FetchError, FetchPolicy, check_document_url, fetch_document
+from universal_email_mcp.oauth.fetch import (
+    FetchError,
+    FetchPolicy,
+    check_document_url,
+    fetch_document,
+)
 from universal_email_mcp.oauth.ratelimit import RateLimiter
 from universal_email_mcp.oauth.redirects import RedirectError, host_allowed, validate_redirect_uri
 from universal_email_mcp.store import AlreadyExists, OAuthClient, Store, StoreConflict
@@ -187,7 +192,9 @@ class ClientRegistry:
         if cached is not None and cached.registration == "cimd":
             return ClientInfo(cached.id, cached.name, cached.redirect_uris, "cimd")
         if self._fetch_limiter is not None and not self._fetch_limiter.allow(ip or "-"):
-            raise ClientError("Too many requests. Please try again in a minute.", "fetch rate limit")
+            raise ClientError(
+                "Too many requests. Please try again in a minute.", "fetch rate limit"
+            )
         try:
             async with self._sem:
                 body = await asyncio.to_thread(fetch_document, client_id, self._fetch_policy)

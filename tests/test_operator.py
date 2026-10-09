@@ -35,7 +35,7 @@ def test_port_from_env_and_flag():
 
 
 def test_token_required_unless_insecure_local():
-    with pytest.raises(ConfigError, match="UEM_DEV_TOKEN") as e:
+    with pytest.raises(ConfigError, match="STORE_BACKEND") as e:
         load_operator_config({"PUBLIC_URL": "https://mcp.example.com"})
     assert "--insecure-local" in e.value.hint
     op = load_operator_config({}, insecure_local=True)

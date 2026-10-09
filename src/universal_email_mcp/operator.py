@@ -13,10 +13,14 @@ at startup with a clear message instead of misbehaving later.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import ipaddress
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -35,12 +39,15 @@ from universal_email_mcp.presets import (
     parse_login_domains,
     parse_mail_servers,
 )
+from universal_email_mcp.store.crypto import KeyRing
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 MIN_DEV_TOKEN_LENGTH = 32
 DEFAULT_PORT = 8080
 DEFAULT_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+STORE_BACKENDS = ("memory", "firestore")
+MIN_PSEUDONYM_KEY_BYTES = 32
 
 # env name -> Limits field (all positive whole numbers except the float ones)
 _LIMIT_INTS = {
@@ -54,6 +61,36 @@ _LIMIT_INTS = {
     "UEM_MAX_SEND_BYTES": "max_send_bytes",
 }
 _LIMIT_FLOATS = {"UEM_ACCOUNT_TIMEOUT": "account_timeout"}
+
+
+@dataclass(frozen=True, slots=True)
+class StoreSettings:
+    """Where remote mode keeps its state (design section 10) and the keys that seal it."""
+
+    backend: str
+    """``memory`` (lost on restart; development) or ``firestore``."""
+    keys: KeyRing
+    firestore_project: str | None = None
+    firestore_database: str | None = None
+    prefix: str = ""
+    ephemeral_keys: bool = False
+    """Keys were generated for this run (memory backend without ``STORE_KEYS``)."""
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthSettings:
+    """Lifetimes and switches of the authorization server; ``0`` = unlimited where noted."""
+
+    access_ttl: timedelta = timedelta(hours=1)
+    refresh_ttl: timedelta = timedelta(days=30)
+    """Sliding; 0 = a refresh token never expires on its own (weaker, documented)."""
+    absolute_max: timedelta = timedelta(days=90)
+    portal_idle: timedelta = timedelta(minutes=30)
+    portal_max: timedelta = timedelta(hours=12)
+    default_language: str = "en"
+    dcr_enabled: bool = True
+    dcr_redirect_hosts: tuple[str, ...] = ()
+    trusted_proxy_hops: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +114,14 @@ class OperatorConfig:
     settings: Settings = Settings(allow_private_networks=False)
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     log_level: str = "INFO"
+    store: StoreSettings | None = None
+    """Set in OAuth mode (``STORE_BACKEND``), ``None`` in the temporary dev mode."""
+    pseudonym_key: bytes = field(default=b"", repr=False)
+    oauth: OAuthSettings = OAuthSettings()
+
+    @property
+    def oauth_mode(self) -> bool:
+        return self.store is not None
 
     @property
     def hsts(self) -> bool:
@@ -211,6 +256,111 @@ def _policy(env: Mapping[str, str], base: Policy) -> Policy:
     return replace(base, **changes)
 
 
+def _seconds(env: Mapping[str, str], var: str, default: timedelta, *, zero_ok: bool) -> timedelta:
+    raw = _text(env, var)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise _fail(var, f"{raw!r} is not a whole number of seconds") from None
+    if value < 0 or (value == 0 and not zero_ok):
+        raise _fail(var, "must be positive" + (" (0 = unlimited)" if zero_ok else ""))
+    return timedelta(seconds=value)
+
+
+def _read_key_material(env: Mapping[str, str], var: str) -> bytes | None:
+    """A base64 secret from ``VAR`` or the file named by ``VAR_FILE``."""
+    inline, path = _text(env, var), _text(env, var + "_FILE")
+    if inline and path:
+        raise _fail(var, f"set only one of {var} and {var}_FILE")
+    if path:
+        try:
+            inline = Path(path).read_text().strip()
+        except OSError as e:
+            raise _fail(var + "_FILE", f"cannot read the file: {e.strerror}") from None
+    if not inline:
+        return None
+    try:
+        return base64.b64decode(inline, validate=True)
+    except (binascii.Error, ValueError):
+        raise _fail(var, "is not valid base64") from None
+
+
+def _store(env: Mapping[str, str]) -> tuple[StoreSettings, bytes]:
+    backend = (_text(env, "STORE_BACKEND") or "").lower()
+    if backend not in STORE_BACKENDS:
+        raise _fail(
+            "STORE_BACKEND", f"{backend!r} is invalid", f"Use one of: {', '.join(STORE_BACKENDS)}."
+        )
+    has_keys = bool(_text(env, "STORE_KEYS") or _text(env, "STORE_KEYS_FILE"))
+    ephemeral = False
+    if has_keys:
+        try:
+            keys = KeyRing.from_env(env)
+        except ConfigError as e:
+            raise _fail("STORE_KEYS", e.message, e.hint) from None
+    elif backend == "memory":
+        keys = KeyRing({"k1": os.urandom(32)})
+        ephemeral = True
+    else:
+        raise _fail(
+            "STORE_KEYS",
+            "or STORE_KEYS_FILE is required with the firestore backend",
+            hint='Generate a key: python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"',
+        )
+    pseudo = _read_key_material(env, "PSEUDONYM_KEY")
+    if pseudo is None:
+        if backend != "memory":
+            raise _fail(
+                "PSEUDONYM_KEY",
+                "is required (base64, at least 32 bytes): it keys the user ids",
+                hint="Generate it like a store key; losing or changing it orphans all users.",
+            )
+        pseudo = os.urandom(32)
+    if len(pseudo) < MIN_PSEUDONYM_KEY_BYTES:
+        raise _fail("PSEUDONYM_KEY", f"needs at least {MIN_PSEUDONYM_KEY_BYTES} bytes")
+    return (
+        StoreSettings(
+            backend=backend,
+            keys=keys,
+            firestore_project=_text(env, "FIRESTORE_PROJECT"),
+            firestore_database=_text(env, "FIRESTORE_DATABASE"),
+            prefix=_text(env, "FIRESTORE_PREFIX") or "",
+            ephemeral_keys=ephemeral,
+        ),
+        pseudo,
+    )
+
+
+def _oauth(env: Mapping[str, str]) -> OAuthSettings:
+    base = OAuthSettings()
+    lang = (_text(env, "UEM_DEFAULT_LANGUAGE") or base.default_language).lower()
+    hosts = tuple(
+        normalize_hostname(p)
+        for p in (_text(env, "UEM_DCR_REDIRECT_HOSTS") or "").split(",")
+        if p.strip()
+    )
+    hops = _text(env, "UEM_TRUSTED_PROXY_HOPS")
+    try:
+        hop_count = int(hops) if hops else 0
+    except ValueError:
+        raise _fail("UEM_TRUSTED_PROXY_HOPS", f"{hops!r} is not a whole number") from None
+    if not 0 <= hop_count <= 5:
+        raise _fail("UEM_TRUSTED_PROXY_HOPS", "must be between 0 and 5")
+    return OAuthSettings(
+        access_ttl=_seconds(env, "UEM_ACCESS_TOKEN_TTL", base.access_ttl, zero_ok=False),
+        refresh_ttl=_seconds(env, "UEM_REFRESH_TOKEN_TTL", base.refresh_ttl, zero_ok=True),
+        absolute_max=_seconds(env, "UEM_SESSION_MAX_AGE", base.absolute_max, zero_ok=True),
+        portal_idle=_seconds(env, "UEM_PORTAL_IDLE_TIMEOUT", base.portal_idle, zero_ok=False),
+        portal_max=_seconds(env, "UEM_PORTAL_SESSION_MAX", base.portal_max, zero_ok=False),
+        default_language=lang,
+        dcr_enabled=_flag(env, "UEM_DCR", base.dcr_enabled),
+        dcr_redirect_hosts=hosts,
+        trusted_proxy_hops=hop_count,
+    )
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -237,12 +387,18 @@ def load_operator_config(
             f"too short (at least {MIN_DEV_TOKEN_LENGTH} characters)",
             hint='Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"',
         )
-    if token is None and not insecure_local:
+    dev_mode = token is not None or insecure_local
+    if dev_mode and _text(env, "STORE_BACKEND") is not None:
         raise _fail(
-            "UEM_DEV_TOKEN",
-            "is required: /mcp must not be open",
-            hint="Set a bearer token, or pass --insecure-local (binds 127.0.0.1 only; "
-            "temporary dev mode until OAuth exists).",
+            "STORE_BACKEND",
+            "cannot be combined with UEM_DEV_TOKEN / --insecure-local",
+            hint="Dev mode (static token, TOML accounts) and OAuth mode are exclusive.",
+        )
+    if not dev_mode and _text(env, "STORE_BACKEND") is None:
+        raise _fail(
+            "STORE_BACKEND",
+            "is required (OAuth mode: memory or firestore)",
+            hint="For the temporary dev mode set UEM_DEV_TOKEN or pass --insecure-local.",
         )
 
     bind = host or ("127.0.0.1" if insecure_local else "0.0.0.0")  # noqa: S104 - container default
@@ -303,6 +459,20 @@ def load_operator_config(
             ),
         )
 
+    store_settings, pseudonym_key = _store(env) if not dev_mode else (None, b"")
+    if store_settings is not None and not login_domains:
+        raise _fail(
+            "LOGIN_DOMAINS",
+            "is required in OAuth mode (users sign in with their mailbox login)",
+            hint="Example: LOGIN_DOMAINS=company.example=united-domains",
+        )
+    if store_settings is not None and public_url is None:
+        raise _fail(
+            "PUBLIC_URL",
+            "is required in OAuth mode (it is the issuer and the resource URL)",
+            hint="Example: PUBLIC_URL=https://mcp.example.com",
+        )
+
     return OperatorConfig(
         host=bind,
         port=port,
@@ -318,4 +488,7 @@ def load_operator_config(
         settings=settings,
         max_request_bytes=_number(env, "UEM_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES, int),
         log_level=level,
+        store=store_settings,
+        pseudonym_key=pseudonym_key,
+        oauth=_oauth(env),
     )

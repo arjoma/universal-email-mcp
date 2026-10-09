@@ -1,9 +1,11 @@
 """``universal-email-mcp serve``: the MCP server over HTTP.
 
-Dev/test mode (WP 3a): the accounts come from a local TOML config and ``/mcp`` is
-guarded by one static bearer token (``UEM_DEV_TOKEN``) - or, with the explicit
-``--insecure-local`` flag, left open on 127.0.0.1. This is temporary: OAuth (3c)
-replaces the token and the per-user service (3e) replaces the TOML accounts.
+Two modes. **OAuth mode** (the default, ``STORE_BACKEND`` set): the server is its own
+OAuth 2.1 authorization server (WP 3c) and ``/mcp`` needs an access token issued for it; until
+the per-user service (3e) it offers only ``account_info``. **Dev/test mode** (WP 3a): the
+accounts come from a local TOML config and ``/mcp`` is guarded by one static bearer token
+(``UEM_DEV_TOKEN``) - or, with the explicit ``--insecure-local`` flag, left open on
+127.0.0.1. Temporary: the per-user service (3e) replaces the TOML accounts.
 
 ``/mcp`` is the SDK's Streamable HTTP endpoint in *stateless* mode: protocol
 2026-07-28 clients get the sessionless transport, older clients (<= 2025-11-25)
@@ -129,6 +131,27 @@ def uvicorn_config(app: Any, op: OperatorConfig, **extra: Any) -> uvicorn.Config
         lifespan="on",
         **extra,
     )
+
+
+async def serve_oauth(op: OperatorConfig) -> None:
+    from universal_email_mcp.oauth.app import build_oauth_app
+
+    setup_json_logging(op.log_level)
+    assert op.store is not None
+    if op.store.ephemeral_keys:
+        log.warning("STORE_BACKEND=memory without STORE_KEYS: state and keys are lost on restart")
+    app = await build_oauth_app(op)
+    log.info(
+        "OAuth mode: issuer %s, store %s, %d login domain(s)",
+        op.public_url,
+        op.store.backend,
+        len(op.login_domains),
+    )
+    await uvicorn.Server(uvicorn_config(app, op)).serve()
+
+
+def run_serve_oauth(op: OperatorConfig) -> None:
+    asyncio.run(serve_oauth(op))
 
 
 async def serve(op: OperatorConfig, config: Config) -> None:

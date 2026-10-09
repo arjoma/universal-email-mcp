@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -49,10 +49,7 @@ class OAuthService:
     login: LoginVerifier
     login_domains: Mapping[str, ServerProfile]
     portal: Portal
-    limits: Limiters = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.limits = Limiters.from_config(self.cfg)
+    limits: Limiters
 
     def audit(self, name: str, **fields: Any) -> None:
         audit.event(name, **fields)

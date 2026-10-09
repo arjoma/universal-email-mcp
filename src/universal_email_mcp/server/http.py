@@ -18,12 +18,14 @@ browsers cannot call the endpoints cross-origin.
 from __future__ import annotations
 
 import hmac
+import inspect
 import json
 import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,8 +59,12 @@ HSTS = ("strict-transport-security", "max-age=63072000; includeSubDomains")
 
 ReadinessCheck = Callable[[], Awaitable[bool]]
 """Returns True when the dependency is usable. The store check plugs in here (3b)."""
-TokenCheck = Callable[[str], bool]
-"""Decides whether a presented bearer token is valid (OAuth replaces it in 3c)."""
+TokenCheck = Callable[[str], Any]
+"""Decides whether a presented bearer token is valid. Sync or async. A falsy result (``False``,
+``None``) refuses; ``True`` accepts; any other object is accepted *and* is the principal of the
+request, available as ``principal_var`` and ``scope["uem.principal"]`` (OAuth mode)."""
+
+principal_var: ContextVar[object | None] = ContextVar("uem_principal", default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +83,9 @@ class HttpSettings:
     hsts: bool = False
     protected_prefixes: tuple[str, ...] = (MCP_PATH,)
     realm: str = "universal-email-mcp"
+    resource_metadata_url: str | None = None
+    """RFC 9728 URL advertised in ``WWW-Authenticate`` so clients can discover the
+    authorization server."""
     ready_checks: dict[str, ReadinessCheck] = field(default_factory=dict[str, ReadinessCheck])
 
 
@@ -188,12 +197,19 @@ class BearerAuthMiddleware:
     """401 with ``WWW-Authenticate`` unless the request carries a valid bearer token."""
 
     def __init__(
-        self, app: ASGIApp, *, check: TokenCheck, prefixes: Sequence[str], realm: str
+        self,
+        app: ASGIApp,
+        *,
+        check: TokenCheck,
+        prefixes: Sequence[str],
+        realm: str,
+        resource_metadata_url: str | None = None,
     ) -> None:
         self.app = app
         self._check = check
         self._prefixes = tuple(prefixes)
         self._realm = realm
+        self._metadata = resource_metadata_url
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not scope["path"].startswith(self._prefixes):
@@ -202,12 +218,24 @@ class BearerAuthMiddleware:
         auth = Headers(scope=scope).get("authorization", "")
         scheme, _, token = auth.partition(" ")
         presented = scheme.lower() == "bearer" and bool(token.strip())
-        if presented and self._check(token.strip()):
-            await self.app(scope, receive, send)
-            return
+        if presented:
+            result = self._check(token.strip())
+            if inspect.isawaitable(result):
+                result = await result
+            if result:
+                principal = None if result is True else result
+                scope["uem.principal"] = principal
+                ctx = principal_var.set(principal)
+                try:
+                    await self.app(scope, receive, send)
+                finally:
+                    principal_var.reset(ctx)
+                return
         challenge = f'Bearer realm="{self._realm}"'
         if presented:
             challenge += ', error="invalid_token"'
+        if self._metadata:
+            challenge += f', resource_metadata="{self._metadata}"'
         await _send_json(send, 401, {"error": "unauthorized"}, [("www-authenticate", challenge)])
 
 
@@ -331,6 +359,7 @@ def create_app(
                 check=token_check,
                 prefixes=settings.protected_prefixes,
                 realm=settings.realm,
+                resource_metadata_url=settings.resource_metadata_url,
             )
         )
     middleware.append(Middleware(BodyLimitMiddleware, max_bytes=settings.max_request_bytes))
