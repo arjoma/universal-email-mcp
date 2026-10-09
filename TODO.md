@@ -7,9 +7,6 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
-- [ ] `NetPolicy.total_timeout` (60 s) bounds a whole SMTP submission: a 25 MiB send over a
-      slow uplink is cut mid-DATA (reported as unknown outcome). Scale it by message size or
-      make it a setting (`Config.net_policy` has no knob yet).
 - [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from
       `limits.max_message_bytes`, which an operator may raise above that.
 - [ ] `ImapLoginVerifier` semaphore wait has no timeout (16 tarpits hold sign-ins up to

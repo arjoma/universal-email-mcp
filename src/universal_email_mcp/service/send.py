@@ -92,6 +92,11 @@ Submit = Callable[..., smtp.SmtpReceipt]
 FINGERPRINT_CHARS = 16
 
 
+SMTP_MIN_RATE = 32_768
+"""Bytes per second a submission is granted on top of ``NetPolicy.total_timeout``
+(a 25 MiB message gets about 13 more minutes)."""
+
+
 # ----------------------------------------------------------------- policy
 
 
@@ -818,9 +823,10 @@ class Sender:
 
             try:
                 try:
-                    receipt = await run_deadline(
-                        run, seconds=cfg.net_policy(smtp_acc).total_timeout
-                    )
+                    # The upload may take a while on a slow uplink: allow at least
+                    # SMTP_MIN_RATE bytes per second on top of the connection deadline.
+                    seconds = cfg.net_policy(smtp_acc).total_timeout + len(out.raw) / SMTP_MIN_RATE
+                    receipt = await run_deadline(run, seconds=seconds)
                 except TimeoutError:  # the thread did not even end after the watchdog
                     raise SendOutcomeUnknown("the SMTP server did not finish in time") from None
             except MailError as e:
