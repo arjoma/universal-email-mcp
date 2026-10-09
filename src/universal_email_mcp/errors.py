@@ -154,3 +154,16 @@ class InvalidArgument(MailError):
 class AttachmentNotFound(MailError):
     code = "ATTACHMENT_NOT_FOUND"
     default_hint = "Use an attachment id exactly as listed by get_message for this message."
+
+
+class InvalidFolderName(MailError):
+    code = "INVALID_FOLDER_NAME"
+    default_hint = "Use plain names without * % \" \\ or control characters; '/' separates levels."
+
+
+class NoTrashFolder(MailError):
+    code = "NO_TRASH_FOLDER"
+    default_hint = (
+        "The account has no recognisable Trash folder (see account_info). Set "
+        "folders.trash in the account configuration. Permanent deletion is not offered."
+    )

@@ -79,6 +79,8 @@ class Limits:
     account_timeout: float = 30.0
     max_headers_scanned: int = 2_000
     """Headers read per account and call for fuzzy search and contact lookup."""
+    max_batch_messages: int = 50
+    """Messages one mark/move/delete call may change (all accounts together)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +319,7 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         "max_accounts_per_call",
         "account_timeout",
         "max_headers_scanned",
+        "max_batch_messages",
     )
     c.check_keys(t, keys, w)
     d = Limits()
@@ -333,6 +336,9 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         account_timeout=c.num(t, "account_timeout", w, d.account_timeout),
         max_headers_scanned=int(
             c.num(t, "max_headers_scanned", w, d.max_headers_scanned, integer=True)
+        ),
+        max_batch_messages=int(
+            c.num(t, "max_batch_messages", w, d.max_batch_messages, integer=True)
         ),
     )
 

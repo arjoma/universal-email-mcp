@@ -1,10 +1,16 @@
-"""Read-only IMAP backend on top of ``imapclient``.
+"""IMAP backend on top of ``imapclient``.
 
 :class:`ImapSession` is **synchronous and not thread-safe**: one session per
-worker thread; async callers use ``await asyncio.to_thread(...)``. It never
-changes mailbox state: folders are opened with EXAMINE, bodies fetched with
-``BODY.PEEK`` (``\\Seen`` is never set), and no STORE/COPY/MOVE/APPEND/EXPUNGE is
-issued.
+worker thread; async callers use ``await asyncio.to_thread(...)``. Reads never
+change mailbox state: folders are opened with EXAMINE and bodies fetched with
+``BODY.PEEK`` (``\\Seen`` is never set).
+
+The few write operations (``set_flags``, ``move_messages``, ``create_folder``)
+SELECT a folder only for the duration of the call, check the message reference's
+UIDVALIDITY against the folder first (a mismatch changes nothing), and address
+messages by UID only. There is **never a plain EXPUNGE**: that would also remove
+other mail somebody flagged ``\\Deleted``; the COPY fallback uses ``UID EXPUNGE``
+of exactly the copied UIDs (UIDPLUS) or refuses.
 
 Connections go through :mod:`universal_email_mcp.mail.net`: ``imapclient`` builds
 its ``imaplib`` object in ``IMAPClient._create_IMAP4``; we override that to return
@@ -40,13 +46,16 @@ from universal_email_mcp.errors import (
     AttachmentNotFound,
     AuthFailed,
     FolderNotFound,
+    InvalidArgument,
     InvalidRef,
     MailError,
     MessageNotFound,
+    NotPermitted,
     ProtocolError,
     ServerUnreachable,
     TlsError,
     UidValidityChanged,
+    UnsupportedByServer,
 )
 from universal_email_mcp.mail.bodystructure import (
     SECTION_RE,
@@ -243,6 +252,39 @@ class IncrementalBatch:
     """True if further new messages exist beyond ``limit``."""
 
 
+SETTABLE_FLAGS = ("\\Seen", "\\Flagged")
+"""The only flags :meth:`ImapSession.set_flags` changes."""
+
+
+@dataclass(frozen=True, slots=True)
+class FlagChange:
+    """Result of :meth:`ImapSession.set_flags`."""
+
+    folder: str
+    flags: dict[int, tuple[str, ...]]
+    """Resulting flags of the messages that exist."""
+    missing: tuple[int, ...]
+    """UIDs that were not (or no longer) in the folder."""
+
+
+@dataclass(frozen=True, slots=True)
+class MoveResult:
+    """Result of :meth:`ImapSession.move_messages`."""
+
+    folder: str
+    """Source (wire name)."""
+    dest: str
+    """Destination (wire name)."""
+    moved: dict[int, int | None]
+    """Source UID -> UID in the destination (``None`` = server gave no COPYUID)."""
+    copied_only: tuple[int, ...]
+    """COPY fallback only: copied, but removing the original failed (now in both)."""
+    missing: tuple[int, ...]
+    """UIDs that were not (or no longer) in the folder, or not transferred."""
+    dest_uidvalidity: int | None
+    method: Literal["move", "copy", "none"]
+
+
 @dataclass(frozen=True, slots=True)
 class LoginInfo:
     """Facts gathered while connecting (for ``probe`` and diagnostics)."""
@@ -322,6 +364,52 @@ def _astring(value: str) -> bytes:
     if raw.isascii():
         return b'"' + raw.replace(b"\\", b"\\\\").replace(b'"', b'\\"') + b'"'
     return raw
+
+
+def _quote_wire(wire: str) -> bytes:
+    """A wire folder name as an IMAP quoted string (``_wire_name`` already refused
+    control characters, so no literal is needed)."""
+    return b'"' + wire.encode("ascii").replace(b"\\", b"\\\\").replace(b'"', b'\\"') + b'"'
+
+
+MAX_UID_SET = 10_000
+"""Most UIDs read from a server's UID set (a hostile server must not make us
+expand ``1:4294967295``)."""
+
+
+def _parse_uid_set(text: str) -> list[int] | None:
+    """``5,7:9`` -> ``[5, 7, 8, 9]`` in order; ``None`` if malformed or too large."""
+    out: list[int] = []
+    for part in text.split(","):
+        lo, sep, hi = part.partition(":")
+        if not lo.isdigit() or (sep and not hi.isdigit()):
+            return None
+        a, b = int(lo), int(hi) if sep else int(lo)
+        step = 1 if b >= a else -1
+        if abs(b - a) + 1 + len(out) > MAX_UID_SET:
+            return None
+        out.extend(range(a, b + step, step))
+    return out
+
+
+def _parse_copyuid(codes: Iterable[object]) -> tuple[dict[int, int] | None, int | None]:
+    """Merge ``[COPYUID uidvalidity source-set destination-set]`` response codes into
+    ``({source uid: destination uid}, destination UIDVALIDITY)``; ``(None, None)``
+    if there is none or it is malformed (the new UIDs are then unknown)."""
+    mapping: dict[int, int] = {}
+    validity: int | None = None
+    for code in codes:
+        fields = _s(code).split()
+        if len(fields) != 3 or not fields[0].isdigit():
+            return None, None
+        src, dst = _parse_uid_set(fields[1]), _parse_uid_set(fields[2])
+        if src is None or dst is None or len(src) != len(dst):
+            return None, None
+        if validity not in (None, int(fields[0])):
+            return None, None
+        validity = int(fields[0])
+        mapping.update(zip(src, dst, strict=True))
+    return (mapping, validity) if mapping else (None, None)
 
 
 def _imap_date(d: date) -> bytes:
@@ -419,7 +507,9 @@ class ImapSession:
         self.login_info = login_info
         self._folder_role_overrides: dict[FolderRole, str] = dict(folder_roles or {})
         self._folders: list[FolderInfo] | None = None
+        self._foreign: tuple[str, ...] | None = None
         self.role_warnings: list[str] = []
+        self.subscribe_failed: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
@@ -641,14 +731,24 @@ class ImapSession:
 
     def _foreign_prefixes(self) -> tuple[str, ...]:
         """Prefixes of the other-users and shared namespaces (role detection skips
-        them). Without NAMESPACE, or if it fails, nothing is excluded."""
+        them, writes refuse them). Without NAMESPACE, or if it fails, nothing is
+        excluded (a failure is not cached)."""
+        if self._foreign is not None:
+            return self._foreign
         try:
             ns = self.namespace()
         except (ProtocolError, ServerUnreachable):
             return ()
-        if ns is None:
-            return ()
-        return tuple(p for p, _d in (*ns.other, *ns.shared) if p)
+        prefixes = () if ns is None else tuple(p for p, _d in (*ns.other, *ns.shared) if p)
+        self._foreign = prefixes
+        return prefixes
+
+    def is_foreign(self, wire: str) -> bool:
+        """Is ``wire`` (a wire folder name) in another user's or a shared namespace?"""
+        for p in self._foreign_prefixes():
+            if wire.startswith(p) or wire == p.rstrip("/.\\"):
+                return True
+        return False
 
     def quota(self) -> list[QuotaInfo] | None:
         """Quota of the INBOX quota root(s), or ``None`` without the QUOTA extension."""
@@ -1183,6 +1283,179 @@ class ImapSession:
         if len(data) > max_bytes:
             return AttachmentData(leaf, None, len(data), exact=True)
         return AttachmentData(leaf, data, len(data), exact=True)
+
+    # ------------------------------------------------------------ writes
+    #
+    # Everything below changes the mailbox. Callers have already decided *what* to
+    # change (user, client and policy - never mail content). All of it is
+    # UID-scoped, and each operation first SELECTs the source folder, compares its
+    # UIDVALIDITY with the one in the message reference, and checks which of the
+    # UIDs still exist.
+
+    def _check_own(self, wire: str) -> None:
+        if self.is_foreign(wire):
+            raise NotPermitted(
+                f"folder {decode_folder_name(wire)!r} is in another user's or a shared namespace",
+                hint="Only changes to the account's own folders are supported.",
+            )
+
+    def _select_for_write(self, folder: str, uidvalidity: int) -> str:
+        """SELECT ``folder`` read-write; returns the wire name. Raises
+        :class:`UidValidityChanged` (nothing is changed), :class:`FolderNotFound`
+        or :class:`NotPermitted` (foreign namespace, read-only folder)."""
+        wire = _wire_name(folder)
+        self._check_own(wire)
+        try:
+            resp = self._client.select_folder(wire, readonly=False)
+        except (imaplib.IMAP4.abort, OSError) as e:
+            raise ServerUnreachable(f"connection lost: {_server_text(e)}") from e
+        except imaplib.IMAP4.error as e:
+            raise FolderNotFound(
+                f"cannot open folder {decode_folder_name(wire)!r}: {_server_text(e)}"
+            ) from e
+        current = int(cast(int, resp.get(b"UIDVALIDITY", 0)) or 0)
+        if current <= 0:
+            raise ProtocolError(f"server sent no UIDVALIDITY for {decode_folder_name(wire)!r}")
+        if uidvalidity != current:
+            raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")
+        if resp.get(b"READ-ONLY"):
+            raise NotPermitted(f"folder {decode_folder_name(wire)!r} is read-only on the server")
+        return wire
+
+    def _existing(self, uids: Sequence[int]) -> dict[int, tuple[str, ...]]:
+        """UID -> flags for those of ``uids`` that exist in the selected folder."""
+        fetched = self._fetch_raw(list(uids), ["UID", "FLAGS"])
+        return {u: tuple(_s(f) for f in v.get(b"FLAGS", ())) for u, v in fetched.items()}
+
+    def set_flags(
+        self,
+        folder: str,
+        uids: Sequence[int],
+        *,
+        uidvalidity: int,
+        add: Sequence[str] = (),
+        remove: Sequence[str] = (),
+    ) -> FlagChange:
+        """Add and/or remove flags (only ``\\Seen`` and ``\\Flagged``) on ``uids``.
+
+        ``UID STORE ... +FLAGS.SILENT`` / ``-FLAGS.SILENT``; returns the resulting
+        flags per UID and the UIDs that no longer exist.
+        """
+        flags = [*add, *remove]
+        if not flags or set(add) & set(remove) or any(f not in SETTABLE_FLAGS for f in flags):
+            raise InvalidArgument(f"flags to change must come from {', '.join(SETTABLE_FLAGS)}")
+        wire = self._select_for_write(folder, uidvalidity)
+        existing = self._existing(uids)
+        present = sorted(existing)
+        if present:
+            if add:
+                self._call("STORE", lambda: self._client.add_flags(present, list(add), silent=True))
+            if remove:
+                self._call(
+                    "STORE", lambda: self._client.remove_flags(present, list(remove), silent=True)
+                )
+            existing = self._existing(present)
+        return FlagChange(
+            wire,
+            flags={u: existing[u] for u in present if u in existing},
+            missing=tuple(u for u in dict.fromkeys(uids) if u not in existing),
+        )
+
+    def move_messages(
+        self, folder: str, uids: Sequence[int], dest: str, *, uidvalidity: int
+    ) -> MoveResult:
+        """Move ``uids`` from ``folder`` to ``dest`` (wire names).
+
+        ``UID MOVE`` (RFC 6851) when the server has MOVE; otherwise ``UID COPY``,
+        then ``\\Deleted`` plus ``UID EXPUNGE`` of exactly the copied UIDs (needs
+        UIDPLUS); with neither, :class:`UnsupportedByServer` and nothing changes.
+        New UIDs come from ``COPYUID`` (UIDPLUS); without it they are unknown.
+        """
+        use_move = self.has("MOVE")
+        if not (use_move or self.has("UIDPLUS")):
+            raise UnsupportedByServer(
+                "the server supports neither MOVE nor UIDPLUS, so messages cannot be moved safely",
+                hint="Moving needs UID MOVE, or UID COPY with UID EXPUNGE (UIDPLUS). "
+                "A plain EXPUNGE would also remove other mail marked as deleted.",
+            )
+        dest_wire = _wire_name(dest)
+        self._check_own(dest_wire)
+        wire = self._select_for_write(folder, uidvalidity)
+        if dest_wire == wire:
+            raise InvalidArgument("the messages are already in that folder")
+        present = sorted(self._existing(uids))
+        missing = tuple(u for u in dict.fromkeys(uids) if u not in present)
+        if not present:
+            return MoveResult(wire, dest_wire, {}, (), missing, None, "none")
+        client = cast(Any, self._client)
+        imap = client._imap
+        id_set = b",".join(str(u).encode("ascii") for u in present)
+        quoted = _quote_wire(dest_wire)
+        imap.untagged_responses.pop("COPYUID", None)
+        verb = b"MOVE" if use_move else b"COPY"
+        typ, data = self._call(
+            verb.decode(), lambda: client._raw_command(verb, [id_set, quoted], uid=True)
+        )
+        codes = imap.untagged_responses.pop("COPYUID", [])
+        imap.untagged_responses.pop("EXPUNGE", None)
+        if typ != "OK":
+            text = _server_text(Exception(_s(data[0] if data else b"")))
+            if "TRYCREATE" in text.upper():
+                raise FolderNotFound(
+                    f"destination folder {decode_folder_name(dest_wire)!r} does not exist"
+                )
+            raise ProtocolError(f"{verb.decode()} failed: {text}")
+        mapping, dest_validity = _parse_copyuid(codes)
+        # COPYUID names exactly the messages that were transferred; without it
+        # every UID we sent is assumed (we verified they existed an instant ago).
+        moved_src = [u for u in present if mapping is None or u in mapping]
+        not_moved = tuple(u for u in present if u not in moved_src)
+        if use_move:
+            moved = {u: (mapping or {}).get(u) for u in moved_src}
+            return MoveResult(
+                wire, dest_wire, moved, (), missing + not_moved, dest_validity, "move"
+            )
+        # COPY fallback: remove exactly the copied messages from the source.
+        copied_only: tuple[int, ...] = ()
+        try:
+            self._call(
+                "STORE",
+                lambda: self._client.add_flags(moved_src, [b"\\Deleted"], silent=True),
+            )
+            self._call("UID EXPUNGE", lambda: self._client.uid_expunge(moved_src))
+        except MailError:
+            copied_only = tuple(moved_src)
+            try:  # best effort: do not leave the originals hidden as "deleted"
+                self._client.remove_flags(moved_src, [b"\\Deleted"], silent=True)
+            except Exception:  # noqa: BLE001
+                pass
+        moved = {} if copied_only else {u: (mapping or {}).get(u) for u in moved_src}
+        return MoveResult(
+            wire, dest_wire, moved, copied_only, missing + not_moved, dest_validity, "copy"
+        )
+
+    def create_folder(self, wire: str) -> bool:
+        """CREATE one folder (wire name) and SUBSCRIBE to it. Returns ``False`` if it
+        already existed. A failed SUBSCRIBE is not an error (the folder exists; it
+        is recorded in ``subscribe_failed``). The cached folder list is dropped."""
+        wire = _wire_name(wire)
+        self._check_own(wire)
+        try:
+            self._client.create_folder(wire)
+        except (imaplib.IMAP4.abort, OSError) as e:
+            raise ServerUnreachable(f"connection lost: {_server_text(e)}") from e
+        except imaplib.IMAP4.error as e:
+            text = _server_text(e)
+            if "ALREADYEXISTS" in text.upper() or "already exists" in text.lower():
+                self._folders = None
+                return False
+            raise ProtocolError(f"CREATE failed: {text}") from e
+        self._folders = None
+        try:
+            self._client.subscribe_folder(wire)
+        except (imaplib.IMAP4.error, OSError):
+            self.subscribe_failed.append(wire)
+        return True
 
 
 # =========================================================================== helpers

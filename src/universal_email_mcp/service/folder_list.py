@@ -20,6 +20,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
 from universal_email_mcp.errors import AmbiguousFolder, FolderNotFound
+from universal_email_mcp.mail.imap import ImapSession, Namespace
 from universal_email_mcp.models import FolderInfo
 from universal_email_mcp.service import fuzzy
 from universal_email_mcp.service.cursor import Key
@@ -253,3 +254,24 @@ def similar_names(nodes: Sequence[Node], query: Query, limit: int = 5) -> list[s
         by_name.setdefault(n.name, n.full_name)
         by_name.setdefault(n.joined, n.full_name)
     return list(dict.fromkeys(by_name[s] for s in similar(query, by_name, limit=limit * 2)))[:limit]
+
+
+def personal_prefix(ns: Namespace | None) -> str:
+    if ns and ns.personal:
+        return ns.personal[0][0]
+    return ""
+
+
+def resolve_folder(
+    session: ImapSession, name: str, personal_prefix: str = "", *, refresh: bool = False
+) -> tuple[FolderInfo, str | None]:
+    """A folder argument of the message tools (see :func:`resolve`):
+    selectable folders only. Returns the folder and a note when it was matched
+    approximately. ``refresh``: read the folder list again first (writes must not
+    act on a stale list)."""
+    roots = build(session.list_folders(refresh=refresh), personal_prefix)
+    node, note = resolve(
+        roots, name, selectable_only=True, where=f" in account {session.account_name!r}"
+    )
+    assert node.info is not None  # selectable nodes are real folders
+    return node.info, note

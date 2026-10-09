@@ -77,6 +77,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Dovecot with realistic and hostile mail and a matching config, for trying the
   server without a real mailbox.
 - `local` and `probe --account` name the config file they loaded on stderr.
+- Organize tools (accounts with the `organize` / `delete` permission):
+  - `mark_messages`: read/unread and flagged, by message id.
+  - `move_messages`: into another folder (name, role or approximate path;
+    ambiguity is returned as a choice). Uses `UID MOVE`; without MOVE it copies,
+    flags and `UID EXPUNGE`s exactly the copied UIDs (UIDPLUS); with neither it
+    refuses. A plain `EXPUNGE` is never issued. Moved messages get new ids
+    (from `COPYUID`), returned in the result.
+  - `create_folder`: a folder, nested levels, with correct hierarchy delimiter and
+    modified UTF-7 encoding, subscribed after creation; the parent may be
+    approximate. An existing folder is reported, not an error. Names are
+    validated (no wildcards, quotes, control or invisible characters, `.`/`..`).
+  - `delete_messages`: moves to the Trash folder (own tool, `destructiveHint`);
+    mail already in Trash is left alone, there is no permanent deletion; an
+    account without a recognisable Trash folder refuses.
+  - Results are per message (ok / unchanged / failed with a code); stale
+    (UIDVALIDITY), forged, unknown or not permitted ids fail individually.
+    Tools that no account's permissions allow (or a `read_only` policy) are not
+    registered; every call also checks the permission of each message's account.
+    Nothing is changed in other users' or shared namespaces.
+- New limit `max_batch_messages` (default 50): messages per mark/move/delete call;
+  more are refused up front.
 
 ### Security
 

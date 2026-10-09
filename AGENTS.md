@@ -76,9 +76,12 @@ Code must treat it that way everywhere:
 - `presets.py` — server presets, `MAIL_SERVERS` / `LOGIN_DOMAINS` parsing.
 - `config.py` — local-mode TOML config and password lookup (env / keyring).
 - `mail/net.py` — SSRF-safe connect (resolve once, check every IP, connect to it,
-  TLS on the host name). `mail/imap.py` — synchronous read-only `ImapSession`
-  (run it via `asyncio.to_thread`). `mail/mime.py` — parsing, HTML→text,
-  `fence_untrusted`. `mail/folders.py` — role detection.
+  TLS on the host name). `mail/imap.py` — synchronous `ImapSession`
+  (run it via `asyncio.to_thread`): reads use EXAMINE; the few write methods
+  (`set_flags`, `move_messages`, `create_folder`) are UID-scoped, check UIDVALIDITY
+  first and never issue a plain EXPUNGE. `mail/mime.py` — parsing, HTML→text,
+  `fence_untrusted`. `mail/folders.py` — role detection; `mail/foldername.py` —
+  validation of new folder names.
 - `service/` — async core behind the tools: `router.py` (per-account sessions and
   locks, worker threads, deadlines, reconnect, parallel fan-out with partial
   results; backends per account kind), `mail.py` (`MailService`: the read
@@ -89,6 +92,9 @@ Code must treat it that way everywhere:
   `cursor.py` (signed paging cursors), `paging.py` (keyset paging over accounts,
   retry cursors), `trust.py` (per-account "sent to" sets — basis of the send-time
   recipient check), `timewindow.py` (`today`, `this_week` …).
+- `service/organize.py` — **the write side** (`Organizer`: mark, move, delete =
+  move to Trash, create folder): batches grouped per account and folder, per-message
+  outcomes, permission check per account, index invalidation.
 - `server/` — MCP layer: `app.py` (`build_server()`: tools, instructions, error
   results), `schemas.py` (output schemas), `render.py` (**`escape_cell()` — the one
   place that makes mail text safe in Markdown**), `local.py` (stdio mode).

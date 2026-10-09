@@ -41,7 +41,7 @@ the local config file (see [`docs/config.example.toml`](https://github.com/arjom
 accounts from the config file ([`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml);
 default `~/.config/universal-email-mcp/config.toml`, or `--config PATH` / `UEM_CONFIG`).
 Passwords come from environment variables (`password_env`) or the OS keyring —
-never from the file. The server is **read-only** so far, with six tools:
+never from the file. Six read tools are always there:
 
 | Tool | What it does |
 |---|---|
@@ -51,6 +51,23 @@ never from the file. The server is **read-only** so far, with six tools:
 | `get_message` | headers, text body (paged, fenced as untrusted), attachments; `thread=true` for the conversation |
 | `get_attachment` | one attachment by the id `get_message` lists: text-like files inline (fenced, paged), other files as an embedded resource up to `limits.max_attachment_bytes` (default 2 MiB); never marks mail as read |
 | `find_contacts` | recent correspondents; `query=` finds a person (deeper search); `sent_to` (yes/no/unknown) marks people you wrote to |
+
+Accounts with the `organize` and/or `delete` permission (default: `read` only)
+add tools that change mail. A tool no account allows — or any tool under
+`[policy] read_only = true` — is not offered at all, and each call is checked
+again against the permissions of the account each message belongs to:
+
+| Tool | Permission | What it does |
+|---|---|---|
+| `mark_messages` | organize | read/unread and flagged, by message id (batch, capped) |
+| `move_messages` | organize | into another folder (name, role or approximate path; ambiguous names come back as a choice); moved messages get new ids |
+| `create_folder` | organize | a folder (nested levels, `parent=` approximate), subscribed; never renames or deletes folders |
+| `delete_messages` | delete | moves to Trash (recoverable); mail already in Trash stays; there is no permanent deletion |
+
+Changes are reported per message. They use UIDs checked against the folder's
+UIDVALIDITY, `UID MOVE` (or `UID COPY` + `UID EXPUNGE` with UIDPLUS, otherwise
+refused), and never a plain `EXPUNGE`. Try them on the sandbox mailbox
+(`scripts/dev_mailbox.py`, see below) before pointing them at a real one.
 
 `query` works the same everywhere: with `*` or `?` it is a case-insensitive,
 umlaut-folded wildcard pattern that starts at a word start (`hub*` finds "Anna
