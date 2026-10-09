@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -116,10 +115,6 @@ class ImapLoginVerifier:
         await asyncio.to_thread(attempt)
 
 
-def login_profile(domains: Mapping[str, ServerProfile], address: Address) -> ServerProfile | None:
-    return domains.get(address.domain)
-
-
 __all__ = [
     "Address",
     "AddressError",
@@ -127,7 +122,6 @@ __all__ = [
     "ImapLoginVerifier",
     "LoginVerifier",
     "Pseudonyms",
-    "login_profile",
     "parse_address",
     "short_id",
 ]

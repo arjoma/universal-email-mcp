@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from rapidfuzz.distance import OSA
@@ -192,14 +192,6 @@ class Classified:
     @property
     def domain_unicode(self) -> str:
         return unicode_domain(self.address.email.rpartition("@")[2].lower())
-
-
-@dataclass(slots=True)
-class Universe:
-    """What a recipient is compared with."""
-
-    addresses: set[str] = field(default_factory=set[str])
-    domains: set[str] = field(default_factory=set[str])
 
 
 def classify(

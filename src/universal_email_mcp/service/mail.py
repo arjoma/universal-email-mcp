@@ -148,10 +148,6 @@ class Hit:
     def account(self) -> str:
         return self.summary.ref.account
 
-    @property
-    def folder_display(self) -> str:
-        return decode_folder_name(self.summary.ref.folder)
-
 
 @dataclass(slots=True)
 class MessagePage:
