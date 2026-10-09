@@ -138,8 +138,7 @@ class WildcardPattern:
     def match(self, candidate: str) -> bool:
         if not candidate:
             return False
-        for spelling in fuzzy.fold_variants(candidate[: MAX_MATCH_CHARS * 2]):
-            spelling = spelling[:MAX_MATCH_CHARS]
+        for spelling in fuzzy.fold_variants(candidate[:MAX_MATCH_CHARS]):
             if any(g.match(spelling) for g in self._globs):
                 return True
         return False

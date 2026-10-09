@@ -50,7 +50,7 @@ def variants(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-@lru_cache(maxsize=65536)
+@lru_cache(maxsize=8192)
 def fold_variants(text: str) -> tuple[str, ...]:
     """Like :func:`variants` (casefolded, ä→ae and ä→a), but punctuation, spaces and
     wildcard characters are kept — for pattern matching (:mod:`.query`). The second
