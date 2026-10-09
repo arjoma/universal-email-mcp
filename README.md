@@ -77,6 +77,17 @@ also crosses levels (`clients/m*`, `*/2025`). Anything else is matched fuzzily
 (typos, `Müller`/`Mueller`, name order). Lists are bounded; each result's footer says how
 to narrow it or fetch the next page (`cursor`).
 
+**Attachment downloads.** Files too big for a tool result (and every attachment
+`get_message` lists) come with a download link, `http://127.0.0.1:<port>/a/<token>`,
+served by a small listener on the loopback interface for as long as the server runs.
+The token is signed with a key that is random per run and expires after
+`[downloads] link_ttl` (default 24 h), so a link stops working when the server
+stops — ask for a fresh one. The file is streamed from the mailbox in chunks and
+decoded on the fly (never held in memory whole, never marks mail as read); it is
+served as a download with `nosniff` and a sandboxing CSP, and requests with any
+other `Host` header are refused. Set `[downloads] enabled = false` to switch it off
+or `port = …` for a fixed port.
+
 Claude Desktop (`claude_desktop_config.json`):
 
 ```json

@@ -285,3 +285,24 @@ def test_batch_limit_default_and_override():
     assert parse_config({"accounts": []}).limits.max_batch_messages == 50
     cfg = parse_config({"accounts": [], "limits": {"max_batch_messages": 7}})
     assert cfg.limits.max_batch_messages == 7
+
+def test_downloads_defaults_and_overrides():
+    from universal_email_mcp.config import Downloads, parse_config
+
+    assert parse_config({}).downloads == Downloads()
+    assert Downloads().enabled and Downloads().port == 0
+    d = parse_config(
+        {"downloads": {"enabled": False, "port": 8765, "link_ttl": 600, "max_download_bytes": 5}}
+    ).downloads
+    assert (d.enabled, d.port, d.link_ttl, d.max_download_bytes) == (False, 8765, 600, 5)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"port": -1}, {"port": 70000}, {"port": "80"}, {"port": True}, {"link_ttl": 0}, {"bogus": 1}],
+)
+def test_downloads_rejects_bad_values(bad: dict[str, object]):
+    from universal_email_mcp.config import parse_config
+
+    with pytest.raises(ConfigError):
+        parse_config({"downloads": bad})

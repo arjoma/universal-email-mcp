@@ -850,3 +850,41 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
         notes=tuple(notes),
         leaves=tuple((sec, p.get_content_type()) for sec, p in iter_parts(msg)),
     )
+
+
+_MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}$")
+
+
+_PASSIVE_TYPES = frozenset(
+    {
+        "application/pdf",
+        "application/zip",
+        "application/gzip",
+        "application/x-7z-compressed",
+        "application/vnd.rar",
+        "application/rtf",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/message",
+        "message/rfc822",
+    }
+)
+_PASSIVE_PREFIXES = (
+    "application/vnd.openxmlformats-officedocument.",
+    "application/vnd.oasis.opendocument.",
+    "audio/",
+    "video/",
+)
+
+
+def safe_mime_type(declared: str) -> str:
+    """Label for a returned file: the sender's type only if it is a well-formed
+    member of an allowlist of passive types; everything else (every text-like,
+    HTML, XML, SVG, script type …) is ``application/octet-stream``, so a client
+    never gets a blob it might render or execute."""
+    d = declared.lower()
+    if _MIME_TYPE.match(d) and (d in _PASSIVE_TYPES or d.startswith(_PASSIVE_PREFIXES)):
+        if not d.endswith(("+xml", "+json")):
+            return d
+    return "application/octet-stream"

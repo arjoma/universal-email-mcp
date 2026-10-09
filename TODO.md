@@ -6,11 +6,13 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Measure how Claude Code, Claude Desktop and claude.ai handle embedded blob
       resources and image content (part of the client matrix) and tune the default
       `limits.max_attachment_bytes` (now 2 MiB).
-- [ ] Attachment download endpoint behind `DownloadLinks` (portal in 3g, loopback
-      listener with token locally): stream the part in ranged
-      `BODY.PEEK[n]<offset.len>` reads (`ImapSession.locate_part` +
-      `read_part_range` exist; incremental transfer decoding is still missing —
-      `get_attachment` decodes a bounded part in memory).
+- [ ] Portal download endpoint (3g): the same streaming (`service/downloads.py`:
+      `open_part` / `iter_part`) behind a portal session instead of a per-run token.
+- [ ] `.eml` download of the whole message (`BODY.PEEK[]`, a `/m/<token>` route) in
+      local mode; needs a section-less variant of `locate_part` / `read_part_chunk`.
+- [ ] Downloads of 8bit/binary parts with NUL bytes or bare LF: plain `BODY[n]`
+      fetches may normalise them (Dovecot turns NUL into 0x80, LF into CRLF); the IMAP
+      `BINARY` extension (`BINARY.PEEK[n]`) would deliver them exactly.
 - [ ] Attachments of a forwarded `message/rfc822` are not addressable individually
       (the whole .eml is one attachment); inner parts would be sections `2.1`, `2.2` …
 - [ ] `get_attachment` for ids is by section only; no lookup by file name. The
