@@ -75,6 +75,13 @@
 </li>
 {%- endmacro %}
 
+{% macro duration(d) -%}
+{%- if d.unit == "day" %}{% trans n=d.n %}{{ n }} day{% pluralize %}{{ n }} days{% endtrans %}
+{%- elif d.unit == "hour" %}{% trans n=d.n %}{{ n }} hour{% pluralize %}{{ n }} hours{% endtrans %}
+{%- elif d.unit == "minute" %}{% trans n=d.n %}{{ n }} minute{% pluralize %}{{ n }} minutes{% endtrans %}
+{%- else %}{{ _("no fixed limit") }}{% endif -%}
+{%- endmacro %}
+
 {% macro people(items) -%}
 {% for a in items %}{% if a.name %}{{ a.name }} {{ "<" }}{{ a.email }}{{ ">" }}{% else %}{{ a.email }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
 {%- endmacro %}

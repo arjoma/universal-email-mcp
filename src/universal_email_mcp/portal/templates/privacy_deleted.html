@@ -1,0 +1,7 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Your data was deleted") }}{% endblock %}
+{% block heading %}{{ _("Your data was deleted") }}{% endblock %}
+{% block body %}
+<p>{{ _("All data this service held about you was removed, and the connected applications can no longer reach your mail through it. Your mail at your provider was not touched.") }}</p>
+<p><a class="button" href="/portal/signin">{{ _("Back to the sign-in page") }}</a></p>
+{% endblock %}

@@ -648,6 +648,15 @@ class UserPool:
             del self._contexts[(ctx.user_id, ctx.grant_id)]
         await ctx.router.close_for_good()
 
+    def forget_user(self, user_id: str) -> int:
+        """Close every cached context (and with it the mail connections) of a user, e.g. after
+        the user deleted their data. Calls in flight finish first. Returns the number of
+        contexts retired."""
+        mine = [c for c in self._contexts.values() if c.user_id == user_id]
+        for ctx in mine:
+            self._retire(ctx)
+        return len(mine)
+
     def _trim(self, keep: UserContext | None = None) -> None:
         """Keep at most ``max_cached_users`` contexts: drop the least recently used idle ones."""
         excess = len(self._contexts) - self.op.pool.max_cached_users

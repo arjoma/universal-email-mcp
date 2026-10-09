@@ -38,7 +38,7 @@ from universal_email_mcp.store import (
     hash_token,
     rotate_keys,
 )
-from universal_email_mcp.store.records import ALL_RECORDS, USER_OWNED, Record
+from universal_email_mcp.store.records import ALL_RECORDS, DELETE_ORDER, USER_OWNED, Record
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 KEY1, KEY2 = bytes(range(32)), bytes(range(1, 33))
@@ -626,6 +626,7 @@ async def populate(store: Store, uid: str) -> None:
     await store.issue_auth_code(user_id=uid, client_id="c", grant_id=grant.id, redirect_uri="x", code_challenge="y")  # fmt: skip
     await store.create_approval(user_id=uid, grant_id=grant.id, identity_id="i", content_hash="h", draft_ref="r")  # fmt: skip
     await store.record_activity(uid, "login")
+    assert await store.claim_send(uid, "hash-" + uid, timedelta(minutes=10))
     await store.register_client(f"https://c.example/{uid}.json")
 
 
@@ -657,6 +658,78 @@ async def test_delete_user_leaves_nothing(store: Store, clock: Clock) -> None:
     # the other user is untouched
     assert (await store.get(User, "u_2")) and await store.backend.find("accounts", "user_id", "u_2")
     assert (await store.delete_user("u_1"))["users"] == 0  # idempotent
+
+
+def _all_record_types() -> set[str]:
+    """Names of every Record subclass (``dataclass(slots=True)`` leaves a pre-slots twin of
+    each class behind, hence names)."""
+    found: set[type[Record]] = set()
+    todo = list(Record.__subclasses__())
+    while todo:
+        cls = todo.pop()
+        found.add(cls)
+        todo.extend(cls.__subclasses__())
+    return {c.__qualname__ for c in found}
+
+
+def test_every_record_type_is_registered_and_its_ownership_decided() -> None:
+    """Adding a record type without deciding who owns it (and how it is deleted) fails here."""
+    import dataclasses
+
+    assert _all_record_types() == {c.__qualname__ for c in ALL_RECORDS}
+    shared = {User, OAuthClient}  # the user record itself (deleted last) and shared clients
+    for cls in ALL_RECORDS:
+        has_user_id = "user_id" in {f.name for f in dataclasses.fields(cls)}
+        assert (cls in USER_OWNED) == has_user_id, cls
+        assert (cls in shared) != (cls in USER_OWNED), cls
+    assert len(DELETE_ORDER) == len(set(DELETE_ORDER))
+    assert set(DELETE_ORDER) == set(USER_OWNED)
+    assert DELETE_ORDER[0] is Grant  # revoke first: tokens die with their grant
+    kinds = [cls.KIND for cls in ALL_RECORDS]
+    assert len(kinds) == len(set(kinds))
+
+
+async def test_delete_user_leaves_no_document_with_the_user_id(store: Store) -> None:
+    await populate(store, "u_1")
+    await populate(store, "u_2")
+    await store.delete_user("u_1")
+    if isinstance(store.backend, MemoryBackend):  # every collection, not only the known ones
+        for col in list(store.backend._data):  # pyright: ignore[reportPrivateUsage]
+            for doc in store.backend.raw(col).values():
+                assert doc.get("user_id") != "u_1", col
+    for cls in USER_OWNED:  # the other user keeps one of everything that has a document
+        if cls is PortalSession or cls is Token or cls is PendingApproval:
+            assert await store.backend.find(cls.KIND, "user_id", "u_2"), cls
+
+
+async def test_delete_user_interrupted_midway_is_safe_and_repeatable(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await populate(store, "u_1")
+    access = await store.issue_tokens(await store.create_grant(user_id="u_1", client_id="c"))
+    original = store.backend.commit
+    calls = 0
+
+    async def flaky(ops: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:  # after grants and tokens
+            raise RuntimeError("crash")
+        await original(ops)
+
+    monkeypatch.setattr(store.backend, "commit", flaky)
+    with pytest.raises(RuntimeError):
+        await store.delete_user("u_1")
+    monkeypatch.undo()
+    # tokens are dead already, the user and the accounts are still there
+    assert await store.authenticate_access_token(access.access_token) is None
+    assert await store.backend.find("grants", "user_id", "u_1") == []
+    assert await store.get(User, "u_1") is not None and await store.list_for_user(MailAccount, "u_1")
+    counts = await store.delete_user("u_1")  # the retry finishes the job
+    assert counts["users"] == 1
+    for cls in USER_OWNED:
+        assert await store.backend.find(cls.KIND, "user_id", "u_1") == []
+    assert await store.get(User, "u_1") is None
 
 
 async def test_approval_ownership_and_single_use(store: Store) -> None:

@@ -31,6 +31,7 @@ from universal_email_mcp.store.backend import (
 from universal_email_mcp.store.crypto import Aad, CryptoError, KeyRing, hash_token, new_token
 from universal_email_mcp.store.records import (
     ALL_RECORDS,
+    DELETE_ORDER,
     USER_OWNED,
     ActivityEntry,
     AuthCode,
@@ -748,17 +749,26 @@ class Store:
     async def delete_user(self, user_id: str) -> dict[str, int]:
         """Remove every record of the user (also expired ones) and return counts per kind.
 
-        The user record goes last, so an interrupted run can simply be repeated.
+        Order (``DELETE_ORDER``): grants first, so access and refresh tokens, which need
+        their grant, are dead from the first step on; accounts and the rest follow; the user
+        record goes last. An interrupted run leaves a user who can sign in and repeat it;
+        every step is a plain delete by id, so repeating is safe. A last sweep catches
+        records a request in flight wrote meanwhile.
         """
         counts: dict[str, int] = {}
-        for cls in USER_OWNED:
-            rows = await self.backend.find(cls.KIND, "user_id", user_id)
-            await self._commit_chunks([Op("delete", cls.KIND, i) for i, _ in rows])
-            counts[cls.KIND] = len(rows)
+        for cls in DELETE_ORDER:
+            counts[cls.KIND] = await self._delete_owned(cls, user_id)
         existed = await self.backend.get(User.KIND, user_id) is not None
         await self.delete(User, user_id)
         counts[User.KIND] = int(existed)
+        for cls in DELETE_ORDER:
+            counts[cls.KIND] += await self._delete_owned(cls, user_id)
         return counts
+
+    async def _delete_owned(self, cls: type[Record], user_id: str) -> int:
+        rows = await self.backend.find(cls.KIND, "user_id", user_id)
+        await self._commit_chunks([Op("delete", cls.KIND, i) for i, _ in rows])
+        return len(rows)
 
     # -- maintenance ------------------------------------------------------------------
 
@@ -788,7 +798,7 @@ def _when(rec: Record) -> datetime:
 def _export(rec: Record) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for f in dataclasses.fields(rec):
-        if f.name in rec.EXPORT_EXCLUDE or f.name in _META_FIELDS:
+        if f.name in rec.EXPORT_EXCLUDE or f.name in _META_FIELDS - {"id"}:
             continue
         value = getattr(rec, f.name)
         out[f.name] = value.isoformat() if isinstance(value, datetime) else _plain(value)
