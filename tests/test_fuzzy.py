@@ -3,13 +3,16 @@ subjects and hierarchical folders — with expected rankings."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
+from universal_email_mcp.errors import AmbiguousFolder, FolderNotFound
 from universal_email_mcp.models import Address, FolderInfo, MessageRef, MessageSummary
-from universal_email_mcp.service import fuzzy
-from universal_email_mcp.service.fuzzy import FuzzyQuery, rank_messages, score, variants
+from universal_email_mcp.service import folder_list, fuzzy
+from universal_email_mcp.service.fuzzy import score, variants
+from universal_email_mcp.service.query import parse, score_message
 
 PEOPLE = [
     "Jürgen Müller <juergen.mueller@example.de>",
@@ -113,29 +116,40 @@ CORPUS = [
 ]
 
 
-def _subjects(hits: list[tuple[float, MessageSummary]]) -> list[str]:
+def _rank(text: str) -> list[str]:
+    """Subjects scoring ≥ the default threshold for a query, best first, newest
+    first on ties (as find_messages ranks)."""
+    q = parse(text)
+    assert q is not None
+    hits = [(sc, m) for m in CORPUS if (sc := score_message(q, m)) >= fuzzy.DEFAULT_THRESHOLD]
+    hits.sort(key=lambda h: (-round(h[0]), -(h[1].date.timestamp() if h[1].date else 0)))
     return [m.subject for _s, m in hits]
 
 
-def test_rank_messages_sender_typo_newest_first():
-    hits = rank_messages(FuzzyQuery(from_="Hubr"), CORPUS)
-    assert _subjects(hits)[:2] == ["Re: Angebot Website", "Angebot Website"]
-    assert "Termin nächste Woche" not in _subjects(hits)
+def test_rank_sender_typo_newest_first():
+    hits = _rank("Hubr")
+    assert hits[:2] == ["Re: Angebot Website", "Angebot Website"]
+    assert "Termin nächste Woche" not in hits
 
 
-def test_rank_messages_and_semantics():
-    hits = rank_messages(FuzzyQuery(from_="Huber", subject="Angebot"), CORPUS)
-    assert _subjects(hits) == ["Re: Angebot Website", "Angebot Website"]
-    assert rank_messages(FuzzyQuery(from_="Müller", subject="Rechnung"), CORPUS) == []
+def test_rank_umlaut_subject_and_recipient():
+    assert _rank("Mueller") == ["Termin nächste Woche"]
+    assert _rank("naechste woche") == ["Termin nächste Woche"]
+    assert _rank("me@example.org")  # recipients count too
+    assert set(_rank("hub*")) == {  # wildcard: word starts (Huber, Hubert, Huber-Baustelle)
+        "Re: Angebot Website",
+        "Angebot Website",
+        "Lieferung Huber-Baustelle",
+    }
 
 
-def test_rank_messages_umlaut_and_text():
-    assert _subjects(rank_messages(FuzzyQuery(from_="Mueller"), CORPUS)) == ["Termin nächste Woche"]
-    assert _subjects(rank_messages(FuzzyQuery(text="naechste woche"), CORPUS)) == [
-        "Termin nächste Woche"
-    ]
-    assert rank_messages(FuzzyQuery(to="me@example.org"), CORPUS)
-    assert FuzzyQuery().is_empty() and FuzzyQuery(subject="  ").is_empty()
+def test_message_texts_are_bounded():
+    many = tuple(Address(f"Person {i}", f"p{i}@example.org") for i in range(500))
+    m = replace(CORPUS[0], to=many)
+    q = parse("p499@example.org")
+    assert q is not None and score_message(q, m) < 100  # beyond the recipient cap
+    q = parse("p3@example.org")
+    assert q is not None and score_message(q, m) == 100
 
 
 # ---------------------------------------------------------------- folders
@@ -167,8 +181,11 @@ FOLDERS = [
 ]
 
 
-def _pick(query: str, folders: list[FolderInfo] = FOLDERS, prefix: str = ""):
-    return fuzzy.pick_folder(fuzzy.match_folders(query, folders, personal_prefix=prefix))
+def _pick(query: str, folders: list[FolderInfo] = FOLDERS, prefix: str = "") -> str:
+    node, _note = folder_list.resolve(
+        folder_list.build(folders, prefix), query, selectable_only=True
+    )
+    return node.full_name
 
 
 @pytest.mark.parametrize(
@@ -188,21 +205,20 @@ def _pick(query: str, folders: list[FolderInfo] = FOLDERS, prefix: str = ""):
     ],
 )
 def test_folder_resolution(query: str, expected: str):
-    picked = _pick(query)
-    assert isinstance(picked, fuzzy.FolderMatch), (query, picked)
-    assert picked.folder.name == expected
+    assert _pick(query) == expected
 
 
 def test_folder_ambiguity_is_a_choice():
     folders = [*FOLDERS, _f("Projects/Huber")]
-    picked = _pick("huber", folders)
-    assert isinstance(picked, list)
-    assert {m.folder.name for m in picked} == {"Clients/Huber", "Projects/Huber"}
-    picked = _pick("clients/huber", folders)  # the group decides
-    assert isinstance(picked, fuzzy.FolderMatch) and picked.folder.name == "Clients/Huber"
-    picked = _pick("clients/maier")  # "Maier GmbH" beats "Mayer" clearly
-    assert isinstance(picked, fuzzy.FolderMatch) and picked.folder.name == "Clients/Maier GmbH"
-    assert _pick("nowhere/else") is None
+    with pytest.raises(AmbiguousFolder) as e:
+        _pick("huber", folders)
+    assert set(e.value.choices) == {"Clients/Huber", "Projects/Huber"}
+    assert _pick("clients/huber", folders) == "Clients/Huber"  # the group decides
+    assert _pick("clients/maier") == "Clients/Maier GmbH"  # beats "Mayer" clearly
+    with pytest.raises(FolderNotFound):
+        _pick("nowhere/else")
+    with pytest.raises((FolderNotFound, AmbiguousFolder)):
+        _pick("Clients")  # never the group itself: it cannot hold mail
 
 
 def test_folder_namespace_prefix():
@@ -211,8 +227,6 @@ def test_folder_namespace_prefix():
         _f("INBOX.Clients.Huber", delim="."),
         _f("INBOX.Sent", "sent", "."),
     ]
-    picked = _pick("clients/huber", folders, prefix="INBOX.")
-    assert isinstance(picked, fuzzy.FolderMatch)
-    assert picked.folder.name == "INBOX.Clients.Huber"
+    assert _pick("clients/huber", folders, prefix="INBOX.") == "INBOX.Clients.Huber"
     assert fuzzy.folder_path(folders[1], "INBOX.") == ("Clients", "Huber")
     assert fuzzy.folder_path(folders[0], "INBOX.") == ("INBOX",)

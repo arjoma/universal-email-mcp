@@ -3,12 +3,14 @@
 ``find_messages``, ``list_folders`` and ``find_contacts`` share these rules:
 
 - A query containing ``*`` or ``?`` is a **wildcard pattern**: ``*`` matches any
-  run of characters (also across folder levels and words), ``?`` exactly one.
+  run of characters (also across words), ``?`` exactly one.
   Matching is case-insensitive and umlaut-folded (``Mü*`` finds ``Müller``,
   ``Mueller`` and ``Muller``). The pattern has to cover whole words: it may start
   at any word and must end at a word end, so ``hub*`` finds "Anna Huber" and
-  ``*bau*`` finds ``anna@huber-bau.example``, while ``ub*`` does not. Everything
-  else in the pattern is literal (no regular expressions).
+  ``*bau*`` finds ``anna@huber-bau.example``, while ``ub*`` does not (``*ub*``
+  does). Everything else in the pattern is literal (no regular expressions).
+  Folder names: a pattern without ``/`` matches the folder's own name at any
+  depth, a pattern with ``/`` its path (``clients/m*``, ``*/2025``).
 - Any other query is **fuzzy** (rapidfuzz, :mod:`.fuzzy`): typos, umlaut
   spellings and word order are tolerated, results are ranked by score.
 
@@ -32,8 +34,10 @@ from universal_email_mcp.service import fuzzy
 
 MAX_QUERY_CHARS = 200
 """Longest accepted query."""
-MAX_MATCH_CHARS = 1000
-"""Characters of a candidate text that a pattern is compared with."""
+MAX_MATCH_CHARS = fuzzy.MAX_TEXT_CHARS
+"""Characters of a candidate text (after folding) that a pattern is compared with."""
+MAX_ADDRESSES = 50
+"""Recipients per message that a query is compared with."""
 SIMILAR_THRESHOLD = 50.0
 """Minimum fuzzy score for "similar names" after a search without results."""
 
@@ -138,7 +142,7 @@ class WildcardPattern:
     def match(self, candidate: str) -> bool:
         if not candidate:
             return False
-        for spelling in fuzzy.fold_variants(candidate[:MAX_MATCH_CHARS]):
+        for spelling in fuzzy.fold_variants(candidate):
             if any(g.match(spelling) for g in self._globs):
                 return True
         return False
@@ -207,7 +211,9 @@ def message_texts(m: MessageSummary) -> list[str]:
     """What a query is matched against in a message: sender and recipient names
     and addresses, and the subject (with and without ``Re:``/``AW:`` prefixes)."""
     subject = fuzzy.strip_subject_prefixes(m.subject)
-    texts = [*fuzzy.address_texts(m.from_), *fuzzy.address_texts((*m.to, *m.cc)), subject]
+    recipients = (*m.to, *m.cc)[:MAX_ADDRESSES]
+    texts = [*fuzzy.address_texts(m.from_[:MAX_ADDRESSES]), *fuzzy.address_texts(recipients)]
+    texts.append(subject)
     if subject != m.subject:
         texts.append(m.subject)
     return texts
@@ -215,6 +221,4 @@ def message_texts(m: MessageSummary) -> list[str]:
 
 def score_message(query: Query, m: MessageSummary) -> float:
     """0–100 for a message's headers (never its body)."""
-    if query.pattern is not None:
-        return 100.0 if query.pattern.match_any(message_texts(m)) else 0.0
-    return fuzzy.score_message(fuzzy.FuzzyQuery(text=query.text), m)
+    return query.score(message_texts(m))

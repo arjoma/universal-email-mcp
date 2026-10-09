@@ -84,6 +84,7 @@ class FakeSession:
         self.called_on_loop: list[str] = []
         self.related_queries: list[list[str]] = []
         self.close_delay = 0.0
+        self.refreshes: list[bool] = []
 
     def _tick(self, what: str) -> None:
         self.calls.append(what)
@@ -122,8 +123,9 @@ class FakeSession:
     def quota(self) -> None:
         return None
 
-    def list_folders(self, *, with_counts: bool = False) -> list[FolderInfo]:
+    def list_folders(self, *, with_counts: bool = False, refresh: bool = False) -> list[FolderInfo]:
         self._tick("LIST")
+        self.refreshes.append(refresh)
         roles = {"INBOX": "inbox", "Sent": "sent"}
         return [
             FolderInfo(name=n, display_name=n, delimiter="/", flags=(), role=roles.get(n))  # pyright: ignore[reportArgumentType]

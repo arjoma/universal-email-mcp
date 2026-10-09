@@ -32,6 +32,15 @@ from .fakes import Connector, FakeSession, config, summary
 # ---------------------------------------------------------------- cursors
 
 
+def test_cursor_keyset_roundtrip_and_bad_keys():
+    codec = CursorCodec(b"k" * 32)
+    cur = Cursor("t", "q", after={"A": (-100, -1.5, "A", "INBOX", 7), "*": ("x",)}, retries=2)
+    assert codec.decode(codec.encode(cur), tool="t", query="q") == cur
+    bad = Cursor("t", "q", after={"A": ([1],)})  # pyright: ignore[reportArgumentType]
+    with pytest.raises(InvalidCursor):
+        codec.decode(codec.encode(bad), tool="t", query="q")
+
+
 def test_cursor_roundtrip_and_binding():
     codec = CursorCodec(b"k" * 32)
     cur = Cursor("find_messages", "q1", {("A", "INBOX"): SourcePos(7, 20, 99, 42)})
@@ -53,7 +62,7 @@ def test_cursor_garbage(bad: str):
 
 def test_cursor_tamper_payload():
     codec = CursorCodec()
-    text = codec.encode(Cursor("t", "q", offset=5))
+    text = codec.encode(Cursor("t", "q", after={"*": (-90, "x@example.org")}))
     body, mac = text[3:].split(".")
     forged = "c1." + body[:-2] + ("AA" if body[-2:] != "AA" else "BB") + "." + mac
     with pytest.raises(InvalidCursor):
@@ -227,7 +236,8 @@ async def test_fuzzy_search_ranks_and_pages():
     async def run(text: str, cursor: str | None = None):
         q = parse(text)
         assert q is not None
-        return await svc.find_messages(
+        return await svc.query_search(
+            tool="find_messages",
             args={"q": text},
             accounts=None,
             folders=None,
@@ -377,5 +387,5 @@ async def test_list_folders_keeps_tree_indentation():
         r = await c.call_tool("list_folders", {"depth": 3})
         text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
     rows = {line.split(" | ")[0][2:] for line in text.splitlines()[2:] if line.startswith("| ")}
-    assert {"Clients", "└ Huber", "│ └ 2025"} <= rows
+    assert {"Clients", "└ Clients/Huber", "│ └ Clients/Huber/2025"} <= rows
     await svc.aclose()
