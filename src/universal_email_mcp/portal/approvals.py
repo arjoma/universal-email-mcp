@@ -177,7 +177,7 @@ class ApprovalPages:
     # ------------------------------------------------------------------ pages
 
     async def index(self, request: Request) -> Response:
-        auth = await self.ep._get(request)  # pyright: ignore[reportPrivateUsage]
+        auth = await self.ep.get_auth(request)
         if isinstance(auth, Response):
             return auth
         rows = await self.store.list_for_user(PendingApproval, auth.user.id, include_expired=True)
@@ -204,7 +204,7 @@ class ApprovalPages:
                     "expires": _fmt(rec.expires_at),
                 }
             )
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        return self.ep.page(
             request,
             "approvals.html",
             section="approvals",
@@ -214,12 +214,12 @@ class ApprovalPages:
         )
 
     async def detail(self, request: Request) -> Response:
-        auth = await self.ep._get(request)  # pyright: ignore[reportPrivateUsage]
+        auth = await self.ep.get_auth(request)
         if isinstance(auth, Response):
             return auth
         loaded = await self._load(auth, request.path_params["approval_id"])
         if loaded is None:
-            return self.ep._not_found(request, auth)  # pyright: ignore[reportPrivateUsage]
+            return self.ep.not_found(request, auth)
         return await self._detail_page(request, auth, loaded)
 
     async def _detail_page(
@@ -239,7 +239,7 @@ class ApprovalPages:
                 view = view_of(prepared)
                 if prepared.keep_reason is not None:
                     problem = "policy_draft"
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        return self.ep.page(
             request,
             "approval.html",
             status=status,
@@ -260,13 +260,13 @@ class ApprovalPages:
     # ------------------------------------------------------------------ decisions
 
     async def decide(self, request: Request) -> Response:
-        got = await self.ep._post(request)  # pyright: ignore[reportPrivateUsage]
+        got = await self.ep.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
         loaded = await self._load(auth, request.path_params["approval_id"])
         if loaded is None:
-            return self.ep._not_found(request, auth)  # pyright: ignore[reportPrivateUsage]
+            return self.ep.not_found(request, auth)
         action = str(form.get("action", ""))
         if loaded.state != "pending" or action not in ("approve", "reject"):
             if loaded.state == "expired":
@@ -283,9 +283,9 @@ class ApprovalPages:
             except StoreConflict:
                 done = None
             await audit.record("approval.rejected", **who, done=done is not None)
-            return self.ep._redirect("/portal/approvals", "approval_rejected")  # pyright: ignore[reportPrivateUsage]
-        if not self.ep._fresh(auth):  # pyright: ignore[reportPrivateUsage]
-            return self.ep._to_reauth(f"/portal/approvals/{loaded.rec.id}")  # pyright: ignore[reportPrivateUsage]
+            return self.ep.redirect("/portal/approvals", "approval_rejected")
+        if not self.ep.fresh(auth):
+            return self.ep.to_reauth(f"/portal/approvals/{loaded.rec.id}")
         return await self._approve(request, auth, loaded, who)
 
     async def _approve(
@@ -324,7 +324,7 @@ class ApprovalPages:
                 result = await ctx.service.sender.execute(prepared, "accepted")
             except MailError as e:
                 await audit.record("approval.send_failed", **who, code=e.code)
-                return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+                return self.ep.page(
                     request,
                     "approval_result.html",
                     status=502,
@@ -337,7 +337,7 @@ class ApprovalPages:
                 )
         finally:
             pool.release(ctx)
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        return self.ep.page(
             request,
             "approval_result.html",
             section="approvals",

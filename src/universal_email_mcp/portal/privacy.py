@@ -124,7 +124,7 @@ class PrivacyPages:
         }
 
     async def index(self, request: Request) -> Response:
-        auth = await self.ep._get(request)  # pyright: ignore[reportPrivateUsage]
+        auth = await self.ep.get_auth(request)
         if isinstance(auth, Response):
             return auth
         uid = auth.user.id
@@ -138,7 +138,7 @@ class PrivacyPages:
             "activity": len(await self.store.list_for_user(ActivityEntry, uid)),
             "approvals": len(approvals),
         }
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        return self.ep.page(
             request,
             "privacy.html",
             section="privacy",
@@ -148,7 +148,7 @@ class PrivacyPages:
         )
 
     async def export(self, request: Request) -> Response:
-        got = await self.ep._post(request)  # pyright: ignore[reportPrivateUsage]
+        got = await self.ep.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _ = got
@@ -174,12 +174,12 @@ class PrivacyPages:
         )
 
     async def delete_get(self, request: Request) -> Response:
-        auth = await self.ep._get(request)  # pyright: ignore[reportPrivateUsage]
+        auth = await self.ep.get_auth(request)
         if isinstance(auth, Response):
             return auth
-        if not self.ep._fresh(auth):  # pyright: ignore[reportPrivateUsage]
-            return self.ep._to_reauth(request.url.path)  # pyright: ignore[reportPrivateUsage]
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        if not self.ep.fresh(auth):
+            return self.ep.to_reauth(request.url.path)
+        return self.ep.page(
             request,
             "privacy_delete.html",
             section="privacy",
@@ -189,16 +189,16 @@ class PrivacyPages:
         )
 
     async def delete_post(self, request: Request) -> Response:
-        got = await self.ep._post(request)  # pyright: ignore[reportPrivateUsage]
+        got = await self.ep.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
-        if not self.ep._fresh(auth):  # pyright: ignore[reportPrivateUsage]
-            return self.ep._to_reauth("/portal/privacy/delete")  # pyright: ignore[reportPrivateUsage]
+        if not self.ep.fresh(auth):
+            return self.ep.to_reauth("/portal/privacy/delete")
         typed = form.get("confirm")
         expected = auth.user.primary_address.strip().casefold()
         if not isinstance(typed, str) or typed.strip().casefold() != expected:
-            return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+            return self.ep.page(
                 request,
                 "privacy_delete.html",
                 status=400,
@@ -214,9 +214,7 @@ class PrivacyPages:
             pool.forget_user(uid)
         # no feed entry: the feed is gone with the user; the log keeps the counts only
         await self.svc.audit("portal.delete_all", user=uid, deleted=counts)
-        response = self.ep._page(  # pyright: ignore[reportPrivateUsage]
-            request, "privacy_deleted.html", csrf=False
-        )
+        response = self.ep.page(request, "privacy_deleted.html", csrf=False)
         self.ep.web.delete_cookie(response, "session")
         self.ep.web.rotate_csrf(response)
         return response

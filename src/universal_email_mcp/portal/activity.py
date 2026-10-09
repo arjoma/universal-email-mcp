@@ -33,7 +33,7 @@ class ActivityPages:
         self.store = ep.store
 
     async def index(self, request: Request) -> Response:
-        auth = await self.ep._get(request)  # pyright: ignore[reportPrivateUsage]
+        auth = await self.ep.get_auth(request)
         if isinstance(auth, Response):
             return auth
         entries = await self.store.list_activity(auth.user.id, PAGE_SIZE)
@@ -64,6 +64,6 @@ class ActivityPages:
                 }
             )
         days = max(1, int(self.store.policy.activity_ttl.total_seconds() // 86400))
-        return self.ep._page(  # pyright: ignore[reportPrivateUsage]
+        return self.ep.page(
             request, "activity.html", section="activity", auth=auth, rows=rows, days=days
         )

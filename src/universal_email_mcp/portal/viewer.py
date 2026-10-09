@@ -217,7 +217,7 @@ class ViewerEndpoints(PortalEndpoints):
                 reason, status = "unavailable", 504 if isinstance(e, AccountTimeout) else 502
                 if not isinstance(e, MailError):
                     log.error("message viewer failed", exc_info=e)
-        return self._page(request, "error.html", status=status, csrf=False, reason=reason)
+        return self.page(request, "error.html", status=status, csrf=False, reason=reason)
 
     async def _open(self, auth: Auth, stack: AsyncExitStack) -> tuple[Viewer, UserContext]:
         """The viewer of this user's own accounts; lease and call slot are released when
@@ -280,7 +280,7 @@ class ViewerEndpoints(PortalEndpoints):
                 size=_bucket(msg.summary.size),
                 coalesce=True,
             )
-            return self._page(
+            return self.page(
                 request,
                 "message.html",
                 auth=auth,
@@ -328,7 +328,7 @@ class ViewerEndpoints(PortalEndpoints):
                 messages=len(items),
                 coalesce=True,
             )
-            return self._page(
+            return self.page(
                 request,
                 "thread.html",
                 auth=auth,
@@ -350,7 +350,7 @@ class ViewerEndpoints(PortalEndpoints):
             await self.svc.audit(
                 "viewer.raw", user=auth.user.id, kind="headers", lines=len(lines), coalesce=True
             )
-            return self._page(
+            return self.page(
                 request,
                 "headers.html",
                 auth=auth,
