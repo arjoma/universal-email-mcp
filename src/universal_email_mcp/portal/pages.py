@@ -572,9 +572,9 @@ class PortalEndpoints:
         identity: Identity | None = None
         mail = clean_email(username)
         if values["identity"] and mail and profile.smtp is not None:
-            known = {i.addresses[0] for i in await self.store.list_for_user(Identity, auth.user.id)}
+            idents = await self.store.list_for_user(Identity, auth.user.id)
+            known = {i.addresses[0] for i in idents}
             if mail not in known and len(known) < self.svc.cfg.max_identities:
-                idents = await self.store.list_for_user(Identity, auth.user.id)
                 identity = Identity(
                     id=ops.new_id("i"),
                     user_id=auth.user.id,
