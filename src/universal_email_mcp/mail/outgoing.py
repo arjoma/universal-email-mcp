@@ -22,6 +22,7 @@ from email import message_from_bytes
 from email.errors import MissingHeaderBodySeparatorDefect
 from email.message import EmailMessage
 from email.utils import getaddresses
+from typing import Any
 
 from universal_email_mcp.errors import InvalidArgument
 from universal_email_mcp.mail.compose import clean_email, valid_msgid
@@ -32,6 +33,17 @@ MAX_RECIPIENT_HEADERS = 50
 MAX_TEXT_CHARS = 300_000
 _EOL = re.compile(rb"\r\n|\r|\n")
 _HEADER_END = re.compile(rb"\r\n\r\n")
+
+
+MAX_EXTRA_PARTS = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ExtraPart:
+    kind: str
+    """``text/plain`` or ``text/html``."""
+    text: str
+    cut: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +72,11 @@ class Outgoing:
     html_cut: int = 0
     remote_images: int = 0
     """``<img>`` elements in the HTML that load a remote URL (tracking pixels)."""
+    extra_parts: tuple[ExtraPart, ...] = ()
+    """Further inline text parts (more ``text/plain``, more ``text/html``): mail clients
+    show them too, so the confirmation lists them (at most ``MAX_EXTRA_PARTS``)."""
+    extra_more: int = 0
+    """Extra text parts beyond ``MAX_EXTRA_PARTS`` (announced, not shown)."""
 
     @property
     def recipients(self) -> tuple[Address, ...]:
@@ -173,7 +190,7 @@ def parse_outgoing(raw: bytes) -> Outgoing:
             text = ""
     full = sanitize_text(text).strip()
     preview = full[:MAX_TEXT_CHARS]
-    html_text, html_cut, images = _html_view(msg)
+    html_text, html_cut, images, extras, extra_more = _text_parts(msg, body)
     same = " ".join(html_text.split()) == " ".join(preview.split())
     html_shown = bool(html_text.strip()) and (body is None or not same)
     return Outgoing(
@@ -193,27 +210,48 @@ def parse_outgoing(raw: bytes) -> Outgoing:
         html_shown=html_shown,
         html_cut=html_cut,
         remote_images=images,
+        extra_parts=extras,
+        extra_more=extra_more,
     )
 
 
 _REMOTE_IMG = re.compile(r"<img\b[^>]*\bsrc\s*=\s*[\"']?\s*(?:https?:)?//", re.IGNORECASE)
 
 
-def _html_view(msg: EmailMessage) -> tuple[str, int, int]:
-    """(text of all HTML body parts, characters cut, remote images). Attachments are not
-    body parts; a part that cannot be decoded counts as empty."""
-    texts: list[str] = []
+def _text_parts(
+    msg: EmailMessage, primary_plain: Any
+) -> tuple[str, int, int, tuple[ExtraPart, ...], int]:
+    """(text of the first HTML part, its cut, remote images in all HTML parts, the other
+    inline text parts, how many of those are not listed). Attachments are not displayed by
+    mail clients as body, so they are not body parts here; a part that cannot be decoded
+    counts as empty."""
+    first_html: str | None = None
+    first_cut = 0
     images = 0
+    extras: list[ExtraPart] = []
+    more = 0
     for part in msg.walk():
-        if part.is_multipart() or part.get_content_type() != "text/html":
+        ctype = part.get_content_type()
+        if part.is_multipart() or ctype not in ("text/plain", "text/html"):
             continue
-        if part.get_content_disposition() == "attachment":
+        if part.get_content_disposition() == "attachment" or part is primary_plain:
             continue
         try:
-            html = str(part.get_content())
+            content = str(part.get_content())
         except (LookupError, ValueError, UnicodeError):
             continue
-        images += len(_REMOTE_IMG.findall(html))
-        texts.append(sanitize_text(html_to_text(html)).strip())
-    joined = "\n\n".join(t for t in texts if t)
-    return joined[:MAX_TEXT_CHARS], max(0, len(joined) - MAX_TEXT_CHARS), images
+        if ctype == "text/html":
+            images += len(_REMOTE_IMG.findall(content))
+            content = html_to_text(content)
+        full = sanitize_text(content).strip()
+        if not full:
+            continue
+        if ctype == "text/html" and first_html is None:
+            first_html, first_cut = full[:MAX_TEXT_CHARS], max(0, len(full) - MAX_TEXT_CHARS)
+        elif len(extras) < MAX_EXTRA_PARTS:
+            extras.append(
+                ExtraPart(ctype, full[:MAX_TEXT_CHARS], max(0, len(full) - MAX_TEXT_CHARS))
+            )
+        else:
+            more += 1
+    return first_html or "", first_cut, images, tuple(extras), more

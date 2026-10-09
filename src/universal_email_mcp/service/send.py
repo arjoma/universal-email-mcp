@@ -298,6 +298,10 @@ def confirmation_text(
         out_lines += ["> " + ln for ln in html_lines]
         if html_note:
             out_lines.append(html_note)
+    for heading, lines_, note in extra_sections(out):
+        out_lines += ["", heading, *["> " + ln for ln in lines_]]
+        if note:
+            out_lines.append(note)
     if out.remote_images:
         out_lines += ["", remote_images_warning(out)]
     return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + 2 * MAX_CONFIRM_CHARS]
@@ -324,6 +328,28 @@ def html_excerpt(out: Outgoing) -> tuple[list[str], str]:
         extra = f"... {out.html_cut} more characters of the HTML version NOT shown"
         note = f"{note}\n{extra}" if note else extra
     return lines, note
+
+
+def extra_sections(out: Outgoing) -> list[tuple[str, list[str], str]]:
+    """(heading, lines, cut notice) for every further inline text part: mail clients show
+    them as well, so the user must see them (the number listed is capped, the rest
+    announced)."""
+    sections: list[tuple[str, list[str], str]] = []
+    for n, part in enumerate(out.extra_parts, start=1):
+        lines, note = text_excerpt(part.text)
+        if part.cut:
+            extra = f"... {part.cut} more characters of this part NOT shown"
+            note = f"{note}\n{extra}" if note else extra
+        sections.append((f"Additional text part {n} ({part.kind}):", lines, note))
+    if out.extra_more:
+        sections.append(
+            (
+                f"... {out.extra_more} more text part(s) NOT shown",
+                [],
+                "",
+            )
+        )
+    return sections
 
 
 def remote_images_warning(out: Outgoing) -> str:

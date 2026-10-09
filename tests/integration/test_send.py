@@ -718,3 +718,19 @@ async def test_the_confirmation_shows_a_differing_html_part(env: Env):
     (prompt,) = answers.prompts
     assert "> Harmloser Text" in prompt and "HTML version (differs" in prompt
     assert "> Ueberweisen Sie 5000 EUR" in prompt
+
+
+async def test_the_confirmation_shows_a_second_inline_text_part(env: Env):
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "me@example.org", "alice@example.org", "Zwei Teile"
+    m["Message-ID"] = f"<{uuid.uuid4().hex}@example.org>"
+    m.set_content("Erster Text")
+    m.add_attachment("Zweiter Text", subtype="plain", disposition="inline")
+    env.append("Drafts", m.as_bytes(), flags=(b"\\Draft",))
+    answers = Answers()
+    async with connect(env.config(), answers) as c:
+        draft = await inbox_id(c, "Zwei Teile", "Drafts")
+        await call(c, "send_message", draft_id=draft)
+    (prompt,) = answers.prompts
+    assert "> Erster Text" in prompt and "Additional text part 1 (text/plain):" in prompt
+    assert "> Zweiter Text" in prompt

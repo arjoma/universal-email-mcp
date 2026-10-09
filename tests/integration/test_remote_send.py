@@ -795,3 +795,31 @@ async def test_two_parallel_approvals_send_exactly_once(imap_server: ImapServer)
         res = await asyncio.gather(post(a, path, action="approve"), post(b, path, action="approve"))
         assert sorted(x.status_code for x in res)[0] == 200
         assert len(r.sink.messages) == 1
+
+
+async def test_the_page_shows_further_inline_text_parts(imap_server: ImapServer):
+    async with remote(imap_server) as r:
+        u = await r.user()
+        token, _ = await r.token(u)
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = "me@example.org", "alice@example.org", "Zwei Teile"
+        m["Message-ID"] = "<z@example.org>"
+        m.set_content("Erster Text")
+        m.add_attachment("Zweiter Text, auch angezeigt", subtype="plain", disposition="inline")
+        c = u.box.admin()
+        try:
+            c.append("Drafts", m.as_bytes(), flags=[b"\\Draft"])
+        finally:
+            c.logout()
+        async with r.client(token) as cl:
+            found = await cl.call_tool(
+                "find_messages",
+                {"accounts": ["Work"], "folders": ["Drafts"], "since": "2000-01-01"},
+            )
+            assert found.structured_content is not None
+            msgs = found.structured_content["messages"]
+            draft = next(x["id"] for x in msgs if x["subject"] == "Zwei Teile")
+        d = data_of(await send(r, token, {"draft_id": draft}, mode="legacy"))
+        page = (await (await r.portal(u)).get(d["approval_url"].removeprefix(r.url))).text
+        assert "Erster Text" in page and "Additional text part 1" in page
+        assert "Zweiter Text, auch angezeigt" in page

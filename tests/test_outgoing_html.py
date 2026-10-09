@@ -60,3 +60,49 @@ def test_oversize_text_is_cut_loudly():
     html_big = "<p>" + "y" * (MAX_TEXT_CHARS + 700) + "</p>"
     out = parse_outgoing(draft("kurz", html_big))
     assert out.html_cut > 0 and "of the HTML version NOT shown" in prompt(draft("kurz", html_big))
+
+
+# ---------------------------------------------------------------- further inline text parts
+
+
+def multi(*parts: tuple[str, str, str]) -> bytes:
+    """A multipart/mixed message: the first part is the body, the others are added as
+    (text, subtype, disposition) parts."""
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "me@example.org", "alice@example.org", "s"
+    m["Message-ID"] = "<m@example.org>"
+    m.set_content("Erster Text")
+    for text, subtype, disposition in parts:
+        kw = {"filename": "f.txt"} if disposition == "attachment" else {}
+        m.add_attachment(text, subtype=subtype, disposition=disposition, **kw)  # pyright: ignore[reportArgumentType]
+    return m.as_bytes()
+
+
+def test_a_second_inline_text_part_is_shown():
+    p = prompt(multi(("Versteckter zweiter Text", "plain", "inline")))
+    assert "> Erster Text" in p
+    assert "Additional text part 1 (text/plain):" in p and "> Versteckter zweiter Text" in p
+
+
+def test_further_html_parts_are_shown_too():
+    two = multi(("<p>Erstes HTML</p>", "html", "inline"), ("<p>Zweites HTML</p>", "html", "inline"))
+    p = prompt(two)
+    assert "HTML version" in p and "> Erstes HTML" in p
+    assert "Additional text part 1 (text/html):" in p and "> Zweites HTML" in p
+
+
+def test_a_text_attachment_is_an_attachment_not_a_body_part():
+    out = parse_outgoing(multi(("Anhangtext", "plain", "attachment")))
+    assert out.extra_parts == () and out.attachments
+
+
+def test_the_number_of_extra_parts_shown_is_capped_and_the_rest_announced():
+    parts = tuple((f"Teil {n}", "plain", "inline") for n in range(8))
+    out = parse_outgoing(multi(*parts))
+    assert len(out.extra_parts) == 5 and out.extra_more == 3
+    assert "3 more text part(s) NOT shown" in prompt(multi(*parts))
+
+
+def test_a_long_extra_part_is_cut_with_a_notice():
+    p = prompt(multi(("z\n" * 200, "plain", "inline")))
+    assert "Additional text part 1" in p and "NOT shown" in p

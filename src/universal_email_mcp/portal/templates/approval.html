@@ -60,6 +60,12 @@
 {% endfor %}</pre>
   {% if view.html_note %}<p class="error">{{ view.html_note }}</p>{% endif %}
   {% endif %}
+  {% for part in view.extra_parts %}
+  <h2>{{ part.heading }}</h2>
+  {% if part.lines %}<pre class="mailtext">{% for line in part.lines %}{{ line }}
+{% endfor %}</pre>{% endif %}
+  {% if part.note %}<p class="error">{{ part.note }}</p>{% endif %}
+  {% endfor %}
   {% if view.images_warning %}<p class="error">{{ view.images_warning }}</p>{% endif %}
   {% if view.quoted %}
   <details>
