@@ -10,6 +10,8 @@ Nothing here trusts mail content: it is only matched, counted and passed on.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
@@ -50,9 +52,10 @@ from universal_email_mcp.models import (
     MessageSummary,
     TextSlice,
 )
-from universal_email_mcp.service import folder_list, fuzzy
+from universal_email_mcp.service import folder_list, folder_map, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourcePos, query_hash
 from universal_email_mcp.service.drafts import Drafter
+from universal_email_mcp.service.folder_map import FolderMap
 from universal_email_mcp.service.index import HeaderIndex
 from universal_email_mcp.service.organize import Conversation, Organizer
 from universal_email_mcp.service.paging import (
@@ -92,6 +95,8 @@ OVERVIEW_HEADERS = 150
 OVERVIEW_CONTACTS = 20
 OVERVIEW_SENT_UPDATE = 500
 """The overview tops up an existing sent-to set by at most this many headers."""
+log = logging.getLogger(__name__)
+
 OVERVIEW_ROLES: tuple[FolderRole, ...] = ("inbox", "drafts", "junk")
 """Special folders whose STATUS the account overview reads (three round trips)."""
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
@@ -191,6 +196,7 @@ class AccountDetails:
     """Role → decoded folder name."""
     notes: tuple[str, ...] = ()
     overview: AccountOverview | None = None
+    folder_map: FolderMap | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,7 +410,7 @@ class MailService:
 
         def work(session: ImapSession) -> AccountDetails:
             acc = self.config.account(session.account_name)
-            folders = session.list_folders()
+            folders = session.list_folders(refresh=True)
             quota: list[QuotaInfo] | None = None
             notes: list[str] = []
             try:
@@ -435,6 +441,7 @@ class MailService:
                 )
             return AccountDetails(
                 account=acc,
+                folder_map=self._folder_map(session, folders),
                 features=session.features,
                 capabilities=session.capabilities,
                 quota=quota,
@@ -451,6 +458,48 @@ class MailService:
                 acc = self.config.account(p.account)
                 details.append(AccountDetails(acc, None, (), None, {}, (p.message,)))
         return details, [*problems, *fan.problems]
+
+    def _folder_map(self, session: ImapSession, folders: Sequence[FolderInfo]) -> FolderMap:
+        return folder_map.build_map(
+            folders,
+            self._prefix(session),
+            archive_scheme=self.config.account(session.account_name).archive_scheme,
+            is_foreign=session.is_foreign,
+        )
+
+    async def startup_folder_maps(
+        self, timeout: float = folder_map.STARTUP_TIMEOUT
+    ) -> dict[str, FolderMap | None]:
+        """The folder map of every IMAP account for the server instructions, read in
+        parallel through the router (the connections are reused afterwards) within
+        ``timeout`` seconds overall. An account that fails or is too slow maps to
+        ``None``; this never raises (the server must start whatever the mail
+        servers do)."""
+        try:
+            selected, _ = self.router.select(None)
+        except MailError:
+            return {}
+
+        def work(session: ImapSession) -> FolderMap:
+            return self._folder_map(session, session.list_folders(refresh=True))
+
+        tasks = {a.name: asyncio.ensure_future(self.router.call(a, work)) for a in selected}
+        if tasks:
+            _, pending = await asyncio.wait(tasks.values(), timeout=timeout)
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        out: dict[str, FolderMap | None] = {}
+        for name, t in tasks.items():
+            if t.cancelled():
+                log.warning("account %s: folder list not read within %g s", name, timeout)
+                out[name] = None
+            elif (exc := t.exception()) is not None:
+                log.warning("account %s: folder list not read: %s", name, exc)
+                out[name] = None
+            else:
+                out[name] = t.result()
+        return out
 
     async def _fan[T](
         self, accounts: Sequence[Account], fn: Callable[[ImapSession], T]

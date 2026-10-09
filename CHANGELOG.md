@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Folder map in the server instructions: in `local` mode the folder lists of all
+  accounts are read at startup (in parallel, 3 s overall; a slow or unreachable
+  account is shown as "not read at startup" and never blocks the server) and the
+  instructions show per account the special folders (by role), the top-level
+  folders, the number of direct subfolders (`▸ N`) with example names, and the
+  archive scheme with its year range. Capped at 30 entries / 1500 characters per
+  account, own namespace only, names sanitised and framed as data, not
+  instructions. `account_info` returns the current map (text and structured
+  `folder_map`), re-reading the folder list.
 - Local download links: `universal-email-mcp local` runs a listener on `127.0.0.1`
   (random port, or `[downloads] port`) that streams attachments from IMAP at
   `/a/<token>`. Tokens are HMAC-signed with a per-run key and expire (`link_ttl`,

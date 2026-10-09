@@ -20,7 +20,7 @@ wildcard or fuzzy, see :mod:`universal_email_mcp.service.query`.
 import base64
 import functools
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -58,6 +58,7 @@ from universal_email_mcp.server.schemas import (
     DraftOut,
     FolderEntry,
     FolderList,
+    FolderMapEntryOut,
     IdentityOut,
     MessageItem,
     MessageList,
@@ -70,8 +71,9 @@ from universal_email_mcp.server.schemas import (
     WriteItem,
     WriteResult,
 )
-from universal_email_mcp.service import folder_list, fuzzy
+from universal_email_mcp.service import folder_list, folder_map, fuzzy
 from universal_email_mcp.service import query as query_mod
+from universal_email_mcp.service.folder_map import FolderMap
 from universal_email_mcp.service.mail import (
     MAX_CONTACT_DAYS,
     OVERVIEW_HEADERS,
@@ -161,8 +163,9 @@ their own mail client):
 """
 
 
-def instructions(*, organize: bool, delete: bool, drafts: bool = False) -> str:
-    """The server instructions for the tool set that is offered."""
+def instructions(*, organize: bool, delete: bool, drafts: bool = False, folders: str = "") -> str:
+    """The server instructions for the tool set that is offered. ``folders`` is the
+    folder map paragraph (:func:`~universal_email_mcp.service.folder_map.instructions_block`)."""
     access = "Access" if organize or delete or drafts else "Read-only access"
     parts = [_INSTRUCTIONS_HEAD.format(access=access)]
     if organize or delete:
@@ -171,6 +174,8 @@ def instructions(*, organize: bool, delete: bool, drafts: bool = False) -> str:
         parts.append(_INSTRUCTIONS_DELETE)
     if drafts:
         parts.append(_INSTRUCTIONS_DRAFTS)
+    if folders:
+        parts.append(folders)
     return "".join(parts)
 
 
@@ -388,8 +393,13 @@ def _message_table(
 # ----------------------------------------------------------------- server
 
 
-def build_server(service: MailService) -> MCPServer:
-    """Create the MCP server with the tools the configuration allows, bound to ``service``."""
+def build_server(
+    service: MailService, folder_maps: Mapping[str, FolderMap | None] | None = None
+) -> MCPServer:
+    """Create the MCP server with the tools the configuration allows, bound to ``service``.
+
+    ``folder_maps`` (account → folder map, ``None`` = not read) puts the mailbox
+    structure into the instructions; remote mode passes the signed-in user's."""
     cfg = service.config
     offer_organize = _offered(cfg, "organize")
     offer_delete = _offered(cfg, "delete")
@@ -398,7 +408,10 @@ def build_server(service: MailService) -> MCPServer:
         SERVER_NAME,
         title="Universal e-mail (IMAP)",
         instructions=instructions(
-            organize=offer_organize, delete=offer_delete, drafts=offer_drafts
+            organize=offer_organize,
+            delete=offer_delete,
+            drafts=offer_drafts,
+            folders=folder_map.instructions_block(folder_maps or {}),
         ),
         version=__version__,
     )
@@ -465,7 +478,8 @@ def build_server(service: MailService) -> MCPServer:
             "Accounts (with permissions, server features, quota, special folders), "
             "sender identities and the active policy/limits, plus a cheap overview per "
             "account (unread and message counts of INBOX, Drafts and Junk, number of "
-            "folders). Call this to see what each account can do and what is waiting."
+            "folders) and the folder map (top-level folders with subfolder counts; "
+            "refreshes the map in the instructions). Call this to see what each account can do and what is waiting."
         ),
         annotations=READ_ONLY,
     )
@@ -523,6 +537,17 @@ def build_server(service: MailService) -> MCPServer:
                     quota=quota,
                     folder_roles={k: v for k, v in d.roles.items()},
                     overview=ov_out,
+                    folder_map=[
+                        FolderMapEntryOut(
+                            name=e.name,
+                            role=e.role,
+                            subfolders=e.subfolders,
+                            examples=list(e.examples),
+                            archive=e.archive,
+                        )
+                        for e in (d.folder_map.entries if d.folder_map else ())
+                    ],
+                    folder_map_more=d.folder_map.more if d.folder_map else 0,
                     notes=list(d.notes),
                 )
             )
@@ -584,6 +609,13 @@ def build_server(service: MailService) -> MCPServer:
                 rows,
             ),
         ]
+        maps = {d.account.name: d.folder_map for d in details if d.folder_map is not None}
+        if maps:
+            parts += [
+                f"**Folders** ({folder_map.INTRO} ▸ N = direct subfolders; "
+                "list_folders(parent=…) opens one)",
+                folder_map.fence(maps),
+            ]
         if idents:
             parts += [
                 "**Identities**",

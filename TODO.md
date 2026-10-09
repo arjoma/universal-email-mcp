@@ -25,6 +25,16 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Bounded extraction (page/char limits, timeouts, zip-bomb/resource guards).
 - [ ] Attachment-aware search ("the PDF invoice from Huber") and summaries.
 
+## Folder map
+- [ ] Remote mode: the instructions are per user (WP 3e passes the signed-in user's
+      maps to `build_server(folder_maps=…)`); stale-instruction refresh is `account_info`.
+- [ ] A mail server that hangs during the TLS handshake keeps its worker thread until
+      `read_timeout` ends it, so the process exit after a startup timeout can take
+      that long; connecting with a cancellable socket would remove the wait.
+- [ ] `folder_list.build` recurses per level (fine for real mailboxes; a folder tree
+      thousands of levels deep would raise `RecursionError`, which the startup path
+      survives as "not read").
+
 ## Accounts and auth
 - [ ] OIDC SSO for the portal (Entra ID, Keycloak, Authentik, Google, …).
 - [ ] Admin-managed shared mailboxes granted to several users.
