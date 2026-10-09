@@ -254,7 +254,7 @@ def test_the_add_form_for_one_fixed_server(store, tester):
         b.signed_in()
         page = b.page("/portal/accounts/new")
         assert 'name="host"' not in page and 'name="server"' not in page
-        assert "<strong>Mail server</strong>: imap.provider.example" in page
+        assert "</strong> imap.provider.example</p>" in page
         # a host posted anyway is ignored: the operator's server is used
         r = add_account(b, host="evil.example")
         assert r.status_code == 303
