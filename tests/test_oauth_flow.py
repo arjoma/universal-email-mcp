@@ -446,7 +446,7 @@ async def test_refresh_with_a_narrower_scope_issues_a_narrower_token(client, sto
     a = Authz(client, register(client), scope="mail.read mail.organize")
     first = a.exchange(a.code(grants=["primary:mail.organize"])).json()
     assert first["scope"] == "mail.read mail.organize"
-    assert set((await scopes_of(first["access_token"]))) == {"mail.read", "mail.organize"}
+    assert set(await scopes_of(first["access_token"])) == {"mail.read", "mail.organize"}
 
     narrow = refresh(client, a.client_id, first["refresh_token"], scope="mail.read")
     assert narrow.status_code == 200, narrow.text

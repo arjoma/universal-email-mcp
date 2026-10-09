@@ -461,6 +461,8 @@ def matches(s: MessageSummary, c: SearchCriteria) -> bool:
         when = s.received or s.date
         if when is None:
             return False
+        if c.tz is not None:  # days in the user's zone (arrival instants are aware)
+            when = when.astimezone(c.tz) if when.tzinfo else when.replace(tzinfo=c.tz)
         day: date = when.date()
         if (c.since is not None and day < c.since) or (c.before is not None and day >= c.before):
             return False

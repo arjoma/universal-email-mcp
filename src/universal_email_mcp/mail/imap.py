@@ -34,7 +34,8 @@ import sys
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta, tzinfo
+from datetime import time as dt_time
 from typing import Any, Literal, cast
 
 from imapclient import IMAPClient
@@ -195,7 +196,10 @@ class SearchCriteria:
 
     Text criteria are case-insensitive substring matches done by the server.
     ``since``/``before`` compare the arrival date (INTERNALDATE, day precision;
-    ``before`` is exclusive). ``unseen``/``flagged``: ``True`` = only those,
+    ``before`` is exclusive). With ``tz`` they are days *in that zone* and the result is
+    exact: the server search is widened by a day on each side (it counts days in the
+    server's zone) and the messages of the border days are checked on their arrival
+    instant. ``unseen``/``flagged``: ``True`` = only those,
     ``False`` = only the opposite, ``None`` = don't care. ``has_attachment`` is
     best-effort (server pre-filter + BODYSTRUCTURE check of the newest candidates).
     """
@@ -208,11 +212,37 @@ class SearchCriteria:
     text: str | None = None
     since: date | None = None
     before: date | None = None
+    tz: tzinfo | None = None
     unseen: bool | None = None
     flagged: bool | None = None
     has_attachment: bool | None = None
     larger: int | None = None
     smaller: int | None = None
+
+    def server_days(self) -> tuple[date | None, date | None]:
+        """``since``/``before`` as sent to the server: with ``tz`` one day wider on each
+        side (the server counts days in its own zone, which can differ from ``tz`` by up
+        to a day either way); :meth:`ImapSession.search` trims the border days exactly."""
+        if self.tz is None:
+            return self.since, self.before
+        one = timedelta(days=1)
+        try:
+            return (
+                self.since - one if self.since else None,
+                self.before + one if self.before else None,
+            )
+        except OverflowError:  # year 1 / 9999: not a real mailbox date anyway
+            return self.since, self.before
+
+    def day_bounds(self) -> tuple[datetime | None, datetime | None]:
+        """The window as arrival instants (local midnight of ``since`` and ``before`` in
+        ``tz``); ``(None, None)`` without ``tz``."""
+        if self.tz is None:
+            return None, None
+        return (
+            datetime.combine(self.since, dt_time.min, self.tz) if self.since else None,
+            datetime.combine(self.before, dt_time.min, self.tz) if self.before else None,
+        )
 
     def text_items(self) -> list[tuple[str, str]]:
         """``(IMAP key, value)`` for the non-empty text criteria."""
@@ -998,10 +1028,11 @@ class ImapSession:
         out: list[bytes] = [b"UNDELETED"]
         for key, value in include_text:
             out += [key.encode("ascii"), _astring(value)]
-        if criteria.since:
-            out += [b"SINCE", _imap_date(criteria.since)]
-        if criteria.before:
-            out += [b"BEFORE", _imap_date(criteria.before)]
+        since, before = criteria.server_days()
+        if since:
+            out += [b"SINCE", _imap_date(since)]
+        if before:
+            out += [b"BEFORE", _imap_date(before)]
         if criteria.unseen is True:
             out.append(b"UNSEEN")
         elif criteria.unseen is False:
@@ -1068,6 +1099,9 @@ class ImapSession:
             notes += ["server rejected UTF-8 search; non-ASCII terms matched locally", *more_notes]
             exact = False
 
+        if criteria.tz is not None and (criteria.since or criteria.before):
+            uids = self._trim_to_days(uids, criteria)
+
         if criteria.has_attachment is not None:
             uids, att_notes = self._filter_attachments(uids, criteria.has_attachment)
             notes += att_notes
@@ -1083,6 +1117,35 @@ class ImapSession:
             exact=exact,
             notes=tuple(notes),
         )
+
+    def _trim_to_days(self, uids: list[int], criteria: SearchCriteria) -> list[int]:
+        """Drop the messages of the widened border days that arrived outside the window.
+
+        Only messages the server dates within a day of a border can be wrong, so two cheap
+        date-only searches find them and only those get their INTERNALDATE fetched."""
+        lo, hi = criteria.day_bounds()
+        one = timedelta(days=1)
+        border: set[int] = set()
+        for day in (criteria.since, criteria.before):
+            if day is None:
+                continue
+            args = [b"UNDELETED", b"SINCE", _imap_date(day - one), b"BEFORE", _imap_date(day + one)]
+            border.update(self._search_call(args, None)[0])
+        border.intersection_update(uids)
+        if not border:
+            return uids
+        fetched = self._fetch_raw(sorted(border), ["UID", "INTERNALDATE"])
+        outside: set[int] = set()
+        for uid in border:
+            arrived = fetched.get(uid, {}).get(b"INTERNALDATE")
+            if not isinstance(arrived, datetime):
+                outside.add(uid)  # unknown arrival: cannot be shown to be inside
+                continue
+            if arrived.tzinfo is None:
+                arrived = arrived.replace(tzinfo=UTC)
+            if (lo is not None and arrived < lo) or (hi is not None and arrived >= hi):
+                outside.add(uid)
+        return [u for u in uids if u not in outside]
 
     def search_related(self, folder: str, message_ids: Sequence[str]) -> SearchResult:
         """Messages whose Message-ID, In-Reply-To or References header contains one

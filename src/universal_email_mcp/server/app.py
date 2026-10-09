@@ -982,6 +982,7 @@ def build_server(
             body=body,
             since=win.since,
             before=win.before,
+            tz=win.tz,
             unseen=unread,
             flagged=flagged,
             has_attachment=has_attachment,

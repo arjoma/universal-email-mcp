@@ -83,8 +83,11 @@ class SentToIndex:
         self._entries: dict[str, _Entry] = {}
         self._lock = threading.Lock()
 
+    def _local(self, now: datetime | None) -> datetime:
+        return ((now or datetime.now(UTC)) - timedelta(days=self.days)).astimezone()
+
     def _since(self, now: datetime | None) -> date:
-        return ((now or datetime.now(UTC)) - timedelta(days=self.days)).date()
+        return self._local(now).date()
 
     def snapshot(self, account: str) -> SentTo:
         """What is known without any I/O."""
@@ -114,7 +117,8 @@ class SentToIndex:
         sent = session.folder_for_role("sent")
         if sent is None:
             return SentTo(frozenset(), False, f"{account}: no Sent folder found")
-        res = session.search(sent.name, SearchCriteria(since=self._since(now)))
+        local = self._local(now)
+        res = session.search(sent.name, SearchCriteria(since=local.date(), tz=local.tzinfo))
         e = self._entry(account, res.uidvalidity)
         limit = self.update_headers if max_new is None else max_new
         missing = [u for u in res.uids if u not in e.seen]
