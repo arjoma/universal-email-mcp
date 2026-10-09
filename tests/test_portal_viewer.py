@@ -47,7 +47,7 @@ ENV = {
 def test_content_origin_setting():
     op = load_operator_config({**ENV, "CONTENT_ORIGIN": "https://mcp-content.example.com"})
     assert op.content_origin == "https://mcp-content.example.com"
-    assert "mcp-content.example.com" in op.allowed_hosts and "mcp.example.com" in op.allowed_hosts
+    assert op.allowed_hosts == ("mcp.example.com", "mcp-content.example.com")
     assert load_operator_config(ENV).content_origin is None
     for bad, why in (
         ("https://mcp.example.com", "different origin"),
