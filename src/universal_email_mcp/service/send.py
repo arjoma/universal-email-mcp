@@ -206,12 +206,12 @@ def _name(a: Address) -> str:
     return sanitize_line(a.name).replace("@", "(at)")[:60]
 
 
-def _addr(a: Address) -> str:
+def address_text(a: Address) -> str:
     n = _name(a)
     return f"{n} <{a.email}>" if n else a.email
 
 
-def _tag(c: Classified) -> str:
+def class_tag(c: Classified) -> str:
     return {
         "internal": "internal",
         "known": "written to before",
@@ -237,13 +237,13 @@ def confirmation_text(
     quoted original, which is only summarised); without it the whole body is shown.
     What is cut is announced with numbers, never silently."""
     lines = ["Send this e-mail? It cannot be taken back.", ""]
-    lines.append(f"From: {_addr(out.sender)}  (identity {sanitize_line(ident.name)[:40]})")
+    lines.append(f"From: {address_text(out.sender)}  (identity {sanitize_line(ident.name)[:40]})")
     by_field: dict[str, list[Classified]] = {"to": [], "cc": [], "bcc": []}
     for c in classified:
         by_field[c.field].append(c)
     for fld, label in (("to", "To"), ("cc", "Cc"), ("bcc", "Bcc")):
         for c in by_field[fld]:
-            lines.append(f"{label}: {_addr(c.address)}  [{_tag(c)}]")
+            lines.append(f"{label}: {address_text(c.address)}  [{class_tag(c)}]")
     if by_field["bcc"]:
         lines.append("(Bcc recipients are hidden from the others.)")
     lines.append(f"Subject: {sanitize_line(out.subject)[:200] or '(none)'}")
@@ -273,23 +273,57 @@ def confirmation_text(
         head = (
             head[:MAX_HEAD_CHARS] + f"\n... {len(head) - MAX_HEAD_CHARS} more characters NOT shown"
         )
-    body = render.defang_body(sanitize_text(text if text is not None else out.preview)).strip()
+    shown_lines, cut_note = text_excerpt(text if text is not None else out.preview)
     out_lines = ["", "Text:"]
-    if body:
-        shown = body[:SHOW_TEXT_CHARS]
-        shown_lines = shown.split("\n")[:SHOW_TEXT_LINES]
-        shown = "\n".join(shown_lines)
-        out_lines += ["> " + ln for ln in shown.split("\n")]
-        cut = len(body) - len(shown)
-        if cut > 0:
-            n_lines = body.count("\n") - shown.count("\n")
-            out_lines.append(f"... {cut} more characters ({n_lines} lines) of the text NOT shown")
+    if shown_lines:
+        out_lines += ["> " + ln for ln in shown_lines]
+        if cut_note:
+            out_lines.append(cut_note)
     else:
         out_lines.append("> (no plain text)" if not out.has_text_body else "> (empty)")
     if quoted.strip():
         q_lines = len(quoted.strip().split("\n"))
         out_lines.append(f"[quoted original: {q_lines} lines, not shown]")
     return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + MAX_CONFIRM_CHARS]
+
+
+def text_excerpt(text: str) -> tuple[list[str], str]:
+    """The part of a message text a confirmation shows, sanitised and defanged: its lines
+    and - when something was cut - the notice saying how much (never silent). The rules
+    are shared by the elicitation prompt and the portal's approval page."""
+    body = render.defang_body(sanitize_text(text)).strip()
+    if not body:
+        return [], ""
+    shown = "\n".join(body[:SHOW_TEXT_CHARS].split("\n")[:SHOW_TEXT_LINES])
+    cut = len(body) - len(shown)
+    note = ""
+    if cut > 0:
+        n_lines = body.count("\n") - shown.count("\n")
+        note = f"... {cut} more characters ({n_lines} lines) of the text NOT shown"
+    return shown.split("\n"), note
+
+
+def split_quoted(text: str) -> tuple[str, str]:
+    """Split a stored reply draft into the new text and the quoted original behind it
+    (trailing ``>`` lines and their "... wrote:" line). Conservative: anything that is not
+    clearly a quote at the end stays in the new text, so nothing is hidden by a split."""
+    lines = text.split("\n")
+    last_plain = max(
+        (i for i, ln in enumerate(lines) if ln.strip() and not _quoted(ln)), default=-1
+    )
+    start = next((i for i in range(last_plain + 1, len(lines)) if _quoted(lines[i])), None)
+    if start is None:
+        return text, ""
+    j = start - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    if j >= 0 and lines[j].rstrip().endswith(":") and start - j <= 2:
+        start = j
+    return "\n".join(lines[:start]).rstrip(), "\n".join(lines[start:])
+
+
+def _quoted(line: str) -> bool:
+    return line.lstrip().startswith(">")
 
 
 # ----------------------------------------------------------------- results

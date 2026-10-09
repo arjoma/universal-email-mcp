@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.oauth.config import OAuthConfig
-from universal_email_mcp.store import Store
+from universal_email_mcp.store import Grant, Store
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,20 @@ class Principal:
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
 
+    @classmethod
+    def of_grant(cls, grant: Grant) -> Principal:
+        """The principal a stored grant stands for (the portal acts for it when the user
+        approves a send; the grant is checked for expiry by the caller)."""
+        return cls(
+            user_id=grant.user_id,
+            grant_id=grant.id,
+            client_id=grant.client_id,
+            client_name=grant.client_name,
+            scopes=tuple(grant.scope.split()),
+            account_scopes=dict(grant.account_scopes),
+            identity_ids=grant.identity_ids,
+        )
+
 
 class StoreTokenVerifier:
     """``TokenCheck`` for :func:`universal_email_mcp.server.http.create_app`."""
@@ -51,12 +65,4 @@ class StoreTokenVerifier:
         if token.resource.rstrip("/") != self._cfg.resource.rstrip("/"):
             log_event(log, logging.WARNING, "token for another resource refused", event="bearer")
             return None
-        return Principal(
-            user_id=grant.user_id,
-            grant_id=grant.id,
-            client_id=grant.client_id,
-            client_name=grant.client_name,
-            scopes=tuple(grant.scope.split()),
-            account_scopes=dict(grant.account_scopes),
-            identity_ids=grant.identity_ids,
-        )
+        return Principal.of_grant(grant)

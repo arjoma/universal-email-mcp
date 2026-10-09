@@ -32,6 +32,7 @@ from universal_email_mcp.oauth.config import SCOPE_SEND, permission_of
 from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.oauth.redirects import display_host
 from universal_email_mcp.portal import ops
+from universal_email_mcp.portal.approvals import ApprovalPages
 from universal_email_mcp.portal.i18n import LANG_COOKIE, language_name
 from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.portal.web import client_ip, security_headers
@@ -58,6 +59,7 @@ NOTICES = frozenset(
         "client_revoked",
         "client_saved",
         "language_saved",
+        "approval_rejected",
         "signed_out",
     }
 )
@@ -1199,6 +1201,7 @@ class PortalEndpoints:
 
 def portal_group(ps: PortalService) -> RouteGroup:
     ep = PortalEndpoints(ps)
+    approvals = ApprovalPages(ep)
     get, post = ["GET"], ["POST"]
     routes = [
         Route("/portal", ep.home, methods=get),
@@ -1231,5 +1234,8 @@ def portal_group(ps: PortalService) -> RouteGroup:
         Route("/portal/clients/{grant_id}", ep.client_get, methods=get),
         Route("/portal/clients/{grant_id}", ep.client_save, methods=post),
         Route("/portal/clients/{grant_id}/revoke", ep.client_revoke, methods=post),
+        Route("/portal/approvals", approvals.index, methods=get),
+        Route("/portal/approvals/{approval_id}", approvals.detail, methods=get),
+        Route("/portal/approvals/{approval_id}", approvals.decide, methods=post),
     ]
     return RouteGroup(routes)

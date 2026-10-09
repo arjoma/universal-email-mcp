@@ -1,0 +1,36 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Pending approvals") }}{% endblock %}
+{% block heading %}{{ _("Pending approvals") }}{% endblock %}
+{% block body %}
+{{ m.notice_box(notice) }}
+<p class="hint">{{ _("Messages an application wants to send for you but could not ask you about. Nothing is sent until you approve it here.") }}</p>
+{% if approvals %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("Application") }}</th>
+      <th scope="col">{{ _("Requested") }}</th>
+      <th scope="col">{{ _("Status") }}</th>
+      <th scope="col"><span class="sr-only">{{ _("Actions") }}</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in approvals %}
+    <tr>
+      <td>{% if a.client %}{{ a.client }}{% else %}<em>{{ _("(unnamed application)") }}</em>{% endif %}</td>
+      <td>{{ a.created }}</td>
+      <td>
+        {% if a.state == "pending" %}<strong>{{ _("Waiting for you") }}</strong> <span class="hint">({{ _("until") }} {{ a.expires }})</span>
+        {% elif a.state == "expired" %}{{ _("Expired") }}
+        {% elif a.state == "rejected" %}{{ _("Rejected") }}
+        {% else %}{{ _("Application disconnected") }}{% endif %}
+      </td>
+      <td><a class="button{% if a.state == 'pending' %} primary{% endif %}" href="/portal/approvals/{{ a.id }}">{% if a.state == "pending" %}{{ _("Review") }}{% else %}{{ _("Details") }}{% endif %}</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="note">{{ _("Nothing is waiting for your approval.") }}</p>
+{% endif %}
+{% endblock %}

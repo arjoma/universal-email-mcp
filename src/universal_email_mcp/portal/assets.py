@@ -87,6 +87,8 @@ iframe.mailframe {
 }
 details.thread-item { margin: .5rem 0; padding: .4rem .75rem; border: 1px solid var(--line); border-radius: 6px; }
 details.thread-item summary { cursor: pointer; overflow-wrap: anywhere; }
+details { margin: .75rem 0; } summary { cursor: pointer; color: var(--muted); }
+.badge.danger { border-color: var(--danger); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }

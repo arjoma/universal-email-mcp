@@ -1,0 +1,15 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Result") }}{% endblock %}
+{% block heading %}{% if outcome == "sent" %}{{ _("The message was sent") }}{% elif outcome == "failed" %}{{ _("The message could not be sent") }}{% else %}{{ _("The message was not sent") }}{% endif %}{% endblock %}
+{% block body %}
+{% if outcome == "sent" %}
+<p class="notice" role="status">{{ _("Your message has been handed to the mail server.") }}</p>
+{% elif outcome == "failed" %}
+<p class="error" role="alert">{{ _("The mail server did not take the message. It stays in your Drafts folder.") }} <code>{{ code }}</code></p>
+{% if detail %}<p class="hint">{{ detail }}</p>{% endif %}
+{% else %}
+<p class="note" role="alert">{{ _("The message was not sent. It stays in your Drafts folder.") }}</p>
+{% endif %}
+{% if steps %}<ul>{% for s in steps %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}
+<p><a class="button" href="/portal/approvals">{{ _("Back to pending approvals") }}</a></p>
+{% endblock %}

@@ -153,6 +153,7 @@ async def build_oauth_app(
     )
     portal = PortalService(
         oauth=svc,
+        pool=pool,
         mail_servers=op.mail_servers,
         tester=tester or LiveTester(),
         net=NetPolicy(
