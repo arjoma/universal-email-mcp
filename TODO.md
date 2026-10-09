@@ -209,3 +209,18 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       call `save_draft` again to keep the text. A failure after the draft was stored names its id
       in the error hint.
 - [ ] `SendOut.attachments` reports no content types (file names and sizes only).
+
+## Remote HTTP (3a follow-ups)
+- [ ] `serve` is dev-token only: replace `static_token_check` by the OAuth verifier (3c;
+      `BearerAuthMiddleware` takes any `str -> bool` check - make it return a principal and
+      add `resource_metadata` to `WWW-Authenticate`), and the TOML accounts by the per-user
+      service (3e). `OperatorConfig.mail_servers` / `login_domains` are parsed but unused until 3d.
+- [ ] `/ready` has only the `config` check; register the store check in 3b
+      (`HttpSettings.ready_checks`). Consider reporting not-ready after SIGTERM.
+- [ ] Wire the operator limits (`UEM_MAX_*`) and policy (`UEM_*`) per user in 3e; today they
+      overlay the TOML config of the dev mode only.
+- [ ] Audit events (`audit.py`) still go to stderr; 3h moves them to stdout JSON with pseudonyms.
+- [ ] No per-IP/per-token rate limiting and no concurrency cap on `/mcp` (M4 rate limits).
+- [ ] uvicorn re-raises SIGTERM after the graceful stop, so the process exits with status 143
+      instead of 0 (harmless on Cloud Run). No CI image build yet (3i `cloudbuild.yaml`).
+- [ ] `Host` matching is exact on names (no wildcards such as `*.run.app`); list each name.

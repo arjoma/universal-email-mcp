@@ -65,6 +65,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     local = sub.add_parser("local", help="run the MCP server over stdio (local mode)")
     local.add_argument("--config", help="config file (default: $UEM_CONFIG or platform dir)")
+
+    serve = sub.add_parser(
+        "serve",
+        help="run the MCP server over HTTP (remote mode preview, dev token)",
+        description=(
+            "Run the MCP server over Streamable HTTP (/mcp, /health, /ready). TEMPORARY dev "
+            "mode until OAuth exists: serves the accounts of a local config file and requires "
+            "the bearer token in $UEM_DEV_TOKEN, or --insecure-local (127.0.0.1 only, no token). "
+            "Operator settings come from the environment, see docs/operator-env.md."
+        ),
+    )
+    serve.add_argument("--config", help="config file (default: $UEM_CONFIG or platform dir)")
+    serve.add_argument(
+        "--host", help="bind address (default 0.0.0.0; 127.0.0.1 with --insecure-local)"
+    )
+    serve.add_argument("--port", type=int, help="port (default: $PORT, else 8080)")
+    serve.add_argument(
+        "--insecure-local",
+        action="store_true",
+        help="no token; bind to loopback only (temporary, local development)",
+    )
     return p
 
 
@@ -162,6 +183,18 @@ def _cmd_local(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    from universal_email_mcp.operator import load_operator_config
+    from universal_email_mcp.server.serve import run_serve
+
+    cfg = _load_config(args.config)
+    op = load_operator_config(
+        base=cfg, host=args.host, port=args.port, insecure_local=args.insecure_local
+    )
+    run_serve(op, cfg)
+    return 0
+
+
 def _print_error(err: MailError, as_json: bool) -> None:
     if as_json:
         print(json.dumps({"error": err.to_dict()}), file=sys.stderr)
@@ -182,7 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.getLogger("imapclient").setLevel(logging.WARNING)
     audit.setup()  # audit events (send attempts: counts only) always go to stderr
 
-    handlers: dict[str, Any] = {"probe": _cmd_probe, "local": _cmd_local}
+    handlers: dict[str, Any] = {"probe": _cmd_probe, "local": _cmd_local, "serve": _cmd_serve}
     if args.command is None:
         parser.print_help(sys.stderr)
         return 2

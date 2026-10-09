@@ -189,6 +189,25 @@ Results come as Markdown tables (mail text escaped, links defanged) plus
 structured JSON; message bodies are fenced as untrusted content, so the assistant
 can tell mail from instructions.
 
+## Remote mode (preview)
+
+`universal-email-mcp serve` runs the same tools over HTTP (Streamable HTTP, stateless:
+protocol 2026-07-28 and the legacy transport) with `/health` and `/ready`. **This is
+a dev/test preview**: OAuth and the portal come in the next work packages, so for
+now `/mcp` takes one static bearer token and serves the accounts of a local config
+file (for a real deployment, see [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md)
+for all variables and the container image):
+
+```bash
+export UEM_DEV_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export ALLOWED_HOSTS=localhost,127.0.0.1
+uv run universal-email-mcp serve --config config.local.toml --host 127.0.0.1 --port 8080
+claude mcp add --transport http email http://localhost:8080/mcp --header "Authorization: Bearer $UEM_DEV_TOKEN"
+```
+
+Without a token the server refuses to start; `--insecure-local` (loopback only, no
+token) is for experiments on your own machine.
+
 ## Development
 
 To try the server without a real mailbox, start the sandbox: a throw-away local
