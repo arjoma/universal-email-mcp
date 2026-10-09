@@ -445,3 +445,17 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] A tool call with `failed > 0` and some `succeeded` is logged as `ok`; the page shows only
       the counts it has (no "n failed").
 
+
+### Privacy page follow-ups (review of `feat/privacy`)
+- [ ] A tool call in flight while the user deletes their data can still write an activity entry,
+      approval or send marker after the final sweep of `Store.delete_user`; the orphan expires
+      by TTL (at most 30 days) but would re-attach if the same address signs up again in that
+      window. Fix: retire the pool contexts first and wait for `ctx.active == 0` before the
+      sweep, or check that the user exists when writing activity and approvals.
+- [ ] The export needs no fresh password entry (it shows data the user already sees); consider
+      requiring one for hijacked-session scenarios.
+- [ ] Log a warning when `delete_user` fails midway (today only success writes `portal.delete_all`).
+- [ ] Privacy table: the sessions row shows "-" instead of a count; `duration_view` rounds odd
+      second values down to whole minutes; `EXPORT_EXCLUDE` plus the implicit `user_id` drop
+      could be one explicit constant.
+- [ ] More tests: a write racing the delete, a casefold edge case in the typed address.

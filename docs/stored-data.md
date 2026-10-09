@@ -64,7 +64,7 @@ methods.
 **Export.** `Store.export_user(user_id)` returns the user's records as plain data, and the portal
 builds the download from it (format `universal-email-mcp-export`, field `version`, currently 1):
 the user (primary address, created, default identity, the 14-character pseudonym that appears
-in the operator's logs), mail accounts (name, protocol, host, port, TLS, login name, preset,
+in the operator's logs, so the user can point the operator to their log lines), mail accounts (name, protocol, host, port, TLS, login name, preset,
 permissions, created, `auth_failed_at`), sender identities (addresses, display name, signature,
 SMTP host/port/login, flags), connected applications (grants: client name and id, accounts,
 scopes, created, last used, expiry), the activity feed and pending approvals (identity, grant,
