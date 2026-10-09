@@ -113,6 +113,7 @@ def doc_server(tmp: Path) -> Iterator[DocServer]:
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert_file, key_file)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
