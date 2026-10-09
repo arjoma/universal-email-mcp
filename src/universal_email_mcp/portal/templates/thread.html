@@ -1,0 +1,22 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ root_subject or _("(no subject)") }}{% endblock %}
+{% block heading %}{{ root_subject or _("(no subject)") }}{% endblock %}
+{% block body %}
+<p class="actions"><a href="/m/{{ mid }}">{{ _("Back to the message") }}</a></p>
+{% if partial %}<p class="note">{{ _("Some mail accounts did not answer, so the conversation may be incomplete.") }}</p>{% endif %}
+{% for n in notes %}<p class="hint">{{ n }}</p>{% endfor %}
+{% for it in items %}
+<details class="thread-item"{% if it.current %} open{% endif %}>
+  <summary>
+    {{ it.date }} - {{ m.people(it.sender) }}{% if it.subject %} - {{ it.subject }}{% endif %}
+    {% if it.current %}<span class="badge">{{ _("this message") }}</span>{% endif %}
+  </summary>
+  {% if it.text %}
+  <pre class="mailtext" dir="auto">{{ it.text }}</pre>
+  {% else %}
+  <p class="hint">{{ _("The text of this message is not shown here.") }}</p>
+  {% endif %}
+  <p><a href="/m/{{ it.id }}">{{ _("Open this message") }}</a></p>
+</details>
+{% endfor %}
+{% endblock %}

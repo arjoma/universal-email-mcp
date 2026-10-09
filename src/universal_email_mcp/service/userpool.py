@@ -406,9 +406,7 @@ class UserPool:
         """The context behind the portal's message viewer: **only the signed-in user's own**
         accounts (from the store, by ``user_id``) that grant ``read``. Pair with :meth:`release`."""
         accounts = [
-            a
-            for a in await self.store.list_for_user(MailAccount, user_id)
-            if a.user_id == user_id
+            a for a in await self.store.list_for_user(MailAccount, user_id) if a.user_id == user_id
         ]
         accounts.sort(key=lambda a: (a.created_at, a.id))
         principal = Principal(

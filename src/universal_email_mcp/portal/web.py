@@ -125,6 +125,7 @@ class Portal:
         status: int = 200,
         csrf: bool = True,
         form_action_extra: str = "",
+        frame_src: str = "",
         headers: dict[str, str] | None = None,
         **context: Any,
     ) -> HTMLResponse:
@@ -132,18 +133,21 @@ class Portal:
         lang = self.locale(request)
         body = self.translator.render(template, lang, csrf_token=token, **context)
         response = HTMLResponse(body, status_code=status, headers=headers)
-        security_headers(response, form_action_extra)
+        security_headers(response, form_action_extra, frame_src)
         response.headers["content-language"] = lang
         if csrf:
             self.set_csrf(response, token)
         return response
 
 
-def security_headers(response: Response, form_action_extra: str = "") -> None:
+def security_headers(response: Response, form_action_extra: str = "", frame_src: str = "") -> None:
+    """``frame_src``: where the page may embed a frame from (the message viewer's sandboxed
+    HTML view); no frames at all otherwise."""
     form_action = "'self'" + (f" {form_action_extra}" if form_action_extra else "")
+    frames = f"frame-src {frame_src}; " if frame_src else ""
     response.headers["content-security-policy"] = (
         "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; "
-        f"form-action {form_action}; frame-ancestors 'none'"
+        f"{frames}form-action {form_action}; frame-ancestors 'none'"
     )
     response.headers["x-frame-options"] = "DENY"
     response.headers["cache-control"] = "no-store"

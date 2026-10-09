@@ -72,6 +72,21 @@ ul.plain label { display: inline; font-weight: 400; }
 .buttons { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: 1.5rem; }
 button.link { border: 0; padding: 0; color: var(--muted); text-decoration: underline; }
 form.inline { margin-top: 1.25rem; }
+.actions { display: flex; gap: 1rem; flex-wrap: wrap; margin: .5rem 0 1rem; }
+dl.mailhead { display: grid; grid-template-columns: max-content 1fr; gap: .1rem 1rem; }
+dl.mailhead dd, dl.rawheaders dd { margin: 0; }
+dl.rawheaders dt { font-weight: 600; margin-top: .5rem; }
+dl.rawheaders code { white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.mailtext {
+  white-space: pre-wrap; overflow-wrap: anywhere; margin: .5rem 0; padding: .75rem;
+  border: 1px solid var(--line); border-radius: 6px; font: .9rem/1.45 ui-monospace, monospace;
+}
+iframe.mailframe {
+  display: block; width: 100%; height: 70vh; border: 1px solid var(--line); border-radius: 6px;
+  background: #fff;
+}
+details.thread-item { margin: .5rem 0; padding: .4rem .75rem; border: 1px solid var(--line); border-radius: 6px; }
+details.thread-item summary { cursor: pointer; overflow-wrap: anywhere; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }

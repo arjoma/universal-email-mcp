@@ -1,0 +1,18 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Raw headers") }}{% endblock %}
+{% block heading %}{{ _("Raw headers") }}{% endblock %}
+{% block body %}
+<p class="actions"><a href="/m/{{ mid }}">{{ _("Back to the message") }}</a></p>
+<p class="hint">{{ _("The header lines exactly as the mail server delivers them. Anything in them can be forged by the sender, except what your own mail server added (usually the top Received line and the authentication results).") }}</p>
+{% set auth = lines|selectattr("auth")|list %}
+{% if auth %}
+<h2>{{ _("Authentication") }}</h2>
+<dl class="rawheaders">
+  {% for l in auth %}<dt>{{ l.name }}</dt><dd><code>{{ l.value }}</code></dd>{% endfor %}
+</dl>
+{% endif %}
+<h2>{{ _("All headers") }}</h2>
+<dl class="rawheaders">
+  {% for l in lines %}<dt>{{ l.name }}</dt><dd><code>{{ l.value }}</code></dd>{% endfor %}
+</dl>
+{% endblock %}

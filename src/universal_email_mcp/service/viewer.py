@@ -138,9 +138,13 @@ class Viewer:
 
         hits = result.hits
         entries = list(
-            await asyncio.gather(*(read(i, h.summary.id) for i, h in enumerate(hits[:THREAD_BODIES])))
+            await asyncio.gather(
+                *(read(i, h.summary.id) for i, h in enumerate(hits[:THREAD_BODIES]))
+            )
         )
-        entries += [ThreadEntry(h.summary.id, None, i) for i, h in enumerate(hits) if i >= THREAD_BODIES]
+        entries += [
+            ThreadEntry(h.summary.id, None, i) for i, h in enumerate(hits) if i >= THREAD_BODIES
+        ]
         return result, entries
 
     # ------------------------------------------------------------ downloads
@@ -175,9 +179,7 @@ class Viewer:
                 raise TooLarge("the attachment is larger than the download limit")
             return got.leaf.content_type, got.leaf.filename, got.data
 
-        ctype, name, data = await self._router.run_one(
-            account, lambda a: self._router.call(a, fn)
-        )
+        ctype, name, data = await self._router.run_one(account, lambda a: self._router.call(a, fn))
 
         async def one() -> AsyncGenerator[bytes]:
             yield data

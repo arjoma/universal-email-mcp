@@ -1,0 +1,66 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ msg.subject or _("(no subject)") }}{% endblock %}
+{% block heading %}{{ msg.subject or _("(no subject)") }}{% endblock %}
+{% block body %}
+{{ m.header_block(msg) }}
+<p class="actions">
+  {% if msg.has_html %}
+    {% if want_html %}<a href="/m/{{ msg.id }}">{{ _("Show the plain text") }}</a>{% else %}<a href="/m/{{ msg.id }}?view=html">{{ _("Show the formatted (HTML) version") }}</a>{% endif %}
+  {% endif %}
+  <a href="/m/{{ msg.id }}/thread">{{ _("Conversation") }}</a>
+  <a href="/m/{{ msg.id }}/headers">{{ _("Raw headers") }}</a>
+  <a href="{{ eml_url }}">{{ _("Download the message (.eml)") }}</a>
+</p>
+{% if msg.attachments %}
+<h2>{{ _("Attachments") }}</h2>
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("Name") }}</th>
+      <th scope="col">{{ _("Type") }}</th>
+      <th scope="col">{{ _("Size") }}</th>
+      <th scope="col"><span class="sr-only">{{ _("Actions") }}</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in msg.attachments %}
+    <tr>
+      <th scope="row">{{ a.name or _("(unnamed)") }}{% if a.inline %} <span class="badge">{{ _("inline") }}</span>{% endif %}</th>
+      <td><code>{{ a.type }}</code></td>
+      <td>{{ a.size }}</td>
+      <td><a href="/m/{{ msg.id }}/a/{{ a.section }}">{{ _("Download") }}</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if want_html and frame_url %}
+  {% if remote_images and not images_loaded %}
+  <p class="note">{{ ngettext("%(num)s remote image is not loaded.", "%(num)s remote images are not loaded.", remote_images) }}
+    <a href="/m/{{ msg.id }}?view=html&amp;images=1">{{ _("Load remote images") }}</a>
+    <span class="hint">{{ _("The sender may learn that and when you opened the message.") }}</span></p>
+  {% elif images_loaded %}
+  <p class="note">{{ _("Remote images are loaded.") }} <a href="/m/{{ msg.id }}?view=html">{{ _("Stop loading them") }}</a></p>
+  {% endif %}
+  <iframe class="mailframe" sandbox="allow-popups allow-popups-to-escape-sandbox" src="{{ frame_url }}" title="{{ _('The formatted message') }}" referrerpolicy="no-referrer"></iframe>
+  {% if links %}
+  <details>
+    <summary>{{ _("Links in this message") }}</summary>
+    <p class="hint">{{ _("Shown with their targets and made inert; the links in the message above open in a new tab.") }}</p>
+    <ul class="plain">
+      {% for l in links %}<li><code>{{ l }}</code></li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+{% else %}
+  {% if html_failed %}<p class="note">{{ _("The formatted version cannot be shown (it is too complex). This is the plain text.") }}</p>{% endif %}
+  <h2>{{ _("Message text") }}</h2>
+  {% for n in msg.notes %}<p class="hint">{{ n }}</p>{% endfor %}
+  <pre class="mailtext" dir="auto">{{ msg.text }}</pre>
+  {% if msg.more %}<p class="note">{{ _("The text is shortened. Download the message (.eml) to get everything.") }}</p>{% endif %}
+{% endif %}
+<p class="hint">{{ _("The content is shown as it was received. Treat links and attachments with care.") }}</p>
+<div class="buttons">
+  <a class="button" href="/portal/accounts">{{ _("Back to your mail accounts") }}</a>
+</div>
+{% endblock %}

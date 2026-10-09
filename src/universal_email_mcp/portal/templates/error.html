@@ -11,12 +11,24 @@
 {% elif reason == "notfound" %}
 <p>{{ _("This page does not exist, or it does not belong to you.") }}</p>
 <p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
+{% elif reason == "messagegone" %}
+<p>{{ _("This message cannot be shown. It may have been moved or deleted, or it does not belong to you.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
+{% elif reason == "toolarge" %}
+<p>{{ _("This is larger than the limit for downloads on this service.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
+{% elif reason == "unavailable" %}
+<p>{{ _("The mail server did not deliver the message. Please try again in a moment.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
+{% elif reason == "reauth" %}
+<p>{{ _("The mail server rejected the stored password of this account. Enter the password again on the mail accounts page.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
 {% elif reason == "busy" %}
 <p>{{ _("Too many requests. Please try again in a minute.") }}</p>
 {% else %}
 <p>{{ _("This request is not valid, so nothing was done.") }}</p>
 {% endif %}
-{% if reason not in ("csrf", "notfound") %}
+{% if reason not in ("csrf", "notfound", "messagegone", "toolarge", "unavailable", "reauth") %}
 <p class="hint">{{ _("You can close this window and start again in the application.") }}</p>
 {% endif %}
 {% endblock %}
