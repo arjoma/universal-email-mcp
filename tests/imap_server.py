@@ -48,6 +48,7 @@ def self_signed_context(tmp: Path) -> ssl.SSLContext:
         )
     )
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert_file, key_file)
     return ctx
 

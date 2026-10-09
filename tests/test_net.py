@@ -191,6 +191,7 @@ def _make_cert(tmp: Path, name: str) -> tuple[Path, Path]:
 def tls_server(tmp_path: Path) -> Iterator[tuple[int, Path, list[str | None]]]:
     cert, key = _make_cert(tmp_path, "mail.test")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert, key)
     sni_seen: list[str | None] = []
 

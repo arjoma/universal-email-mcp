@@ -52,6 +52,7 @@ def container_runtime() -> str | None:
 def insecure_ctx() -> ssl.SSLContext:
     """TLS context for the container's self-signed certificate (tests and seeding only)."""
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
