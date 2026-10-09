@@ -42,6 +42,7 @@ from universal_email_mcp.oauth.config import (
     SCOPE_SEND,
     permission_of,
 )
+from universal_email_mcp.oauth.ratelimit import RateLimiter, ip_group
 from universal_email_mcp.oauth.redirects import (
     RedirectError,
     csp_form_target,
@@ -201,7 +202,21 @@ class OAuthEndpoints:
             return self._signin_page(request, parsed)
         return await self._consent_page(request, parsed, session)
 
+    @staticmethod
+    def _too_many(
+        limiter: RateLimiter, ip: str, description: str, error: str = "invalid_request"
+    ) -> Response:
+        wait = limiter.retry_after(ip_group(ip)) or 1
+        return oauth_error(error, description, status=429, headers={"retry-after": str(wait)})
+
     async def authorize_post(self, request: Request) -> Response:
+        ip = client_ip(request, self.svc.cfg.trusted_proxy_hops)
+        if not self.svc.limits.authorize_ip.allow(ip_group(ip)):
+            await self.svc.audit("ratelimit.hit", scope="authorize_ip", ip=ip)
+            wait = self.svc.limits.authorize_ip.retry_after(ip_group(ip)) or 1
+            response = _error_page(self.svc, request, "busy", 429)
+            response.headers["retry-after"] = str(wait)
+            return response
         form = await request.form()
         parsed = await self._parse(request, _params(form))
         if isinstance(parsed, Response):
@@ -537,9 +552,9 @@ class OAuthEndpoints:
     async def token(self, request: Request) -> Response:
         svc = self.svc
         ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-        if not svc.limits.token_ip.allow(ip or "-"):
+        if not svc.limits.token_ip.allow(ip_group(ip)):
             await svc.audit("ratelimit.hit", scope="token_ip")
-            return oauth_error("invalid_request", "too many requests", status=429)
+            return self._too_many(svc.limits.token_ip, ip, "too many requests")
         if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
             return oauth_error("invalid_request", "send application/x-www-form-urlencoded")
         form = await request.form()
@@ -662,8 +677,9 @@ class OAuthEndpoints:
     async def revoke(self, request: Request) -> Response:
         svc = self.svc
         ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-        if not svc.limits.token_ip.allow(ip or "-"):
-            return oauth_error("invalid_request", "too many requests", status=429)
+        if not svc.limits.token_ip.allow(ip_group(ip)):
+            await svc.audit("ratelimit.hit", scope="token_ip")
+            return self._too_many(svc.limits.token_ip, ip, "too many requests")
         if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
             return oauth_error("invalid_request", "send application/x-www-form-urlencoded")
         form = await request.form()
@@ -682,9 +698,13 @@ class OAuthEndpoints:
     async def register(self, request: Request) -> Response:
         svc = self.svc
         ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-        if svc.limits.register_global.blocked("*") or not svc.limits.register_ip.allow(ip or "-"):
+        if svc.limits.register_global.blocked("*") or not svc.limits.register_ip.allow(
+            ip_group(ip)
+        ):
             await svc.audit("ratelimit.hit", scope="register")
-            return oauth_error("invalid_client_metadata", "too many registrations", status=429)
+            return self._too_many(
+                svc.limits.register_ip, ip, "too many registrations", "invalid_client_metadata"
+            )
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > MAX_REGISTER_BYTES:
             return oauth_error("invalid_client_metadata", "request too large", status=413)

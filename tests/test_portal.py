@@ -451,10 +451,14 @@ async def test_password_change_is_checked_and_reaches_the_identity_copy(alice, t
 
 
 async def test_connection_tests_are_rate_limited(store, tester):
-    from universal_email_mcp.oauth.config import RateLimits
+    from universal_email_mcp.oauth.config import Rate, RateLimits
 
     app = await make_app(
-        store=store, tester=tester, rate_limits=RateLimits(test_per_user=3, test_per_target=100)
+        store=store,
+        tester=tester,
+        rate_limits=RateLimits(
+            test_user=Rate(3, timedelta(minutes=10)), test_target=Rate(100, timedelta(minutes=10))
+        ),
     )
     with Browser(app) as b:
         b.signed_in()

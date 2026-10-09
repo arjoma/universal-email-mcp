@@ -102,7 +102,7 @@ def make_config(op: OperatorConfig, *, rate_limits: RateLimits | None = None) ->
         reauth_window=o.reauth_window,
         max_accounts=o.max_accounts,
         max_identities=o.max_identities,
-        rate_limits=rate_limits or RateLimits(),
+        rate_limits=rate_limits or op.rate_limits,
     )
 
 
@@ -150,7 +150,7 @@ async def build_oauth_app(
     pool = UserPool(store, op, build_server, tls=mail_tls or TlsSettings())
     assert op.store is not None
     mcp = mcp_group(
-        PerUserServer(pool, request_state_security(op.store.keys)),
+        PerUserServer(pool, request_state_security(op.store.keys), cfg.rate_limits),
         op,
         lambda routes: wrap_routes(routes, pool),
     )

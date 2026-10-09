@@ -159,7 +159,7 @@ EVENTS: dict[str, Spec] = {
     "auth.code_replay": _s(severity="WARNING"),
     "auth.revoke": _s("token_type", "grant", feed=True),
     "portal.reauth": _s("reason", "ip", severity="outcome"),
-    "ratelimit.hit": _s("scope", "ip", severity="WARNING"),
+    "ratelimit.hit": _s("scope", "ip", "grant", severity="WARNING"),
     # --- portal changes
     "portal.account_add": _s("protocol", "with_identity", feed=True),
     "portal.account_test": _s(severity="outcome", feed=True),

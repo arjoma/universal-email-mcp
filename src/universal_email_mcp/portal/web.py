@@ -29,6 +29,7 @@ from universal_email_mcp.portal.i18n import LANG_COOKIE, Translator, resolve_loc
 
 CSRF_BYTES = 32
 CSRF_FIELD = "csrf_token"
+MAX_FORWARDED_BYTES = 1024
 
 
 def client_ip(request: Request, trusted_hops: int) -> str:
@@ -38,7 +39,9 @@ def client_ip(request: Request, trusted_hops: int) -> str:
     peer = request.client.host if request.client else ""
     if trusted_hops <= 0:
         return peer
-    chain = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    # Only the right-hand entries matter; a hostile megabyte header is not parsed whole.
+    header = request.headers.get("x-forwarded-for", "")[-MAX_FORWARDED_BYTES:]
+    chain = [p.strip() for p in header.split(",") if p.strip()]
     if len(chain) < trusted_hops:
         return peer
     candidate = chain[-trusted_hops]

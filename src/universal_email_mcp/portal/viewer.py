@@ -241,6 +241,8 @@ class ViewerEndpoints(PortalEndpoints):
             return self._to_signin(request)
         if self.pool is None or not _MESSAGE_ID.match(mid):
             return self._error(request, None, "messagegone")
+        if wait := await self._hit(request, auth.user.id, "viewer"):
+            return self._too_many(request, wait)
         async with AsyncExitStack() as stack:
             try:
                 viewer, _ctx = await self._open(auth, stack)
@@ -409,6 +411,13 @@ class ViewerEndpoints(PortalEndpoints):
     async def _serve_html(self, user_id: str, mid: str, images: bool) -> Response:
         pool = self.pool
         assert pool is not None
+        if wait := await self._hit(None, user_id, "viewer"):
+            return Response(
+                "Too many requests.\n",
+                status_code=429,
+                media_type="text/plain",
+                headers={"retry-after": str(wait)},
+            )
         try:
             async with AsyncExitStack() as stack:
                 ctx = await pool.lease_viewer(user_id)
@@ -441,6 +450,8 @@ class ViewerEndpoints(PortalEndpoints):
             return self._to_signin(request)
         if self.pool is None or not _MESSAGE_ID.match(mid):
             return self._error(request, None, "messagegone")
+        if wait := await self._hit(request, auth.user.id, "download"):
+            return self._too_many(request, wait)
         stack = AsyncExitStack()
         try:
             viewer, _ctx = await self._open(auth, stack)
