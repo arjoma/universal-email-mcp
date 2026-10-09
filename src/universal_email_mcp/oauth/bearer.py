@@ -9,7 +9,7 @@ refused). Nothing about a refused token is logged except the reason.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.oauth.config import OAuthConfig
@@ -62,4 +62,7 @@ class StoreTokenVerifier:
         if token.resource.rstrip("/") != self._cfg.resource.rstrip("/"):
             log_event(log, logging.WARNING, "token for another resource refused", event="bearer")
             return None
-        return Principal.of_grant(grant)
+        # A refresh with a narrower scope issued a token with less than the grant's scope.
+        granted = grant.scope.split()
+        scopes = tuple(w for w in token.scope.split() if w in granted)
+        return replace(Principal.of_grant(grant), scopes=scopes)

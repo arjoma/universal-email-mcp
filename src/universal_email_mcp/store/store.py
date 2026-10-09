@@ -93,6 +93,8 @@ class IssuedTokens:
     access_expires_at: datetime
     refresh_expires_at: datetime | None
     grant: Grant
+    scope: str = ""
+    """The scope of this pair; the grant's scope, or less after a narrowing refresh."""
 
 
 # --- record <-> document ----------------------------------------------------------------
@@ -458,8 +460,9 @@ class Store:
         )
 
     def _token_pair(
-        self, grant: Grant, client_id: str, resource: str, now: datetime
+        self, grant: Grant, client_id: str, resource: str, now: datetime, scope: str | None = None
     ) -> tuple[IssuedTokens, list[Op]]:
+        scope = grant.scope if scope is None else scope
         refresh_exp = self._refresh_expiry(grant, now)
         access_exp = now + self.policy.access_ttl
         if refresh_exp is not None:
@@ -474,7 +477,7 @@ class Store:
                 client_id=client_id,
                 token_type=kind,
                 resource=resource,
-                scope=grant.scope,
+                scope=scope,
                 created_at=now,
                 expires_at=exp,
             )
@@ -489,7 +492,7 @@ class Store:
                 grant.version,
             )
         )
-        return IssuedTokens(raw_a, raw_r, access_exp, refresh_exp, new_grant), ops
+        return IssuedTokens(raw_a, raw_r, access_exp, refresh_exp, new_grant, scope), ops
 
     async def issue_tokens(self, grant: Grant, *, resource: str = "") -> IssuedTokens:
         """First token pair of a pending grant (after the code was redeemed); once only."""
@@ -505,8 +508,16 @@ class Store:
                 continue
         raise StoreConflict("grant changed concurrently")
 
-    async def rotate_refresh_token(self, raw: str, *, client_id: str) -> IssuedTokens:
+    async def rotate_refresh_token(
+        self, raw: str, *, client_id: str, scope: Sequence[str] | None = None
+    ) -> IssuedTokens:
         """Exchange a refresh token for a new pair, atomically.
+
+        The new pair carries the scope of the presented refresh token (never the grant's
+        full scope again), narrowed to ``scope`` if given (RFC 6749 section 6: at most what
+        was granted; words outside the old scope are dropped). A narrowing therefore
+        **sticks** for this refresh-token chain: a later refresh cannot widen it back, only
+        a new authorization can.
 
         The old token stays as ``consumed`` until its expiry. Presenting it again (or racing
         another exchange) revokes the whole grant and raises :class:`TokenReuse`. A concurrent
@@ -524,7 +535,12 @@ class Store:
             if old.consumed:
                 await self.revoke_grant(grant.id)
                 raise TokenReuse("refresh token was already used; session revoked")
-            issued, ops = self._token_pair(grant, client_id, old.resource, self.now())
+            have = [w for w in old.scope.split() if w in grant.scope.split()]
+            if scope is not None:
+                have = [w for w in have if w in scope]
+            issued, ops = self._token_pair(
+                grant, client_id, old.resource, self.now(), " ".join(have)
+            )
             used = replace(old, consumed=True)
             ops.append(
                 Op("replace", old.KIND, old.id, self.encode(used, old.version + 1), old.version)

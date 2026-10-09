@@ -175,7 +175,13 @@ interface. The SDK's *client* is what the end-to-end tests drive.
 6. `refresh_token` exchanges for a new pair; the old refresh token is marked consumed.
    Presenting a consumed token revokes the grant (replay detection, strict: two truly
    concurrent refreshes of the same token also end the session - see `TODO.md`). A refresh
-   cannot widen the scope.
+   cannot widen the scope. With `scope=...` the new pair carries at most that scope (RFC 6749
+   section 6; words outside the presented token's scope give `invalid_scope`); without it the
+   new pair keeps the scope of the presented refresh token. A narrowing therefore **sticks**
+   for the whole refresh-token chain and is never silently widened back; a new authorization
+   is needed for more. `/mcp` honours the narrower token scope (intersected with the grant).
+   A parameter sent more than once is `invalid_request` on `/authorize`, `/token` and
+   `/revoke` (RFC 6749 section 3.1), a duplicated JSON member on `/register`.
 7. `/mcp` accepts only a live access token **issued for `PUBLIC_URL/mcp`** (RFC 8707); other
    audiences, expired, revoked or unknown tokens get 401.
 
