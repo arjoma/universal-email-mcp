@@ -68,7 +68,12 @@ class Browser:
             assert form["action"] == "signin", page.text
             r = await http.post(
                 urlsplit(url)._replace(path="/authorize", query="").geturl(),
-                data={**form, "address": self.user, "password": self.password},
+                data={
+                    **form,
+                    "address": self.user,
+                    "password": self.password,
+                    "store_password": "1",
+                },
             )
             assert r.status_code == 303, r.text
             consent = await http.get(

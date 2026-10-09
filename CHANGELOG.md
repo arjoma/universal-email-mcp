@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Remote mode: signing in (portal and OAuth) now only verifies the password. The mailbox
+  password is stored sealed, and the account "Main" plus a sender identity created, only if
+  the user ticks the pre-ticked opt-in checkbox "Use this mailbox with AI clients (stores the
+  password encrypted)". Unticked, nothing is stored; an existing "Main" still has its password
+  refreshed at later sign-ins.
+
 ### Added
 
 - User portal (work package 3d; `docs/portal.md`), server-rendered at `/portal` without

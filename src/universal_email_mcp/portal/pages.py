@@ -260,7 +260,11 @@ class PortalEndpoints:
             )
         assert isinstance(password, str)
         raw = await signin.complete_sign_in(
-            self.svc, check, password, self.web.session_cookie(request)
+            self.svc,
+            check,
+            password,
+            self.web.session_cookie(request),
+            store_password=bool(form.get("store_password")),
         )
         response = self._redirect(nxt)
         self.web.set_session(response, raw)

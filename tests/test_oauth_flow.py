@@ -740,3 +740,15 @@ def test_origin_header_of_browser_posts(client):
         == 403
     )
     assert client.post("/authorize", data=form, headers={"origin": ISSUER}).status_code == 303
+
+
+async def test_consent_without_accounts_grants_nothing(client, store):
+    a = Authz(client, register(client))
+    assert a.sign_in(store=False).status_code == 303
+    page = a.consent_page().text
+    assert "have not connected a mail account" in page and 'href="/portal/accounts"' in page
+    assert 'name="grant"' not in page
+    r = a.decide(grants=[])  # nothing to tick: a grant cannot be created
+    assert r.status_code == 400 and "Select at least one permission" in r.text
+    q = query_of(a.decide(action="deny").headers["location"])
+    assert q["error"] == "access_denied"

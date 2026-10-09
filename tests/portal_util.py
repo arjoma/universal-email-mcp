@@ -74,10 +74,13 @@ class Browser:
         body = {"csrf_token": self.csrf, **(data or {})}
         return self.client.post(path, data=body, **kw)
 
-    def sign_in(self, password: str = PASSWORD, next_: str = "/portal/accounts") -> httpx2.Response:
-        return self.post(
-            "/portal/signin", {"address": self.address, "password": password, "next": next_}
-        )
+    def sign_in(
+        self, password: str = PASSWORD, next_: str = "/portal/accounts", store: bool = True
+    ) -> httpx2.Response:
+        data = {"address": self.address, "password": password, "next": next_}
+        if store:
+            data["store_password"] = "1"
+        return self.post("/portal/signin", data)
 
     def signed_in(self) -> Browser:
         r = self.sign_in()

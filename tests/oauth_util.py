@@ -109,7 +109,8 @@ def grant_values(page: str) -> list[str]:
 
 def account_id_of(page: str) -> str:
     """Id of the first account on a consent page (the sign-in mailbox, ``a_...``)."""
-    return grant_values(page)[0].split(":")[0]
+    values = grant_values(page)
+    return values[0].split(":")[0] if values else ""
 
 
 def query_of(location: str) -> dict[str, str]:
@@ -152,13 +153,19 @@ class Authz:
         return self.client.get("/authorize", params=self.params())
 
     def sign_in(
-        self, address: str = "alice@example.org", password: str = PASSWORD
+        self, address: str = "alice@example.org", password: str = PASSWORD, store: bool = True
     ) -> httpx2.Response:
         page = self.open()
         assert page.status_code == 200, page.text
         form = hidden_fields(page.text)
         return self.client.post(
-            "/authorize", data={**form, "address": address, "password": password}
+            "/authorize",
+            data={
+                **form,
+                "address": address,
+                "password": password,
+                **({"store_password": "1"} if store else {}),
+            },
         )
 
     def consent_page(self) -> httpx2.Response:

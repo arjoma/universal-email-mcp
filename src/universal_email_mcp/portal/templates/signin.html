@@ -23,7 +23,8 @@
   <input id="address" name="address" type="email" inputmode="email" autocomplete="username" required autofocus maxlength="254" value="{{ address }}">
   <label for="password">{{ _("Password") }}</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
-  <p class="hint">{{ _("Your password is checked with your mail provider. The first time you sign in it is also saved, encrypted, so that applications you allow can read your mail; you can remove it in the account settings.") }}</p>
+  <p><label class="choice"><input type="checkbox" name="store_password" value="1" checked> {{ _("Use this mailbox with AI clients (stores the password encrypted)") }}</label></p>
+  <p class="hint">{{ _("Signing in only checks your password with your mail provider. If you tick the box, it is also saved, encrypted, as the mail account Main so that applications you allow can read your mail; you can remove it under Accounts. Without it, nothing is stored and you can add a mailbox later.") }}</p>
   <div class="buttons">
     <button type="submit" class="primary">{{ _("Sign in") }}</button>
   </div>
