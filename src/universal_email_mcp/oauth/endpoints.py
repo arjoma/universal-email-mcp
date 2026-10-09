@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -119,6 +119,26 @@ def add_query(uri: str, params: Mapping[str, str]) -> str:
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 
+def _repeated(source: Any, names: Iterable[str] | None = None) -> bool:
+    """Is a parameter (of ``names``, default all) sent more than once? RFC 6749 section 3.1:
+    parameters must not be included more than once, and "last value wins" is how a
+    proxy and this server could disagree."""
+    seen: set[str] = set()
+    watched = None if names is None else set(names)
+    for key, _ in source.multi_items():
+        if (watched is None or key in watched) and key in seen:
+            return True
+        seen.add(key)
+    return False
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate member name")
+    return dict(pairs)
+
+
 def _params(source: Mapping[str, Any]) -> dict[str, str]:
     """Only the known authorization fields, only plain strings, length-capped."""
     out: dict[str, str] = {}
@@ -194,6 +214,8 @@ class OAuthEndpoints:
     # -- /authorize -------------------------------------------------------------------
 
     async def authorize_get(self, request: Request) -> Response:
+        if _repeated(request.query_params, _AUTHZ_FIELDS):
+            return _error_page(self.svc, request, "invalid")
         parsed = await self._parse(request, _params(request.query_params))
         if isinstance(parsed, Response):
             return parsed
@@ -218,6 +240,8 @@ class OAuthEndpoints:
             response.headers["retry-after"] = str(wait)
             return response
         form = await request.form()
+        if _repeated(form, (*_AUTHZ_FIELDS, "action")):
+            return _error_page(self.svc, request, "invalid")
         parsed = await self._parse(request, _params(form))
         if isinstance(parsed, Response):
             return parsed
@@ -558,6 +582,8 @@ class OAuthEndpoints:
         if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
             return oauth_error("invalid_request", "send application/x-www-form-urlencoded")
         form = await request.form()
+        if _repeated(form):
+            return oauth_error("invalid_request", "a parameter was sent more than once")
         values = {k: v for k, v in form.items() if isinstance(v, str)}
         if "client_secret" in values or request.headers.get("authorization"):
             return oauth_error(
@@ -685,6 +711,8 @@ class OAuthEndpoints:
         if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
             return oauth_error("invalid_request", "send application/x-www-form-urlencoded")
         form = await request.form()
+        if _repeated(form):
+            return oauth_error("invalid_request", "a parameter was sent more than once")
         raw, client_id = form.get("token"), form.get("client_id")
         if not isinstance(raw, str) or not raw or len(raw) > 200:
             return oauth_error("invalid_request", "token is required")
@@ -714,7 +742,7 @@ class OAuthEndpoints:
         if len(body) > MAX_REGISTER_BYTES:
             return oauth_error("invalid_client_metadata", "request too large", status=413)
         try:
-            data = json.loads(body)
+            data = json.loads(body, object_pairs_hook=_no_duplicate_keys)
         except (ValueError, RecursionError):
             return oauth_error("invalid_client_metadata", "the body is not valid JSON")
         try:
