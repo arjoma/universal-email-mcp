@@ -22,6 +22,7 @@ variables) and never logged.
 | `PORT` | `8080` | TCP port (Cloud Run sets it). `--port` wins. |
 | `UEM_DEV_TOKEN` | - | Dev mode only: static bearer token for `/mcp`, at least 32 characters. Without it (and without `--insecure-local`) the server runs in OAuth mode and needs `STORE_BACKEND`. |
 | `PUBLIC_URL` | - | Externally visible origin, e.g. `https://mcp.example.com` (no path; `http` only for localhost). Its host is allowed as `Host`, its origin as `Origin`; HSTS is sent when it is `https`. **Required in OAuth mode:** it is the OAuth issuer (`iss`) and the base of the metadata URLs and of the resource (`PUBLIC_URL/mcp`). |
+| `CONTENT_ORIGIN` | - | Optional, **recommended**: a second origin with its own host name (e.g. `https://mcp-content.example.com`, same scheme as `PUBLIC_URL`) that serves the sandboxed HTML of mail for the portal's message viewer, so that mail HTML never shares an origin with the portal. Its host is added to the allowed hosts; route the host name to the same service (only `/c/*` is used there). The addresses are signed with a key derived from `PSEUDONYM_KEY` - with several instances all need the same key. See [portal.md](portal.md). |
 | `ALLOWED_HOSTS` | - | More host names (comma separated, no ports) the server answers to, e.g. the platform's default URL host. Any other `Host` gets 421. `/health` and `/ready` are exempt (probes). **At least one of `PUBLIC_URL` / `ALLOWED_HOSTS` is required.** |
 | `ALLOWED_ORIGINS` | - | More origins accepted in an `Origin` header (a request without `Origin` is fine). Any other gets 403. |
 | `UEM_MAX_REQUEST_BYTES` | `4194304` | Largest request body; more gets 413. |
@@ -61,6 +62,7 @@ out on your own machine, and nothing else.
 | `UEM_SESSION_MAX_AGE` | `7776000` (90 days) | Absolute lifetime of a connected client, however often it refreshes. `0` = unlimited. |
 | `UEM_PORTAL_IDLE_TIMEOUT` / `UEM_PORTAL_SESSION_MAX` | `1800` / `43200` | Browser sign-in session: idle timeout and absolute maximum, seconds. |
 | `UEM_REAUTH_WINDOW` | `300` | Seconds after typing the password again during which sensitive portal actions and granting `send` need no new entry (see [portal.md](portal.md)). Signing in counts. |
+| `UEM_MAX_DOWNLOAD_BYTES` | `104857600` (100 MiB) | Largest attachment or `.eml` the portal viewer streams (decoded size); bigger ones answer 413. |
 | `UEM_MAX_ACCOUNTS_PER_USER` / `UEM_MAX_IDENTITIES_PER_USER` | `10` / `10` | How many mail accounts and sender identities one user may have. |
 | `UEM_DCR` | `true` | Offer `/register` (Dynamic Client Registration) as fallback to Client ID Metadata Documents. |
 | `UEM_DCR_REDIRECT_HOSTS` | any | Comma separated hosts a dynamically registered `https` redirect URI may use (loopback is always allowed). |

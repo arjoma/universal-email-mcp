@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Message viewer in the portal (work package 3g; `docs/portal.md`): every message in a tool
+  result of remote mode links to `PUBLIC_URL/m/<id>` (attachments `/m/<id>/a/<part>`, source
+  `/m/<id>/eml`; no tokens in the links - the portal session authorises, a signed-out visitor
+  is sent to sign-in and back). Pages: message (headers, text, attachment list), conversation,
+  raw headers with the authentication results, `.eml` download. Messages are resolved only
+  inside the signed-in user's own accounts that grant `read` (another user's or a forged id
+  answers the same 404 as a deleted message); nothing is marked as read. **HTML mail** is
+  shown only in a sandboxed iframe (no scripts, no same-origin) served by its own route with a
+  strict CSP (`default-src 'none'`, `img-src data:`), cleaned by an allow-list sanitizer
+  (`nh3`) and an own CSS filter; `cid:` images are inlined, remote images load only after an
+  explicit click for that view, links open in a new tab with `noopener noreferrer` and are
+  listed defanged. Optional `CONTENT_ORIGIN` serves that document from a separate origin via
+  signed ten minute addresses. Attachments stream from IMAP chunk by chunk (reusing the
+  verified part lookup and incremental decoders of the local download server) with
+  `Content-Disposition: attachment`, `nosniff`, a sandbox CSP and the passive type allow-list;
+  `UEM_MAX_DOWNLOAD_BYTES` caps them. POP3 messages work too (read whole). Audit events
+  `viewer.open`, `viewer.raw`, `attachment.download`.
 - User portal (work package 3d; `docs/portal.md`), server-rendered at `/portal` without
   scripts: **mail accounts** (add IMAP or POP3 from the operator's `MAIL_SERVERS` or - only if
   that list is empty - by host name with SSRF guards and encrypted ports only; the login is
