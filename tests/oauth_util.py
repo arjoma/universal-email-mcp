@@ -39,6 +39,7 @@ class FakeLogin:
         self.users = users if users is not None else {"alice@example.org", "bob@example.org"}
         self.attempts = 0
         self.broken = False
+        self.password = PASSWORD
 
     async def verify(self, address: Address, password: str, profile: Any) -> None:
         self.attempts += 1
@@ -46,7 +47,7 @@ class FakeLogin:
             from universal_email_mcp.errors import ServerUnreachable
 
             raise ServerUnreachable("down")
-        if address.normal not in self.users or password != PASSWORD:
+        if address.normal not in self.users or password != self.password:
             raise AuthFailed("nope")
 
 
@@ -71,9 +72,11 @@ async def make_app(
     store: Store | None = None,
     fetch_policy: FetchPolicy | None = None,
     rate_limits: RateLimits | None = None,
+    tester: Any = None,
 ) -> Starlette:
     return await build_oauth_app(
         op or operator(),
+        tester=tester,
         store=store,
         login=login or FakeLogin(),
         fetch_policy=fetch_policy,
