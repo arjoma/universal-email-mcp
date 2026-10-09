@@ -145,6 +145,7 @@ class PerUserServer(MCPServer):
             )
         started = time.monotonic()
         result: Any = None
+        refusal = None
         try:
             refusal = self.tool_rate.check(ctx.user_id, ctx.grant_id, name)
             if refusal is not None:  # before a pool slot, a lease or any mail server is touched
@@ -164,7 +165,10 @@ class PerUserServer(MCPServer):
             result = _error_result(e)
             return result
         finally:
-            await self._audit_call(ctx, name, time.monotonic() - started, result)
+            # A refused call is audited as ``ratelimit.hit`` only: a client that ignores
+            # ``retry_after`` must not turn every refusal into a feed write.
+            if refusal is None:
+                await self._audit_call(ctx, name, time.monotonic() - started, result)
 
     async def _audit_call(self, ctx: UserContext, name: str, seconds: float, result: Any) -> None:
         """One ``tool.call`` event (and feed entry): tool name, outcome code, duration
