@@ -419,4 +419,17 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       do, with `AUDIT_LOG_CLIENT_IP`); there is no `session` id in events.
 - [ ] Local per-install key (`audit.key` in the state directory): no rotation; deleting it
       changes all pseudonyms (documented behaviour, but there is no command for it).
+- [ ] `send.*` audit events (and the `send` feed entry) pass the account *name*, other events the
+      account id, so the account pseudonym differs between them; pass the id everywhere and drop
+      the id-vs-name heuristic in `portal/activity.py` (for `portal.account_remove` keep the name
+      in a separate feed field).
+- [ ] Not merged in the feed: `auth.sign_in` and the write tools (`mark/move/delete`) write one
+      entry per event; the send rate limit scans the whole feed, so a looping client could bloat
+      it. Cap entries per user or query only `event == "send"`.
+- [ ] A merged feed write costs create + get + update round trips after the first call of the
+      hour; try get-then-update first, or write in the background with a bounded queue.
+- [ ] `audit` state (key, feed sink) is module-global: one app per process is assumed. Multi
+      instance deployments need the same `PSEUDONYM_KEY` everywhere for stable pseudonyms.
+- [ ] A tool call with `failed > 0` and some `succeeded` is logged as `ok`; the page shows only
+      the counts it has (no "n failed").
 

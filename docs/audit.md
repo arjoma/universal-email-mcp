@@ -84,6 +84,9 @@ account names from the user's own records when the page is rendered.
 * A feed write that fails or takes longer than 3 seconds never breaks the request; the log line
   has already been written.
 
+Pseudonyms are stable across instances only with the same `PSEUDONYM_KEY` (required in
+production anyway). The audit state is process-global: one app per process.
+
 ## Operations
 
 Log-based metrics and alert examples: [deploy-gcp.md](deploy-gcp.md), section 10.

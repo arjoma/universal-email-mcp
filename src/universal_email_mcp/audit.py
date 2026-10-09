@@ -55,6 +55,7 @@ FEED_TIMEOUT = 3.0
 INVALID = "invalid"
 
 _TOKEN = re.compile(r"[A-Za-z0-9_<>=+-]{1,24}(\.[A-Za-z0-9_<>=+-]{1,24}){0,2}")
+_INSTANCE = re.compile(r"[A-Za-z0-9_-]{1,63}")
 _USER = re.compile(r"u_[0-9a-f]{8,64}")
 
 
@@ -262,7 +263,7 @@ def configure(
             raise ValueError("the audit key needs at least 16 bytes")
         _state.key = key
     if instance is not None:
-        _state.instance = instance if _TOKEN.fullmatch(instance) else INVALID
+        _state.instance = instance if _INSTANCE.fullmatch(instance) else INVALID
     if log_ip is not None:
         _state.log_ip = log_ip
     if strict is not None:
@@ -295,16 +296,32 @@ def local_key(directory: str | os.PathLike[str] | None = None) -> bytes:
         path = os.path.join(directory, "audit.key")
         os.makedirs(directory, mode=0o700, exist_ok=True)
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with open(path, "rb") as f:
+                data = f.read()
+            if len(data) >= 16:
+                return data
+        except FileNotFoundError:
+            pass
+        # Write a complete private file first, then publish it atomically: a concurrent
+        # process sees either no key or the whole key, never half of it. A damaged file
+        # (too short) is replaced.
+        key = secrets.token_bytes(32)
+        tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+        try:
+            os.link(tmp, path)
         except FileExistsError:
             with open(path, "rb") as f:
                 data = f.read()
             if len(data) >= 16:
                 return data
-            raise OSError("audit key file is damaged") from None
-        with os.fdopen(fd, "wb") as f:
-            key = secrets.token_bytes(32)
-            f.write(key)
+            os.replace(tmp, path)
+            return key
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
         return key
     except OSError:
         return secrets.token_bytes(32)

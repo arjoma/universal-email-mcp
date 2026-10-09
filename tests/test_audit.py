@@ -286,3 +286,16 @@ def test_pseudonyms_are_stable_across_processes_with_a_persisted_key(tmp_path: A
     )
     a, b = run_python(code), run_python(code)
     assert json.loads(a.stdout)["account"] == json.loads(b.stdout)["account"]
+
+
+def test_cloud_run_revision_names_are_valid_instances(logs: pytest.LogCaptureFixture):
+    audit.configure(instance="universal-email-mcp-service-00012-abc")
+    audit.event("auth.csrf_failed", area="portal")
+    assert lines(logs)[0]["instance"] == "universal-email-mcp-service-00012-abc"
+
+
+def test_a_damaged_local_key_file_is_replaced(tmp_path: Any):
+    (tmp_path / "audit.key").write_bytes(b"x")
+    key = audit.local_key(tmp_path)
+    assert len(key) == 32 and audit.local_key(tmp_path) == key
+    assert not list(tmp_path.glob("*.tmp"))
