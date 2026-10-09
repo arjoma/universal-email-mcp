@@ -212,18 +212,15 @@ async def test_oversized_mail_is_paged_and_truncated(sandbox: Sandbox):
         assert "only its beginning was read" in md
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="get_message(thread=true) keeps one message per Message-ID; a hostile copy of a real "
-    "Message-ID can displace the original from the conversation",
-)
 async def test_duplicate_message_id_does_not_displace_original(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
         _md, data = await call(client, "find_messages", query="Bankverbindung", accounts=[WORK])
         _md, thread = await call(client, "get_message", id=data["messages"][0]["id"], thread=True)
     # Outside the client context, which would wrap the failure in an ExceptionGroup.
     assert "Angebot Website-Relaunch" in thread_subjects(thread)
+    # The forged copy is kept too, and both are marked.
+    shared = [m for m in thread["thread"] if m["shared_message_id"]]
+    assert len(shared) == 2 and any("same Message-ID" in n for n in thread["notes"])
 
 
 async def test_threading_loops_and_reference_bomb_terminate(sandbox: Sandbox):
@@ -260,14 +257,11 @@ async def test_utf7_body_is_decoded_and_defanged(sandbox: Sandbox):
         assert not any(a in form for a in ACTIVE), form
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="get_message shows only the first of several inline text/plain parts and "
-    "neither lists the others nor says that text was left out",
-)
 async def test_wide_multipart_does_not_hide_text_parts(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
         _md, data = await call(client, "find_messages", subject="2000 parts", accounts=[WORK])
         md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
     assert "part 1999" in msg["body"]["text"] or msg["attachments"], md
+    body = msg["body"]["text"]
+    assert "part 0" in body and "part 99" in body and "──── part 2 (text) ────" in body
+    assert any("2000 text parts" in n for n in msg["notes"]) and "2000 text parts" in md

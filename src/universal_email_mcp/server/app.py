@@ -219,7 +219,15 @@ def _message_table(
             row.append(escape_cell(i.account, 30))
         if multi_folder:
             row.append(escape_cell(i.folder, 30))
-        flags = " ".join(x for x in ("unread" if i.unread else "", "★" if i.flagged else "") if x)
+        flags = " ".join(
+            x
+            for x in (
+                "unread" if i.unread else "",
+                "★" if i.flagged else "",
+                "⚠ same Message-ID" if i.shared_message_id else "",
+            )
+            if x
+        )
         row += [
             _names(i.from_, 1),
             _names(i.to),
@@ -250,7 +258,12 @@ def build_server(service: MailService) -> MCPServer:
 
     def items(hits: Sequence[Hit]) -> list[MessageItem]:
         return [
-            MessageItem.of(h.summary, viewer_url=service.viewer_url(h.summary.ref), score=h.score)
+            MessageItem.of(
+                h.summary,
+                viewer_url=service.viewer_url(h.summary.ref),
+                score=h.score,
+                shared_message_id=h.shared_message_id,
+            )
             for h in hits
         ]
 
@@ -743,6 +756,7 @@ def build_server(service: MailService) -> MCPServer:
             ),
             attachments=[AttachmentOut.of(a) for a in msg.attachments],
             source_truncated=msg.source_truncated,
+            notes=list(msg.body_notes),
         )
 
         def addrs(a: Sequence[Address]) -> str:
@@ -806,6 +820,7 @@ def build_server(service: MailService) -> MCPServer:
             foot.append(f"body continues: offset={b.next_offset}")
         if msg.source_truncated:
             foot.append("message larger than the size limit: only its beginning was read")
+        foot += [escape_cell(n, 200) for n in msg.body_notes]
         if foot:
             parts.append(render.footer(foot))
         return _result("\n\n".join(parts), data)

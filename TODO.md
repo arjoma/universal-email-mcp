@@ -60,16 +60,13 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Cursor resume when the last returned message was expunged falls back to UID
       order, which is only approximate for SORT (REVERSE ARRIVAL) listings.
 - [ ] Threads: `search_related` uses the first 30 ids only (most relevant first);
-      the same message in two accounts is now listed twice (dedupe is per folder).
+      the same mail in two accounts is listed twice and marked as sharing a
+      Message-ID (identical copies are merged within an account only).
 - [ ] Observed once: an integration `list_folders(counts=True)` call (then: STATUS of
       every folder) hit the account time-out on a slow container start — counts are
       now capped at 50 folders per call; watch for flakiness in CI.
 
-## Known issues from the sandbox corpus (strict xfails in `tests/integration/test_sandbox.py`)
-- [ ] `get_message(thread=true)` keeps one message per Message-ID: a hostile copy of a real
-      Message-ID can displace the original from the conversation.
-- [ ] `get_message` shows only the first of several inline `text/plain` parts and
-      neither lists the others nor notes that text was left out (`wide-multipart`).
+## Known issues from the sandbox corpus
 - [ ] Look-alike senders are hard to spot: tables show only the display name, and a
       fuzzy search for a real contact ranks a look-alike domain or a homoglyph
       name (Cyrillic letters) as high as the original. Flag mixed scripts and

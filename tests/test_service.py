@@ -339,6 +339,83 @@ async def test_thread_forged_duplicate_cannot_hide_sent_and_order_is_arrival():
     assert got == [("INBOX", 1), ("Sent", 1), ("INBOX", 2)]
 
 
+async def test_thread_keeps_every_claimant_of_a_message_id_and_marks_them():
+    a = FakeSession("A", {"INBOX": [], "Sent": [], "Other": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<orig@x>", subject="Angebot")
+    a.folders["Sent"][1] = _msg("Sent", 1, hours=2, msgid="<reply@x>", in_reply_to="<orig@x>")
+    # Same folder, same Message-ID, arrives later, and references an unrelated
+    # conversation that must not be pulled in.
+    a.folders["INBOX"][2] = _msg(
+        "INBOX", 2, hours=3, msgid="<orig@x>", subject="Angebot", references=("<other@x>",)
+    )
+    a.folders["Other"][1] = _msg("Other", 1, hours=4, msgid="<other@x>")
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["Sent"][1].ref.encode(), limit=None)
+    got = [(h.summary.ref.folder, h.summary.ref.uid, h.shared_message_id) for h in res.hits]
+    assert got == [("INBOX", 1, True), ("Sent", 1, False), ("INBOX", 2, True)]
+    assert any(n.startswith("2 messages claim the same Message-ID (#1, #3)") for n in res.notes)
+
+
+async def test_thread_root_that_claims_a_known_id_keeps_its_own_ids():
+    a = FakeSession("A", {"INBOX": [], "Other": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<orig@x>")
+    a.folders["INBOX"][2] = _msg("INBOX", 2, hours=3, msgid="<orig@x>", references=("<o@x>",))
+    a.folders["Other"][1] = _msg("Other", 1, hours=4, msgid="<o@x>")
+    svc, _ = _service(A=a)
+    # Asked about the later claimant itself: it is the root, its ids are followed.
+    res = await svc.get_thread(a.folders["INBOX"][2].ref.encode(), limit=None)
+    assert [(h.summary.ref.folder, h.summary.ref.uid) for h in res.hits] == [
+        ("INBOX", 1),
+        ("INBOX", 2),
+        ("Other", 1),
+    ]
+
+
+async def test_thread_merges_identical_copies_of_one_mail():
+    a = FakeSession("A", {"INBOX": [], "Archive": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<m@x>", subject="Same")
+    a.folders["Archive"][1] = _msg("Archive", 1, hours=1, msgid="<m@x>", subject="Same")
+    a.folders["INBOX"][2] = _msg("INBOX", 2, hours=2, msgid="<r@x>", in_reply_to="<m@x>")
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][2].ref.encode(), limit=None)
+    assert [(h.summary.ref.folder, h.summary.ref.uid) for h in res.hits] == [
+        ("INBOX", 1),
+        ("INBOX", 2),
+    ]
+    assert not any(h.shared_message_id for h in res.hits) and res.notes == []
+
+
+async def test_thread_flood_of_one_message_id_is_bounded():
+    from universal_email_mcp.service.mail import MAX_SAME_MESSAGE_ID
+
+    a = FakeSession("A", {"INBOX": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<m@x>", subject="real")
+    for uid in range(2, 30):
+        a.folders["INBOX"][uid] = _msg("INBOX", uid, hours=uid, msgid="<m@x>", subject=f"f{uid}")
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=10)
+    assert len(res.hits) == MAX_SAME_MESSAGE_ID
+    assert res.hits[0].summary.subject == "real"
+    assert all(h.shared_message_id for h in res.hits)
+    assert any("left out" in n for n in res.notes)
+
+
+async def test_conversation_table_marks_shared_message_ids():
+    a = FakeSession("A", {"INBOX": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<m@x>")
+    a.folders["INBOX"][2] = _msg("INBOX", 2, hours=2, msgid="<m@x>")
+    svc, _ = _service(A=a)
+    async with Client(build_server(svc)) as c:
+        r = await c.call_tool(
+            "get_message", {"id": a.folders["INBOX"][1].ref.encode(), "thread": True}
+        )
+        text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
+        data: Any = r.structured_content
+    assert text.count("⚠ same Message-ID") == 2 and "or a forgery" in text
+    assert [m["shared_message_id"] for m in data["thread"]] == [True, True]
+    await svc.aclose()
+
+
 async def test_thread_search_prioritises_own_ids_and_latest_references():
     a = FakeSession("A", {"INBOX": []})
     refs = tuple(f"<r{i:02d}@x>" for i in range(40))

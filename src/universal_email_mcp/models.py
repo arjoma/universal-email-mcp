@@ -310,16 +310,19 @@ class Message:
     """A full message: summary + text body window + attachment list.
 
     ``body_source`` tells where the text came from: ``plain``, ``html`` (converted),
-    ``none`` or ``unparseable`` (MIME structure too deep or broken to parse; the
-    headers still are). ``source_truncated`` is set when the raw message exceeded the fetch
-    size cap and only its beginning was parsed.
+    ``mixed`` (several inline text parts, some of them HTML), ``none`` or
+    ``unparseable`` (MIME structure too deep or broken to parse; the headers still
+    are). ``source_truncated`` is set when the raw message exceeded the fetch size
+    cap and only its beginning was parsed. ``body_notes`` say what the body leaves
+    out or shortens (server-generated, safe to show).
     """
 
     summary: MessageSummary
     body: TextSlice
-    body_source: Literal["plain", "html", "none", "unparseable"]
+    body_source: Literal["plain", "html", "mixed", "none", "unparseable"]
     attachments: tuple[Attachment, ...]
     source_truncated: bool = False
+    body_notes: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:

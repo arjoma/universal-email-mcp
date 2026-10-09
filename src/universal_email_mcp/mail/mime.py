@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email import policy
-from email.message import EmailMessage, Message
+from email.message import Message
 from email.parser import BytesHeaderParser, BytesParser
 from typing import Literal
 
@@ -406,13 +406,33 @@ def _tidy(text: str) -> str:
 
 # --------------------------------------------------------------------------- bodies
 
+MAX_TEXT_PARTS = 100
+"""Inline text parts shown in the body; further ones are listed as attachments."""
+MAX_LISTED_PARTS = 100
+"""Attachments and other parts listed per message."""
+REPORT_TYPES = frozenset(
+    {
+        "message/delivery-status",
+        "message/global-delivery-status",
+        "message/disposition-notification",
+        "message/global-disposition-notification",
+        "message/feedback-report",
+    }
+)
+"""Machine-readable report parts (bounces, read receipts, abuse reports): plain
+header-style text, shown in the body."""
+
+TextSource = Literal["plain", "html", "mixed", "none", "unparseable"]
+
 
 @dataclass(frozen=True, slots=True)
 class ParsedMessage:
     headers: HeaderFields
     text: str
-    text_source: Literal["plain", "html", "none", "unparseable"]
+    text_source: TextSource
     attachments: tuple[Attachment, ...]
+    notes: tuple[str, ...] = ()
+    """What the body leaves out or shortens (limits); safe, server-generated text."""
 
 
 def _part_bytes(part: Message) -> bytes:
@@ -428,25 +448,40 @@ def _part_bytes(part: Message) -> bytes:
 
 def part_text(part: Message) -> str:
     """Decoded text of a leaf part with charset fallback."""
-    return _decode_bytes(_part_bytes(part), part.get_content_charset())
+    try:
+        charset = part.get_content_charset()
+    except Exception:  # noqa: BLE001 - malformed parameters
+        charset = None
+    return _decode_bytes(_part_bytes(part), charset)
+
+
+def _is_container(part: Message) -> bool:
+    """A multipart whose children are IMAP body parts. ``message/*`` parts are
+    leaves for IMAP (Python parses some of them into sub-messages)."""
+    return part.is_multipart() and part.get_content_maintype() != "message"
 
 
 def iter_parts(msg: Message, prefix: str = "") -> Iterator[tuple[str, Message]]:
-    """Yield ``(imap_section, leaf_part)``; message/rfc822 parts are leaves."""
-    if msg.is_multipart() and msg.get_content_type() != "message/rfc822":
-        payload = msg.get_payload()
-        if not isinstance(payload, list):  # pragma: no cover - defensive
-            return
-        for i, sub in enumerate(payload, 1):
-            if not isinstance(sub, Message):
-                continue
-            section = f"{prefix}.{i}" if prefix else str(i)
-            if sub.is_multipart() and sub.get_content_type() != "message/rfc822":
-                yield from iter_parts(sub, section)
-            else:
-                yield section, sub
-    else:
+    """Yield ``(imap_section, leaf_part)``; ``message/*`` parts are leaves."""
+    if not _is_container(msg):
         yield (prefix or "1"), msg
+        return
+    for section, sub in _children(msg, prefix):
+        if _is_container(sub):
+            yield from iter_parts(sub, section)
+        else:
+            yield section, sub
+
+
+def _children(part: Message, prefix: str) -> list[tuple[str, Message]]:
+    payload = part.get_payload()
+    if not isinstance(payload, list):  # pragma: no cover - defensive
+        return []
+    return [
+        (f"{prefix}.{i}" if prefix else str(i), sub)
+        for i, sub in enumerate(payload, 1)
+        if isinstance(sub, Message)
+    ]
 
 
 def _filename(part: Message) -> str | None:
@@ -472,19 +507,104 @@ def _disposition(part: Message) -> str | None:
 
 
 def _part_size(part: Message) -> int:
-    if part.get_content_type() == "message/rfc822":
+    if part.get_content_maintype() == "message":
         inner = part.get_payload()
-        if isinstance(inner, list) and inner and isinstance(inner[0], Message):
+        if isinstance(inner, list):
             try:
-                return len(inner[0].as_bytes())
+                return sum(len(m.as_bytes()) for m in inner if isinstance(m, Message))
             except Exception:  # noqa: BLE001
                 return 0
-        return 0
     return len(_part_bytes(part))
 
 
+_Kind = Literal["plain", "html", "report"]
+
+
+def _text_kind(part: Message) -> _Kind | None:
+    """How a leaf part reads as body text, or ``None`` for an attachment: inline
+    ``text/plain`` / ``text/html`` without a file name, and report parts."""
+    if _disposition(part) == "attachment":
+        return None
+    ctype = part.get_content_type()
+    if ctype in REPORT_TYPES:
+        return "report"
+    if _filename(part):
+        return None
+    if ctype == "text/plain":
+        return "plain"
+    if ctype == "text/html":
+        return "html"
+    return None
+
+
+def _body_parts(part: Message, section: str, out: list[tuple[str, Message, _Kind]]) -> None:
+    """Collect the parts that make up the body, in order: every inline text part of
+    a ``multipart/mixed`` (or any other multipart), one version of each
+    ``multipart/alternative`` — the plain one if it has text, else the first with
+    any text part (HTML)."""
+    if not _is_container(part):
+        kind = _text_kind(part)
+        if kind is not None:
+            out.append((section, part, kind))
+        return
+    children = _children(part, section)
+    if part.get_content_type() != "multipart/alternative":
+        for sec, sub in children:
+            _body_parts(sub, sec, out)
+        return
+    versions: list[list[tuple[str, Message, _Kind]]] = []
+    for sec, sub in children:
+        version: list[tuple[str, Message, _Kind]] = []
+        _body_parts(sub, sec, version)
+        if version:
+            versions.append(version)
+    for version in versions:
+        if all(k != "html" for _s, _p, k in version) and any(
+            k == "plain" and part_text(p).strip() for _s, p, k in version
+        ):
+            out.extend(version)
+            return
+    if versions:
+        out.extend(next((v for v in versions if any(k == "html" for *_x, k in v)), versions[0]))
+
+
+def _report_text(part: Message) -> str:
+    """A report part (header-style blocks) as text; names and values sanitised."""
+    payload = part.get_payload()
+    if not isinstance(payload, list):
+        return _tidy(part_text(part))
+    blocks: list[str] = []
+    for block in payload:
+        if not isinstance(block, Message):
+            continue
+        lines = [
+            f"{sanitize_line(_fix_surrogates(str(k)))}: {decode_header(str(v))}"
+            for k, v in block.raw_items()
+        ]
+        rest = block.get_payload()
+        if isinstance(rest, str) and rest.strip():
+            lines.append(_tidy(_fix_surrogates(rest)))
+        if lines:
+            blocks.append("\n".join(lines))
+    return _tidy("\n\n".join(blocks))
+
+
+_LABELS: dict[_Kind, str] = {
+    "plain": "text",
+    "html": "HTML converted to text",
+    "report": "delivery report",
+}
+
+
 def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessage:
-    """Parse a full RFC 5322 message: headers, best text body, attachments.
+    """Parse a full RFC 5322 message: headers, body text, attachments.
+
+    The body is every inline text part in order (one version of each
+    ``multipart/alternative``, plain text preferred, HTML converted to visible
+    text), separated by a marker line when there are several. Limits
+    (``MAX_TEXT_PARTS``, ``max_html_chars`` in total, ``MAX_LISTED_PARTS``) never
+    drop anything silently: text parts left out are listed as attachments and
+    ``notes`` says what was left out or shortened.
 
     A structure too deeply nested for the parser (``RecursionError``, e.g. thousands
     of nested multiparts) degrades to headers only with ``text_source="unparseable"``
@@ -499,60 +619,91 @@ def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessa
 
 def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> ParsedMessage:
     msg = BytesParser(policy=policy.default).parsebytes(raw)
+    notes: list[str] = []
 
-    plain_part = html_part = None
-    if isinstance(msg, EmailMessage):
-        try:
-            plain_part = msg.get_body(preferencelist=("plain",))
-            html_part = msg.get_body(preferencelist=("html",))
-        except Exception:  # noqa: BLE001 - odd structures: fall back to a walk
-            plain_part = html_part = None
+    candidates: list[tuple[str, Message, _Kind]] = []
+    _body_parts(msg, "" if _is_container(msg) else "1", candidates)
+    body_parts = {id(p) for _s, p, _k in candidates}
+    if len(candidates) > MAX_TEXT_PARTS:
+        extra = len(candidates) - MAX_TEXT_PARTS
+        notes.append(
+            f"{len(candidates)} text parts: the body shows the first {MAX_TEXT_PARTS}, "
+            f"the other {extra} are listed as attachments"
+        )
+        candidates = candidates[:MAX_TEXT_PARTS]
 
-    leaves = list(iter_parts(msg))
-    if plain_part is None and html_part is None:
-        for _section, part in leaves:
-            if _disposition(part) == "attachment" or _filename(part):
+    segments: list[tuple[str, _Kind, str]] = []
+    shown: set[int] = set()
+    html_budget = max_html_chars
+    unconverted: list[str] = []
+    for section, part, kind in candidates:
+        if kind == "html":
+            html = part_text(part)
+            if html_budget <= 0:
+                unconverted.append(section)
                 continue
-            ctype = part.get_content_type()
-            if ctype == "text/plain" and plain_part is None:
-                plain_part = part
-            elif ctype == "text/html" and html_part is None:
-                html_part = part
+            if len(html) > html_budget:
+                notes.append(f"HTML part {section} is too long; only its beginning is shown")
+            text = html_to_text(html, max_input_chars=html_budget)
+            html_budget -= len(html)
+        elif kind == "report":
+            text = _report_text(part)
+        else:
+            text = _tidy(part_text(part))
+        shown.add(id(part))
+        if text:
+            segments.append((section, kind, text))
 
-    text, source = "", "none"
-    if plain_part is not None:
-        text, source = _tidy(part_text(plain_part)), "plain"
-    if not text.strip() and html_part is not None:
-        text, source = html_to_text(part_text(html_part), max_input_chars=max_html_chars), "html"
-    if not text.strip():
-        text, source = "", "none"
+    if unconverted:
+        notes.append(
+            f"{len(unconverted)} HTML part{'s' if len(unconverted) != 1 else ''} not "
+            "converted (size limit), listed as attachments: "
+            + ", ".join(unconverted[:5])
+            + (" …" if len(unconverted) > 5 else "")
+        )
+
+    if len(segments) > 1:
+        text = "\n\n".join(
+            (f"──── part {sec} ({_LABELS[kind]}) ────\n\n" if n else "") + body
+            for n, (sec, kind, body) in enumerate(segments)
+        )
+    else:
+        text = segments[0][2] if segments else ""
+    source: TextSource = "none"
+    if segments:
+        has_html = any(k == "html" for _s, k, _t in segments)
+        has_plain = any(k != "html" for _s, k, _t in segments)
+        source = "mixed" if has_html and has_plain else "html" if has_html else "plain"
 
     attachments: list[Attachment] = []
-    body_parts = {id(p) for p in (plain_part, html_part) if p is not None}
-    for section, part in leaves:
-        if id(part) in body_parts:
+    unlisted = 0
+    for section, part in iter_parts(msg):
+        if id(part) in shown:
             continue
-        ctype = part.get_content_type()
-        disp = _disposition(part)
-        filename = _filename(part)
-        if ctype in ("text/plain", "text/html") and disp != "attachment" and not filename:
-            continue  # alternative body or inline text fragment
-        if part.is_multipart() and ctype != "message/rfc822":
+        kind = _text_kind(part)
+        if kind is not None and id(part) not in body_parts:
+            continue  # a version of an alternative that was not chosen: same content
+        if len(attachments) >= MAX_LISTED_PARTS:
+            unlisted += 1
             continue
         cid = part.get("Content-ID")
+        disp = _disposition(part)
         attachments.append(
             Attachment(
                 part_id=section,
-                filename=filename,
-                content_type=ctype,
+                filename=_filename(part),
+                content_type=part.get_content_type(),
                 size=_part_size(part),
-                inline=disp == "inline" or (disp is None and cid is not None),
+                inline=kind is not None or disp == "inline" or (disp is None and cid is not None),
                 content_id=parse_msgid(str(cid)) if cid else None,
             )
         )
+    if unlisted:
+        notes.append(f"{unlisted} more parts not listed (at most {MAX_LISTED_PARTS})")
     return ParsedMessage(
         headers=headers,
         text=text,
-        text_source=source,  # pyright: ignore[reportArgumentType]
+        text_source=source,
         attachments=tuple(attachments),
+        notes=tuple(notes),
     )
