@@ -1039,7 +1039,9 @@ class Pop3Session:
         """The raw header block (``TOP n 0``), at most ``max_bytes``."""
         ref = self.resolve_ref(ref)
         assert ref.uidl is not None
-        num = self._num[ref.uidl]
+        num = self._num.get(ref.uidl)
+        if num is None:
+            raise MessageNotFound("message not found (deleted from the mailbox?)")
         ok, text = self._protect(lambda w: w.command(f"TOP {num} 0"))
         if not ok:
             raise MessageNotFound(f"the server could not return the message: {text}")

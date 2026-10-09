@@ -344,6 +344,12 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       (responses are chunked); message text beyond `limits.max_body_chars` (the page says to
       take the `.eml`); a per-user rate limit for viewer requests (only the parallel-call cap
       applies); a decoded (RFC 2047) toggle for the raw header view.
+- [ ] Viewer review leftovers (minor): `?images=1` is a plain GET toggle (a mail link to
+      it would pre-click for a user who knows the id: use a nonce); the message page
+      sanitises the HTML once for the counts and the iframe route again (cache briefly);
+      sign-in redirect drops the query string (`?view=html`); `/c/<token>` addresses appear
+      in access logs (two minute lifetime; keep them out of logs); the oracle-free 404 still
+      differs in timing for foreign accounts; no test for cancellation during a download.
 - [ ] Viewer account names: the viewer context names accounts in creation order while a
       grant's context uses the grant's order; they only differ for names the pool rewrites
       (invalid characters -> "Account N", duplicate names -> "(2)"). Message ids of such

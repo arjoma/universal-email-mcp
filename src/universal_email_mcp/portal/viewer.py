@@ -70,7 +70,7 @@ log = logging.getLogger(__name__)
 
 _MESSAGE_ID = re.compile(r"^[mp]1\.[A-Za-z0-9_-]{1,3000}$")
 _SECTION = re.compile(r"^[0-9.]{1,100}$")
-CONTENT_TOKEN_TTL = 600.0
+CONTENT_TOKEN_TTL = 120.0
 FILE_HEADERS = {
     "x-content-type-options": "nosniff",
     "content-security-policy": "sandbox; default-src 'none'; frame-ancestors 'none'",
@@ -440,8 +440,10 @@ class ViewerEndpoints(PortalEndpoints):
         try:
             viewer, _ctx = await self._open(auth, stack)
             dl = await viewer.download(mid, section)
-        except Exception as e:  # noqa: BLE001
-            await stack.aclose()
+        except BaseException as e:
+            await stack.aclose()  # also on cancellation: give the lease and the slot back
+            if not isinstance(e, Exception):
+                raise
             return self._error(request, e)
         headers = {
             **FILE_HEADERS,

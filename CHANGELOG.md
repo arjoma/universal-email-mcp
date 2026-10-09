@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`nh3`) and an own CSS filter; `cid:` images are inlined, remote images load only after an
   explicit click for that view, links open in a new tab with `noopener noreferrer` and are
   listed defanged. Optional `CONTENT_ORIGIN` serves that document from a separate origin via
-  signed ten minute addresses. Attachments stream from IMAP chunk by chunk (reusing the
+  signed two minute addresses. Attachments stream from IMAP chunk by chunk (reusing the
   verified part lookup and incremental decoders of the local download server) with
   `Content-Disposition: attachment`, `nosniff`, a sandbox CSP and the passive type allow-list;
   `UEM_MAX_DOWNLOAD_BYTES` caps them. POP3 messages work too (read whole). Audit events

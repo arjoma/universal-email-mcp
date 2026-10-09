@@ -192,6 +192,22 @@ def test_deep_nesting_is_refused_fast():
     assert "x" in render("<br>" * 2000 + "x")
 
 
+def test_unmatched_end_tags_cannot_hide_nesting():
+    start = time.monotonic()
+    with pytest.raises(TooComplex):
+        build_html_view(mail(("<div>" * 399 + "</zz>" * 399) * 300))
+    assert time.monotonic() - start < 3
+
+
+def test_repeated_cid_images_are_capped():
+    big = PNG + b"\0" * (1024 * 1024)
+    raw = mail("<img src='cid:a'>" * 50, images={"a": big})
+    view = build_html_view(raw)
+    assert view.document is not None
+    assert len(view.document) < 12 * 1024 * 1024
+    assert 0 < view.document.count("data:image/png") < 50
+
+
 def test_csp_has_no_script_frame_or_remote_sources():
     base = csp(remote_images=False, ancestor="'self'")
     assert "default-src 'none'" in base and "img-src data:;" in base
