@@ -163,6 +163,7 @@ startup. There is deliberately no way to switch a limit off; raise it instead.
 
 How they behave:
 
+* **Viewer.** A message view costs two hits of `UEM_RATE_VIEWER_USER` (page and HTML frame). Re-authentication is not counted by the portal limits (the sign-in limits cover it). Behind a proxy without `UEM_TRUSTED_PROXY_HOPS` every network limit is shared by all callers.
 * **Per instance.** These counters live in the memory of one process. With `n` instances
   (Cloud Run scales out) a caller can use up to `n` times the limit, and a restart forgets
   the counts. The send limit (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`) is the one shared limit: it

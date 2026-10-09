@@ -280,6 +280,13 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       `retry_after` can fill the log (it is one line per request, like the HTTP limits);
       the `/token` refresh grant is limited per network only, not per client or grant; the
       viewer HTML frame and its page count as two viewer requests.
+      Review leftovers: eviction is insertion-order (blocked keys are spared, recency is not
+      tracked); a burst limit above its sustained limit is not flagged at startup;
+      `HEAD` on viewer URLs opens IMAP and counts a hit; `ratelimit.hit` is not coalesced;
+      `Limiters.from_config` could be generated from the `RateLimits` fields; `_hit` in
+      `portal/pages.py` could take the limiter directly instead of a `kind` string; no
+      stateless-protocol integration test of `RATE_LIMITED`; no test of a limited
+      content-origin frame.
 
 ### Remote HTTP and store (3a-3c follow-ups)
 - [ ] Refresh-token reuse is strict: any second use of a rotated token (also two truly

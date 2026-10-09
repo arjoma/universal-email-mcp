@@ -271,7 +271,7 @@ def test_rates_are_read_from_the_environment():
 @pytest.mark.parametrize(
     "value",
     ["", "5", "/5m", "5/", "0/5m", "-1/5m", "5/0", "5/0m", "5/-3", "5/8d", "100001/1m",
-     "five/5m", "5/xm", "5/1.5m", "5/5 m x", "1e3/5m", "5//5m", "٣/5m", "5/٣m", "5/5w"],
+     "five/5m", "5/xm", "5/1.5m", "5/5 m x", "1e3/5m", "5//5m", "٣/5m", "5/٣m", "5/5w", "1_0/5m", "+5/5m", "5/1_0"],
 )  # fmt: skip
 def test_nonsense_rates_are_rejected_naming_the_variable(value: str):
     if value == "":
@@ -463,3 +463,14 @@ def test_ratelimit_hit_events_carry_no_address_unless_pseudonymised():
 
     spec = audit.EVENTS["ratelimit.hit"]
     assert {"scope", "ip", "grant"} <= spec.fields
+
+
+def test_eviction_keeps_currently_blocked_keys():
+    clock = Clock()
+    lim = RateLimiter(2, 600, clock=clock, max_keys=50)
+    lim.add("victim")
+    lim.add("victim")
+    for i in range(500):
+        clock.t += 0.01
+        lim.add(f"noise-{i}")
+    assert lim.blocked("victim")  # the oldest key survived because it is blocked
