@@ -123,6 +123,8 @@ class Viewer:
                 own = False  # this line and everything below it is older than our server
             clean = _SPACES.sub(" ", sanitize_line(fix_surrogates(str(value))))[:MAX_HEADER_VALUE]
             lines.append(HeaderLine(sanitize_line(fix_surrogates(str(name)))[:80], clean, own))
+        if not any(str(n).lower() == "received" for n, _v in msg.raw_items()):
+            lines = [HeaderLine(h.name, h.value, False) for h in lines]  # nothing is ours
         return lines
 
     async def html(self, message_id: str, *, remote_images: bool) -> HtmlView:

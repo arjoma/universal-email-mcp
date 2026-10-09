@@ -368,3 +368,18 @@ from time to time (AGENTS.md, "Regular cleanup").
 - [ ] Message viewer: "all attachments as ZIP" (streaming zip over `iter_part`), `Content-Length`
       for base64/QP downloads (chunked today), text beyond `limits.max_body_chars` (the page points
       to the `.eml`), a decoded (RFC 2047) toggle for the raw header view.
+
+## Mail content (review of fix/mail-content)
+
+- [ ] A reply/forward whose subject does not match the original is only a warning in the
+      confirmation; consider making it a reason that forces confirmation.
+- [ ] `Sender._verify_quote` scans folders and fetches the original on every approval page load:
+      compute it once when the approval is created (or cache by draft ref + In-Reply-To).
+- [ ] `defang`: ideographic full stop (`。`) in host names is not treated like `.`.
+- [ ] `mail/outgoing.py` (`get_filename`, `get_content_type`) still uses unguarded stdlib calls on
+      stored drafts; a malformed MIME parameter makes preparing that draft fail.
+- [ ] The placeholder summary subject (`[unreadable message: ...]`) can be imitated by a sender;
+      a dedicated flag on `MessageSummary` would be cleaner.
+- [ ] Authentication headers added by milters below the first `Received` line are labelled
+      "from the sender, not checked" (conservative).
+
