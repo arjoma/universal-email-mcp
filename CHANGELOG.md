@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`clients/hubr` → `Clients/Huber`); ambiguous names return the choices.
 - New limit `max_headers_scanned` (headers read per account for fuzzy search
   and contact lookup).
+- Development sandbox: `scripts/dev_mailbox.py` starts a throw-away local
+  Dovecot with realistic and hostile mail and a matching config, for trying the
+  server without a real mailbox.
 
 ### Security
 

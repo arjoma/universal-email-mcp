@@ -79,4 +79,4 @@ select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
 [tool.basedpyright]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]

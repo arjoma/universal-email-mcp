@@ -17,11 +17,6 @@ so every test module gets its own fresh mailbox.
 from __future__ import annotations
 
 import os
-import shutil
-import socket
-import ssl
-import subprocess
-import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,14 +26,22 @@ from pathlib import Path
 import pytest
 from imapclient import IMAPClient
 
+from tests.dovecot import (
+    DOVECOT_IMAGE,
+    IMAPS_PORT,
+    STARTTLS_PORT,
+    ContainerError,
+    admin_client,
+    container_runtime,
+    host_port,
+    remove_container,
+    run_container,
+    wait_ready,
+)
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, TlsSettings
 
-DOVECOT_IMAGE = (
-    "docker.io/dovecot/dovecot:2.4.5"
-    "@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553"
-)
 DEFAULT_PASSWORD = "uem-test-password"
 DATA = Path(__file__).parent.parent / "data"
 
@@ -57,51 +60,11 @@ def _unavailable(reason: str) -> None:
     pytest.skip(f"integration tests skipped: {reason}")
 
 
-def _container_runtime() -> str | None:
-    for rt in ("podman", "docker"):
-        if shutil.which(rt) is None:
-            continue
-        try:
-            ok = subprocess.run([rt, "info"], capture_output=True, timeout=30).returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            ok = False
-        if ok:
-            return rt
-    return None
-
-
-def _insecure_ctx() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
-def _wait_ready(host: str, port: int, timeout: float = 90.0) -> None:
-    deadline = time.monotonic() + timeout
-    last: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=3) as raw:
-                with _insecure_ctx().wrap_socket(raw) as tls:
-                    tls.settimeout(3)
-                    if tls.recv(64).startswith(b"* OK"):
-                        return
-        except OSError as e:
-            last = e
-        time.sleep(0.5)
-    _unavailable(f"IMAP server at {host}:{port} not ready ({last})")
-
-
-def _host_port(rt: str, cid: str, container_port: int) -> int:
-    out = subprocess.run(
-        [rt, "port", cid, f"{container_port}/tcp"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=30,
-    ).stdout
-    return int(out.strip().splitlines()[0].rsplit(":", 1)[1])
+def _wait_ready(host: str, port: int) -> None:
+    try:
+        wait_ready(host, port)
+    except ContainerError as e:
+        _unavailable(str(e))
 
 
 @pytest.fixture(scope="session")
@@ -118,44 +81,26 @@ def imap_server() -> Iterator[ImapServer]:
         yield server
         return
 
-    rt = _container_runtime()
+    rt = container_runtime()
     if rt is None:
         _unavailable("no container runtime (podman/docker) and UEM_TEST_IMAP_HOST not set")
         return
     try:
-        cid = subprocess.run(
-            [
-                rt,
-                "run",
-                "-d",
-                "--rm",
-                "-e",
-                f"USER_PASSWORD={DEFAULT_PASSWORD}",
-                "-p",
-                "127.0.0.1::31993",
-                "-p",
-                "127.0.0.1::31143",
-                DOVECOT_IMAGE,
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=600,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        cid = run_container(rt, password=DEFAULT_PASSWORD)
+    except ContainerError as e:
         _unavailable(f"could not start {DOVECOT_IMAGE} with {rt}: {e}")
         return
     try:
         server = ImapServer(
             host="127.0.0.1",
-            imaps_port=_host_port(rt, cid, 31993),
-            starttls_port=_host_port(rt, cid, 31143),
+            imaps_port=host_port(rt, cid, IMAPS_PORT),
+            starttls_port=host_port(rt, cid, STARTTLS_PORT),
             password=DEFAULT_PASSWORD,
         )
         _wait_ready(server.host, server.imaps_port)
         yield server
     finally:
-        subprocess.run([rt, "rm", "-f", cid], capture_output=True, timeout=60)
+        remove_container(rt, cid)
 
 
 # ---------------------------------------------------------------- seeding
@@ -168,11 +113,9 @@ class Mailbox:
 
     def admin(self) -> IMAPClient:
         """Plain imapclient connection for seeding/mutating (tests only)."""
-        c = IMAPClient(
-            self.server.host, self.server.imaps_port, ssl_context=_insecure_ctx(), timeout=30
+        return admin_client(
+            self.server.host, self.server.imaps_port, self.user, self.server.password
         )
-        c.login(self.user, self.server.password)
-        return c
 
     def session(self, **kw: object) -> ImapSession:
         return ImapSession.connect(
