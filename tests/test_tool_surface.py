@@ -6,6 +6,7 @@ and contact names in the rendered tables."""
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +22,7 @@ from universal_email_mcp.service.folder_list import MAX_STATUS, build, resolve, 
 from universal_email_mcp.service.mail import OVERVIEW_HEADERS, MailService, thread_folder_order
 from universal_email_mcp.service.query import parse
 from universal_email_mcp.service.router import AccountRouter
+from universal_email_mcp.service.trust import SentToIndex
 
 from .fakes import Connector, FakeSession, config, summary
 
@@ -144,7 +146,7 @@ def test_thread_folder_order_puts_participants_and_archive_first():
     names = [f"Clients/Client {i:03d}" for i in range(40)] + [
         "Clients/Huber Bau",
         "Archive",
-        "Archive/2025",
+        *(f"Archive/2025/{m:02d}" for m in range(1, 13)),
         "INBOX",
         "Sent",
         "Zeta",
@@ -157,7 +159,24 @@ def test_thread_folder_order_puts_participants_and_archive_first():
         to=(Address("Me", "me@example.org"),),
     )
     order = [f.name for f in thread_folder_order(folders, root, "INBOX", "", {"me@example.org"})]
-    assert order[:5] == ["INBOX", "Sent", "Archive", "Archive/2025", "Clients/Huber Bau"]
+    # The archive root early, but a year/month scheme does not crowd out the
+    # folder named after the participant.
+    assert order[:5] == ["INBOX", "Sent", "Archive", "Clients/Huber Bau", "Archive/2025/01"]
+
+
+def test_thread_folder_order_is_cheap_for_huge_names():
+    folders = [
+        FolderInfo(f"Clients/Kunde {i:03d} GmbH", f"Clients/Kunde {i:03d} GmbH", "/", ())
+        for i in range(150)
+    ]
+    name = " ".join(f"w{i}" for i in range(333))
+    root = replace(
+        summary("A", "INBOX", 1),
+        cc=tuple(Address(f"{name}{i}", f"x{i}@e{i}.example") for i in range(20)),
+    )
+    t = time.perf_counter()
+    thread_folder_order(folders, root, "INBOX", "", set())
+    assert time.perf_counter() - t < 0.5
 
 
 # ---------------------------------------------------------------- list_folders (tool)
@@ -323,6 +342,53 @@ async def _all_pages(c: Client, tool: str, key: str, **args: Any) -> list[dict[s
         if not cursor:
             return pages
         assert len(pages) < 20
+
+
+@pytest.mark.parametrize("query", [None, "client*", "client"])
+async def test_folder_keys_survive_folders_created_and_deleted_between_pages(query: str | None):
+    a = FakeSession("A", {f"Client {i:02d}": [] for i in range(30)})
+    svc, _ = _service(a)
+    args: dict[str, Any] = {"limit": 10, "counts": False}
+    if query:
+        args["query"] = query
+    async with Client(build_server(svc)) as c:
+        _md, p1, _ = await call(c, "list_folders", **args)
+        a.folders["Client 00a"] = {}  # sorts before the cursor
+        a.folders["Client 99"] = {}  # after it
+        del a.folders["Client 03"]  # already shown
+        del a.folders["Client 15"]  # not yet shown
+        rows = _paths(p1)
+        cursor = p1["next_cursor"]
+        while cursor:
+            _md, data, _ = await call(c, "list_folders", **args, cursor=cursor)
+            rows += _paths(data)
+            cursor = data["next_cursor"]
+    assert len(rows) == len(set(rows))  # nothing twice
+    expected = {f"Client {i:02d}" for i in range(30)} - {"Client 15"} | {"Client 99"}
+    assert set(rows) == expected  # nothing skipped (only the new one before the cursor)
+
+
+async def test_cursor_is_refused_for_another_account_selection():
+    a, b = _ab_folders()
+    svc, _ = _service(a, b)
+    async with Client(build_server(svc)) as c:
+        _md, p1, _ = await call(c, "list_folders", limit=25, counts=False)
+        _md, p2, _ = await call(
+            c, "list_folders", limit=25, counts=False, accounts=["B"], cursor=p1["next_cursor"]
+        )
+    # Another account selection is another call: the cursor is refused, never misread.
+    assert "error" in p2
+
+
+async def test_parent_leaf_in_one_account_and_children_in_another():
+    a = FakeSession("A", {"Clients": [1], "INBOX": []})
+    b = FakeSession("B", {"Clients/X": [], "Clients/Y": [], "INBOX": []})
+    svc, _ = _service(a, b)
+    async with Client(build_server(svc)) as c:
+        md, data, _ = await call(c, "list_folders", parent="Clients")
+        assert sorted(_paths(data)) == ["Clients", "Clients/X", "Clients/Y"]
+        assert "1–3 of 3 folders" in md and "A: Clients has no subfolders" in md
+    await svc.aclose()
 
 
 async def test_folder_paging_survives_an_account_failing_on_page_two():
@@ -514,13 +580,72 @@ async def test_find_contacts_forged_future_date_does_not_rank_first():
     await svc.aclose()
 
 
-async def test_find_contacts_sent_to_unknown_when_sent_not_read_completely():
+async def test_find_contacts_sent_to_checked_per_address_when_the_set_is_partial():
+    s = _contacts_session()
+    s.folders["Sent"][3] = replace(
+        summary("Work", "Sent", 3), to=(Address("Hanna", "hanna.huber@huber-bau.example"),)
+    )
+    svc, _ = _service(s)
+    svc.sent_to.update_headers = 1  # the set stays incomplete
+    async with Client(build_server(svc)) as c:
+        _md, data, _ = await call(c, "find_contacts", query="Jürgen Müller")
+        assert data["contacts"][0]["sent_to"] is False  # definite, by an exact search
+        assert any(x.startswith("RSEARCH") for x in s.calls)
+    await svc.aclose()
+
+
+async def test_overview_does_not_build_the_sent_index():
     s = _contacts_session()
     svc, _ = _service(s)
-    svc.sent_to.max_headers = 1
     async with Client(build_server(svc)) as c:
-        md, data, _ = await call(c, "find_contacts", query="Jürgen Müller")
-        assert data["contacts"][0]["sent_to"] is None and "unknown" in md
+        s.calls.clear()
+        _md, data, _ = await call(c, "find_contacts", limit=5)
+        assert not any(x.startswith("RFETCH Sent 2") for x in s.calls)  # no full read
+        assert all(x["sent_to"] is not None for x in data["contacts"])  # checked instead
+        searches = [x for x in s.calls if x.startswith("RSEARCH")]
+        assert 0 < len(searches) <= 5
+    await svc.aclose()
+
+
+def test_sent_to_check_verifies_substring_hits():
+    s = FakeSession("A", {"INBOX": [], "Sent": [1]})
+    s.folders["Sent"][1] = replace(
+        summary("A", "Sent", 1), to=(Address("Hanna", "hanna@example.org"),)
+    )
+    idx = SentToIndex()
+    got = idx.check(s, ["anna@example.org", "Hanna@Example.org", "nobody"])  # pyright: ignore[reportArgumentType]
+    assert got == {"anna@example.org": False, "hanna@example.org": True}
+    assert idx.snapshot("A").has("hanna@example.org") is True
+    no_sent = FakeSession("B", {"INBOX": []})
+    assert idx.check(no_sent, ["x@example.org"]) == {"x@example.org": None}  # pyright: ignore[reportArgumentType]
+
+
+def test_sent_to_update_is_incremental_and_header_only():
+    s = FakeSession("A", {"INBOX": [], "Sent": list(range(1, 11))})
+    for u in range(1, 11):
+        s.folders["Sent"][u] = replace(s.folders["Sent"][u], to=(Address("", f"r{u}@example.org"),))
+    idx = SentToIndex(update_headers=4)
+    first = idx.update(s)  # pyright: ignore[reportArgumentType]
+    assert not first.complete and len(first.addresses) == 4 and first.note
+    assert not any(x.startswith("FETCH") for x in s.calls)  # only To/Cc fields
+    idx.update(s)  # pyright: ignore[reportArgumentType]
+    third = idx.update(s)  # pyright: ignore[reportArgumentType]
+    assert third.complete and third.has("r1@example.org") and third.has("x@example.org") is False
+    s.calls.clear()
+    idx.update(s)  # pyright: ignore[reportArgumentType]
+    assert not any(x.startswith("RFETCH") for x in s.calls)  # nothing new to read
+
+
+async def test_sent_to_unknown_when_an_account_failed():
+    a = _contacts_session()
+    b = FakeSession("Other", {"INBOX": [], "Sent": []})
+    svc, conn = _service(a, b)
+    conn.fail["Other"] = ServerUnreachable("down")
+    async with Client(build_server(svc)) as c:
+        _md, data, _ = await call(c, "find_contacts", query="Jürgen Müller")
+        assert data["contacts"][0]["sent_to"] is None  # Other may have written to him
+        _md, data, _ = await call(c, "find_contacts", query="Anna Huber")
+        assert data["contacts"][0]["sent_to"] is True  # yes stays yes
     await svc.aclose()
 
 
@@ -565,3 +690,19 @@ async def test_contact_paging_has_no_duplicates_and_retries_failed_accounts():
         )
         assert p2["problems"] and p2["next_cursor"]  # retry cursor kept
     await svc.aclose()
+
+
+def test_sent_to_check_is_one_search_and_unknown_when_hits_cannot_be_verified(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from universal_email_mcp.service import trust
+
+    s = FakeSession("A", {"INBOX": [], "Sent": [1, 2]})
+    for u, addr in ((1, "hanna@example.org"), (2, "johanna@example.org")):
+        s.folders["Sent"][u] = replace(summary("A", "Sent", u), to=(Address("", addr),))
+    got = SentToIndex().check(s, ["anna@example.org", "x@example.org", "hanna@example.org"])  # pyright: ignore[reportArgumentType]
+    assert got == {"anna@example.org": False, "x@example.org": False, "hanna@example.org": True}
+    assert [c for c in s.calls if c.startswith("RSEARCH")] == ["RSEARCH Sent 3"]
+    monkeypatch.setattr(trust, "MAX_VERIFY", 1)
+    got = SentToIndex().check(s, ["anna@example.org"])  # pyright: ignore[reportArgumentType]
+    assert got == {"anna@example.org": None}  # two substring hits, one verified

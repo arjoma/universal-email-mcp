@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from universal_email_mcp.errors import AmbiguousFolder, FolderNotFound
 from universal_email_mcp.models import FolderInfo
 from universal_email_mcp.service import fuzzy
+from universal_email_mcp.service.cursor import Key
 from universal_email_mcp.service.query import MAX_QUERY_CHARS, Query, parse, similar
 
 MAX_DEPTH = 3
@@ -51,6 +52,10 @@ class Node:
     children: list[Node] = field(default_factory=list["Node"])
     descendants: int = 0
     """All folders below this one (any depth)."""
+    key: Key = ()
+    """Tree-order sort key from content, not position: per level (role rank,
+    folded name, name, full name), so a folder sorts right after its parent and
+    keys stay valid when other folders appear or vanish (keyset paging)."""
 
     @property
     def name(self) -> str:
@@ -109,7 +114,15 @@ def build(folders: Sequence[FolderInfo], personal_prefix: str = "") -> list[Node
     def order(n: Node) -> None:
         # Special folders first, then by name with umlauts folded: "Bäckerei" next
         # to "Bauer", not after "Zöhrer".
-        n.children.sort(key=lambda c: (_ROLE_ORDER.get(c.role, 10), fuzzy.normalize(c.name)))
+        for c in n.children:
+            c.key = (
+                *n.key,
+                _ROLE_ORDER.get(c.role, 10),
+                fuzzy.normalize(c.name),
+                c.name,
+                c.full_name,
+            )
+        n.children.sort(key=lambda c: c.key)
         for c in n.children:
             order(c)
 
@@ -203,6 +216,15 @@ class Match:
     node: Node
     score: float | None
     """Fuzzy score; ``None`` for wildcard matches."""
+
+    @property
+    def key(self) -> Key:
+        """Sort key from content: tree order for wildcard matches; best score,
+        then shorter path, then name for fuzzy ones."""
+        if self.score is None:
+            return self.node.key
+        n = self.node
+        return (-self.score, len(n.path), n.joined.casefold(), n.full_name)
 
 
 def search(nodes: Sequence[Node], query: Query) -> list[Match]:

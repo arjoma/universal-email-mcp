@@ -8,8 +8,10 @@ page skip or repeat anything, and an account that fails on one page keeps its
 place and continues when it answers again (the cursor is kept for a few retry
 pages, like the message listings).
 
-Keys must be totally ordered across accounts (include the account, or its rank,
-when two accounts could produce equal keys).
+Keys come from the rows' content (never their position), so they stay valid
+when rows appear or vanish; equal keys of different accounts are ordered by the
+accounts' order, which is not part of the key (a different account selection
+between pages cannot repeat rows of an account).
 """
 
 from __future__ import annotations
@@ -62,12 +64,15 @@ def keyset_page[T](
         total += len(items)
         offset += len(items) - len(rest)
         remaining[acc] = rest
+    # Equal keys of different accounts: the order the accounts were given decides.
+    names = list(remaining)
     merged = heapq.merge(
-        *([(k, acc, i) for i, (k, _t) in enumerate(rest)] for acc, rest in remaining.items())
+        *([(k, n, i) for i, (k, _t) in enumerate(remaining[acc])] for n, acc in enumerate(names))
     )
     taken: list[tuple[str, T]] = []
     used: dict[str, int] = {}
-    for key, acc, i in merged:
+    for key, n, i in merged:
+        acc = names[n]
         if len(taken) >= limit:
             break
         taken.append((acc, remaining[acc][i][1]))
