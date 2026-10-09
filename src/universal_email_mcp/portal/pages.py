@@ -790,6 +790,7 @@ class PortalEndpoints:
         return {
             "values": v,
             "error": error,
+            "results": None,
             "identity_id": identity_id,
             "smtp_choices": smtp_choices,
             "store_choices": store_choices,
@@ -912,9 +913,10 @@ class PortalEndpoints:
     ) -> dict[str, Any]:
         """Validated record fields (no ``id`` / ``user_id`` / ``created_at``). Header
         values are refused when they hold line breaks or other control characters."""
-        address = clean_email(values["address"])
-        if address is None:
+        cleaned = clean_email(values["address"])
+        if cleaned is None:
             raise FormProblem("address")
+        address = cleaned.lower()  # as in the TOML config
         others = [
             i
             for i in await self.store.list_for_user(Identity, auth.user.id)
