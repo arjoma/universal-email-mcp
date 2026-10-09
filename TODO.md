@@ -34,6 +34,14 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Local mode / read tools
 
+- [ ] Review leftovers of the pre-release hardening: day windows assume the server's INTERNALDATE
+      zone and the user's zone differ by under a day (`_trim_to_days` could search two days
+      each side) and use a fixed-offset zone (no DST test); `flags_agree` leaves `total`/cursor
+      counting dropped hits without a note; activity rows written before the `label` field show
+      no account name (not migrated, pre-release); a removed account whose name contains `@`
+      gets no label; `form_action_extra` of `Portal.page`/`security_headers` is unused now; the
+      Dovecot test of hostile login names only proves "clean AUTH_FAILED" (the wire test proves
+      the quoting) and the window test relies on the container counting days in UTC.
 - [ ] Time windows use the server's local zone as a fixed offset taken from "now": a window
       that reaches back over a DST change is one hour off at its start; remote mode has no
       per-user zone yet (a portal setting could supply one). `flags_agree` drops a hit whose fresh
