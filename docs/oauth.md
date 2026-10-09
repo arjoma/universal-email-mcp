@@ -203,11 +203,14 @@ expires on its own).
   (`/.well-known/*`, `/register`, `/token`, `/revoke`, `/mcp`; `Access-Control-Allow-Origin: *`, never
   credentials, `Authorization` and `Mcp-Protocol-Version` allowed) so browser-based clients such as
   the MCP Inspector work; `/authorize` and the portal send none and refuse foreign origins.
-* Rate limits (in memory, per instance): portal connection tests 10 per user and 30 per IP per
-  10 minutes and 5 per target mailbox per 15 minutes; sign-in 5 failures per address and 20 attempts per
-  IP per 15 minutes; client-document fetches 30 per IP per minute; registrations as above;
-  token and revoke requests 300 per IP per minute. Behind a proxy set
-  `UEM_TRUSTED_PROXY_HOPS`.
+* Rate limits (in memory, per instance; every value is configurable as `UEM_RATE_*`, see the
+  table in [operator-env.md](operator-env.md#rate-limits)): sign-in and portal re-authentication,
+  `/authorize` POSTs, `/token` and `/revoke`, registrations, client-document fetches, portal
+  actions and connection tests, viewer pages and downloads, and **MCP tool calls** (per user
+  and per grant, burst and sustained windows; tools that change something are limited harder).
+  A tool call over the limit returns the error `RATE_LIMITED` with `retry_after` seconds and
+  never reaches a mail server. Networks are IPv4 addresses or IPv6 /64s. Behind a proxy set
+  `UEM_TRUSTED_PROXY_HOPS`. Several instances multiply the limits; only the send limit is shared.
 * Audit events (JSON on stdout, [audit.md](audit.md): `auth.sign_in`, `auth.consent`, `auth.token`,
   `auth.revoke`, `auth.code_replay`, `auth.client_refused`, `auth.csrf_failed`, `ratelimit.hit`, and
   `tool.call` for every MCP tool call) carry pseudonyms (`u_...`, `c_...`, `g_...`), never
