@@ -16,6 +16,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "keyring>=25.7.0",
     "mcp>=2.2,<3",
+    "nh3>=0.3.7",
     "platformdirs>=4.12.2",
     "pydantic>=2.13",
     "python-multipart>=0.0.20",
