@@ -239,10 +239,8 @@ async def test_tools_are_read_only_with_schemas(seeded: Seeded):
         assert set(tools) == {
             "account_info",
             "list_folders",
-            "list_messages",
-            "search_messages",
+            "find_messages",
             "get_message",
-            "get_thread",
             "find_contacts",
         }
         for t in tools.values():
@@ -264,28 +262,36 @@ async def test_account_info(seeded: Seeded):
         assert "| Work | IMAP |" in md
 
 
-async def test_list_folders_tree(seeded: Seeded):
+async def test_list_folders_overview_and_drill_down(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        md, data = await call(client, "list_folders", accounts=["Work"], counts=True)
-        tree = data["accounts"][0]
-        top = {n["name"]: n for n in tree["folders"]}
-        clients = {n["name"]: n for n in top["Clients"]["children"]}
+        md, data = await call(client, "list_folders", accounts=["Work"])
+        top = {n["name"]: n for n in data["folders"]}
+        assert top["Clients"]["subfolders"] == 2 and top["Archive"]["subfolders"] == 1
+        assert top["Sent"]["role"] == "sent" and top["INBOX"]["messages"] == 6
+        assert "Clients/Huber" not in {n["path"] for n in data["folders"]}
+        assert "▸ 2" in md and "parent=" in md
+        md, data = await call(client, "list_folders", accounts=["Work"], parent="kunden")
+        clients = {n["name"]: n for n in data["folders"]}
         assert set(clients) == {"Huber", "Maier GmbH"}
         assert clients["Huber"]["path"] == "Clients/Huber" and clients["Huber"]["messages"] == 1
-        assert top["Archive"]["children"][0]["path"] == "Archive/2025"
-        assert top["Sent"]["role"] == "sent"
+        md, data = await call(client, "list_folders", accounts=["Work"], depth=2)
+        assert ("Archive/2025", 2) in {(n["path"], n["level"]) for n in data["folders"]}
         assert "└ Maier GmbH" in md
+        _md, data = await call(client, "list_folders", query="*gmbh")
+        assert [(n["account"], n["path"]) for n in data["folders"]] == [
+            ("Work", "Clients/Maier GmbH")
+        ]
 
 
-async def test_list_messages_today_across_accounts(seeded: Seeded):
+async def test_find_messages_today_across_accounts(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        md, data = await call(client, "list_messages", window="today")
+        md, data = await call(client, "find_messages", window="today")
         assert subjects(data) == ["Heute: Kaffee?"]
         assert data["problems"] == [] and data["next_cursor"] is None
         assert "Heute: Kaffee?" in md and "1–1 of 1 shown" in md
 
 
-async def test_list_messages_paging(seeded: Seeded):
+async def test_find_messages_paging(seeded: Seeded):
     async with connect(seeded.config()) as client:
         since = (NOW - timedelta(days=11)).date().isoformat()
         seen: list[str] = []
@@ -295,7 +301,7 @@ async def test_list_messages_paging(seeded: Seeded):
             args: dict[str, Any] = {"since": since, "limit": 2}
             if cursor:
                 args["cursor"] = cursor
-            _md, data = await call(client, "list_messages", **args)
+            _md, data = await call(client, "find_messages", **args)
             assert data["total"] == 7  # 6 Work INBOX + 1 Private INBOX
             seen += [m["id"] for m in data["messages"]]
             pages += 1
@@ -304,7 +310,7 @@ async def test_list_messages_paging(seeded: Seeded):
                 break
         assert pages == 4 and len(seen) == 7 and len(set(seen)) == 7
         # newest first across both accounts
-        _md, first = await call(client, "list_messages", since=since, limit=3)
+        _md, first = await call(client, "find_messages", since=since, limit=3)
         assert subjects(first)[:2] == ["Heute: Kaffee?", "Re: Re: Angebot Website"]
         assert {m["account"] for m in first["messages"]} == {"Work", "Private"}
 
@@ -312,46 +318,55 @@ async def test_list_messages_paging(seeded: Seeded):
 async def test_cursor_tampering_and_mismatch(seeded: Seeded):
     async with connect(seeded.config()) as client:
         since = (NOW - timedelta(days=11)).date().isoformat()
-        _md, data = await call(client, "list_messages", since=since, limit=2)
+        _md, data = await call(client, "find_messages", since=since, limit=2)
         cur = data["next_cursor"]
         bad = cur[:-3] + ("AAA" if not cur.endswith("AAA") else "BBB")
-        r = await client.call_tool("list_messages", {"since": since, "limit": 2, "cursor": bad})
+        r = await client.call_tool("find_messages", {"since": since, "limit": 2, "cursor": bad})
         assert r.is_error and "INVALID_CURSOR" in text(r)
-        r = await client.call_tool("list_messages", {"since": "2020-01-01", "cursor": cur})
+        r = await client.call_tool("find_messages", {"since": "2020-01-01", "cursor": cur})
         assert r.is_error and "different arguments" in text(r)
 
 
 async def test_search_exact(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        _md, data = await call(client, "search_messages", **{"from": "huber-bau"})
+        _md, data = await call(client, "find_messages", **{"from": "huber-bau"})
         assert sorted(subjects(data)) == sorted(
             ["Angebot Website", "Re: Re: Angebot Website", "Grillfest am Samstag"]
         )
-        assert data["exact"] is True
+        assert data["exact"] is True and data["mode"] == "exact"
 
 
 async def test_search_fuzzy_typo_umlaut_and_name_order(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        _md, data = await call(client, "search_messages", **{"from": "Hubr", "fuzzy": True})
+        _md, data = await call(client, "find_messages", query="Hubr")
         assert "Angebot Website" in subjects(data) and "Grillfest am Samstag" in subjects(data)
         assert all(m["score"] >= 75 for m in data["messages"])
         for spelling in ("Mueller", "Muller", "Müller", "juergen muller"):
-            _md, data = await call(client, "search_messages", **{"from": spelling, "fuzzy": True})
+            _md, data = await call(client, "find_messages", query=spelling)
             assert subjects(data)[0] == "Termin nächste Woche", spelling
-        _md, data = await call(client, "search_messages", **{"from": "Huber Anna", "fuzzy": True})
+        _md, data = await call(client, "find_messages", query="Huber Anna")
         assert "Angebot Website" in subjects(data)
-        md, data = await call(
-            client, "search_messages", subject="angebt websit", fuzzy=True, accounts=["Work"]
-        )
+        md, data = await call(client, "find_messages", query="angebt websit", accounts=["Work"])
         assert set(subjects(data)) >= {"Angebot Website", "Re: Re: Angebot Website"}
-        assert "Score" in md
+        assert "Score" in md and data["mode"] == "fuzzy"
+
+
+async def test_search_wildcard(seeded: Seeded):
+    async with connect(seeded.config()) as client:
+        _md, data = await call(client, "find_messages", query="mü*")
+        assert subjects(data) == ["Termin nächste Woche"] and data["mode"] == "wildcard"
+        _md, data = await call(client, "find_messages", query="*@huber-bau.at", accounts=["Work"])
+        assert set(subjects(data)) == {"Angebot Website", "Re: Re: Angebot Website"}
+        # the server-side criteria still narrow the candidates
+        _md, data = await call(client, "find_messages", query="re: *", window="last_7_days")
+        assert subjects(data) == ["Re: Re: Angebot Website"]
 
 
 async def test_search_in_fuzzy_folder(seeded: Seeded):
     async with connect(seeded.config()) as client:
         _md, data = await call(
             client,
-            "search_messages",
+            "find_messages",
             query="Erdgeschoss",
             folders=["clients/hubr"],
             accounts=["Work"],
@@ -359,18 +374,18 @@ async def test_search_in_fuzzy_folder(seeded: Seeded):
         assert subjects(data) == ["Pläne Erdgeschoss"]
         assert any("approximate match" in n for n in data["notes"])
         _md, data = await call(
-            client, "list_messages", folders=["Kunden/Maier"], accounts=["Work"], since="2000-01-01"
+            client, "find_messages", folders=["Kunden/Maier"], accounts=["Work"], since="2000-01-01"
         )
         assert subjects(data) == ["Lieferung"]
         r = await client.call_tool(
-            "list_messages", {"folders": ["Nirgendwo"], "accounts": ["Work"]}
+            "find_messages", {"folders": ["Nirgendwo"], "accounts": ["Work"]}
         )
         assert r.is_error and "FOLDER_NOT_FOUND" in text(r)
 
 
 async def test_get_message_fenced_body(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        _md, data = await call(client, "search_messages", subject="Rechnung", accounts=["Work"])
+        _md, data = await call(client, "find_messages", subject="Rechnung", accounts=["Work"])
         mid = data["messages"][0]["id"]
         md, msg = await call(client, "get_message", id=mid)
         assert msg["message"]["from"][0]["email"] == "office@maier-gmbh.at"
@@ -387,7 +402,7 @@ async def test_get_message_fenced_body(seeded: Seeded):
 
 async def test_hostile_message_rendering(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        md, data = await call(client, "search_messages", query="rm -rf", accounts=["Work"])
+        md, data = await call(client, "find_messages", subject="rm -rf", accounts=["Work"])
         assert data["messages"][0]["subject"].startswith("![pixel]")  # raw in structured data
         table_row = next(line for line in md.splitlines() if "pixel" in line)
         assert "](" not in table_row and "<script" not in table_row and "`rm" not in table_row
@@ -408,24 +423,30 @@ async def test_hostile_message_rendering(seeded: Seeded):
             assert "www.evil" not in form and "evil@" not in form
 
 
-async def test_get_thread_spans_inbox_and_sent(seeded: Seeded):
+async def test_get_message_thread_spans_inbox_and_sent(seeded: Seeded):
     async with connect(seeded.config()) as client:
         _md, data = await call(
-            client, "search_messages", subject="Re: Re: Angebot", accounts=["Work"]
+            client, "find_messages", subject="Re: Re: Angebot", accounts=["Work"]
         )
-        md, thread = await call(client, "get_thread", id=data["messages"][0]["id"])
-        assert subjects(thread) == [
+        md, out = await call(client, "get_message", id=data["messages"][0]["id"], thread=True)
+        assert [m["subject"] for m in out["thread"]] == [
             "Angebot Website",
             "Re: Angebot Website",
             "Re: Re: Angebot Website",
         ]
-        assert [m["folder"] for m in thread["messages"]] == ["INBOX", "Sent", "INBOX"]
+        assert [m["folder"] for m in out["thread"]] == ["INBOX", "Sent", "INBOX"]
+        assert out["message"]["subject"] == "Re: Re: Angebot Website" and out["body"] is None
         assert "oldest first" in md
 
 
 async def test_find_contacts(seeded: Seeded):
     async with connect(seeded.config()) as client:
-        _md, data = await call(client, "find_contacts")
+        md, data = await call(client, "find_contacts")
+        assert data["mode"] == "overview" and data["days"] == 7 and "query=" in md
+        recent = {c["email"].lower(): c for c in data["contacts"]}
+        maier = recent["office@maier-gmbh.at"]  # written to 7 days ago; mail 8 days ago is out
+        assert (maier["sent"], maier["received"]) == (1, 0)
+        _md, data = await call(client, "find_contacts", days=30)
         by_email = {c["email"].lower(): c for c in data["contacts"]}
         assert by_email["anna.huber@huber-bau.at"]["sent_to"] is True
         assert set(by_email["anna.huber@huber-bau.at"]["accounts"]) == {"Work", "Private"}
@@ -438,6 +459,10 @@ async def test_find_contacts(seeded: Seeded):
         assert data["contacts"][0]["name"] == "Jürgen Müller"
         md, data = await call(client, "find_contacts", query="evil")
         assert "](" not in md and "https://" not in md
+        _md, data = await call(client, "find_contacts", query="*@maier-gmbh.at")
+        assert [c["email"] for c in data["contacts"]] == ["office@maier-gmbh.at"]
+        md, data = await call(client, "find_contacts", query="Xaver Obermoser")
+        assert data["contacts"] == [] and "180 days" in md and "days=" in md
 
 
 async def test_partial_failure_and_pop3_reported(seeded: Seeded, monkeypatch: pytest.MonkeyPatch):
@@ -455,12 +480,12 @@ async def test_partial_failure_and_pop3_reported(seeded: Seeded, monkeypatch: py
     service = MailService(cfg)
     try:
         async with Client(build_server(service)) as c:
-            md, data = await call(c, "list_messages", window="today")
+            md, data = await call(c, "find_messages", window="today")
             codes = {p["account"]: p["code"] for p in data["problems"]}
             assert codes == {"Broken": "AUTH_FAILED", "Old POP": "NOT_SUPPORTED_YET"}
             assert subjects(data) == ["Heute: Kaffee?"]
             assert "partial result" in md and "Broken" in md
-            r = await c.call_tool("list_messages", {"window": "today", "accounts": ["Broken"]})
+            r = await c.call_tool("find_messages", {"window": "today", "accounts": ["Broken"]})
             assert r.is_error and "AUTH_FAILED" in text(r)
             _md, info = await call(c, "account_info")
             pop = next(a for a in info["accounts"] if a["name"] == "Old POP")

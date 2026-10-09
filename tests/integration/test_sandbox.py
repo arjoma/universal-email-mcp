@@ -96,25 +96,58 @@ def subjects(data: dict[str, Any]) -> list[str]:
     return [m["subject"] for m in data["messages"]]
 
 
-async def test_folder_tree_and_hostile_folder_name(sandbox: Sandbox):
+def thread_subjects(data: dict[str, Any]) -> list[str]:
+    return [m["subject"] for m in data["thread"]]
+
+
+async def test_folder_overview_and_hostile_folder_name(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
         md, data = await call(client, "list_folders", accounts=[WORK])
-        clients = next(n for n in data["accounts"][0]["folders"] if n["name"] == "Clients")
-        assert len(clients["children"]) >= 100
+        clients = next(n for n in data["folders"] if n["name"] == "Clients")
+        assert clients["subfolders"] >= 100 and data["total"] < 20  # top level only
         assert HOSTILE_FOLDER.split(" ![")[0] in md
         assert not any(a in md for a in ACTIVE) and "`rm`" not in md
         assert "Rechnungen exe.fdp" in md and "\u202e" not in md  # bidi override dropped
         _md, data = await call(
-            client, "list_messages", folders=["clients/mueller consulting"], since="2000-01-01"
+            client, "find_messages", folders=["clients/mueller consulting"], since="2000-01-01"
         )
         assert subjects(data) == ["Workshop Q4"]
 
 
+async def test_folder_drill_down_and_query(sandbox: Sandbox):
+    async with connect(sandbox.config) as client:
+        _md, data = await call(client, "list_folders", accounts=[WORK], parent="Kunden")
+        assert data["parent"] == ["Clients"] and data["total"] >= 100
+        assert len(data["folders"]) == 50 and data["next_cursor"]
+        assert all(n["path"].count("/") == 1 for n in data["folders"])
+        _md, data = await call(client, "list_folders", accounts=[WORK], query="müller*")
+        paths = {n["path"] for n in data["folders"]}
+        assert {"Clients/Müller & Söhne", "Clients/Mueller Consulting"} <= paths
+        assert all("ller" in p for p in paths)
+        _md, data = await call(client, "list_folders", accounts=[WORK], query="clients/*/2026")
+        assert data["folders"] and all(n["path"].endswith("/2026") for n in data["folders"])
+        md, data = await call(client, "list_folders", accounts=[WORK], query="Huber Bauu*")
+        assert data["folders"] == [] and "Clients/Huber Bau" in data["similar"]
+        assert not any(a in md for a in ACTIVE)
+
+
+async def test_contacts_overview_and_search(sandbox: Sandbox):
+    async with connect(sandbox.config) as client:
+        md, data = await call(client, "find_contacts")
+        assert data["mode"] == "overview" and 0 < len(data["contacts"]) <= 20
+        assert not any(a in md for a in ACTIVE)
+        _md, data = await call(client, "find_contacts", query="Jurgen Muller")
+        emails = [c["email"] for c in data["contacts"]]
+        assert "juergen.mueller@mueller-soehne.example" in emails[:2]
+        md, data = await call(client, "find_contacts", query="*attacker*")
+        assert data["contacts"] and not any(a in md for a in ACTIVE)
+
+
 async def test_today_and_cross_account_fuzzy(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
-        _md, data = await call(client, "list_messages", window="today")
+        _md, data = await call(client, "find_messages", window="today")
         assert "Kurze Frage zum Logo" in subjects(data)
-        _md, data = await call(client, "search_messages", **{"from": "Mueller", "fuzzy": True})
+        _md, data = await call(client, "find_messages", query="Mueller")
         assert {"Termin nächste Woche", "Radtour Sonntag?"} <= set(subjects(data))
         assert {m["account"] for m in data["messages"]} == {WORK, PRIVATE}
 
@@ -122,17 +155,21 @@ async def test_today_and_cross_account_fuzzy(sandbox: Sandbox):
 async def test_every_message_renders_safely(sandbox: Sandbox):
     hostile_subjects = 0
     async with connect(sandbox.config) as client:
-        _md, tree = await call(client, "list_folders", accounts=[WORK, PRIVATE], counts=True)
         folders: list[tuple[str, str]] = []
-
-        def walk(account: str, nodes: list[dict[str, Any]]) -> None:
-            for n in nodes:
-                if n.get("messages"):
-                    folders.append((account, n["path"]))
-                walk(account, n.get("children", []))
-
-        for acc in tree["accounts"]:
-            walk(acc["account"], acc["folders"])
+        page_cursor: str | None = None
+        while True:  # every folder at any level, a page at a time (counts per page)
+            md, page = await call(
+                client,
+                "list_folders",
+                accounts=[WORK, PRIVATE],
+                query="*",
+                **({"cursor": page_cursor} if page_cursor else {}),
+            )
+            assert not any(a in md for a in ACTIVE), md
+            assert not page["counts_capped"]
+            folders += [(n["account"], n["path"]) for n in page["folders"] if n["messages"]]
+            if not (page_cursor := page["next_cursor"]):
+                break
         seen = 0
         for account, folder in folders:
             listed: list[dict[str, Any]] = []
@@ -140,7 +177,7 @@ async def test_every_message_renders_safely(sandbox: Sandbox):
             while True:  # INBOX is close to the page cap (max_results 50)
                 md, data = await call(
                     client,
-                    "list_messages",
+                    "find_messages",
                     accounts=[account],
                     folders=[folder],
                     since="2000-01-01",
@@ -166,11 +203,11 @@ async def test_every_message_renders_safely(sandbox: Sandbox):
 
 async def test_oversized_mail_is_paged_and_truncated(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
-        _md, data = await call(client, "search_messages", subject="Protokoll", accounts=[WORK])
+        _md, data = await call(client, "find_messages", subject="Protokoll", accounts=[WORK])
         _md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
         assert msg["body"]["length"] == sandbox.config.limits.max_body_chars
         assert msg["body"]["next_offset"] is not None
-        _md, data = await call(client, "search_messages", subject="Baustelle", accounts=[WORK])
+        _md, data = await call(client, "find_messages", subject="Baustelle", accounts=[WORK])
         md, _msg = await call(client, "get_message", id=data["messages"][0]["id"])
         assert "only its beginning was read" in md
 
@@ -178,30 +215,30 @@ async def test_oversized_mail_is_paged_and_truncated(sandbox: Sandbox):
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
-    reason="get_thread keeps one message per Message-ID; a hostile copy of a real "
+    reason="get_message(thread=true) keeps one message per Message-ID; a hostile copy of a real "
     "Message-ID can displace the original from the conversation",
 )
 async def test_duplicate_message_id_does_not_displace_original(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
-        _md, data = await call(client, "search_messages", query="Bankverbindung", accounts=[WORK])
-        _md, thread = await call(client, "get_thread", id=data["messages"][0]["id"])
+        _md, data = await call(client, "find_messages", query="Bankverbindung", accounts=[WORK])
+        _md, thread = await call(client, "get_message", id=data["messages"][0]["id"], thread=True)
     # Outside the client context, which would wrap the failure in an ExceptionGroup.
-    assert "Angebot Website-Relaunch" in subjects(thread)
+    assert "Angebot Website-Relaunch" in thread_subjects(thread)
 
 
 async def test_threading_loops_and_reference_bomb_terminate(sandbox: Sandbox):
     threads: dict[str, list[str]] = {}
     async with connect(sandbox.config) as client:
         _md, data = await call(
-            client, "search_messages", **{"from": "loop@attacker.test"}, accounts=[WORK]
+            client, "find_messages", **{"from": "loop@attacker.test"}, accounts=[WORK]
         )
         for m in data["messages"]:
-            _md, thread = await call(client, "get_thread", id=m["id"])
-            threads[m["subject"]] = sorted(subjects(thread))
-        _md, data = await call(client, "search_messages", subject="Long thread", accounts=[WORK])
-        _md, bomb = await call(client, "get_thread", id=data["messages"][0]["id"])
-        _md, data = await call(client, "search_messages", query="minimal message", accounts=[WORK])
-        _md, alone = await call(client, "get_thread", id=data["messages"][0]["id"])
+            _md, thread = await call(client, "get_message", id=m["id"], thread=True)
+            threads[m["subject"]] = sorted(thread_subjects(thread))
+        _md, data = await call(client, "find_messages", subject="Long thread", accounts=[WORK])
+        _md, bomb = await call(client, "get_message", id=data["messages"][0]["id"], thread=True)
+        _md, data = await call(client, "find_messages", query="minimal message", accounts=[WORK])
+        _md, alone = await call(client, "get_message", id=data["messages"][0]["id"], thread=True)
     cycle = ["Re: Chicken or egg (A)", "Re: Chicken or egg (B)"]
     assert threads == {
         "Re: Re: Re: I am my own parent": ["Re: Re: Re: I am my own parent"],
@@ -209,13 +246,13 @@ async def test_threading_loops_and_reference_bomb_terminate(sandbox: Sandbox):
         cycle[1]: cycle,
     }
     # 5001 References (one of them real) join the real thread, nothing more.
-    assert "Re: Long thread" in subjects(bomb) and len(bomb["messages"]) < 15
-    assert subjects(alone) == ["No sender, no date, no Message-ID"]
+    assert "Re: Long thread" in thread_subjects(bomb) and len(bomb["thread"]) < 15
+    assert thread_subjects(alone) == ["No sender, no date, no Message-ID"]
 
 
 async def test_utf7_body_is_decoded_and_defanged(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
-        _md, data = await call(client, "search_messages", subject="Legacy charset", accounts=[WORK])
+        _md, data = await call(client, "find_messages", subject="Legacy charset", accounts=[WORK])
         md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
     body = msg["body"]["text"]
     assert "+ADw-" not in body and "alert(1)" in body  # decoded, not shown as UTF-7
@@ -231,6 +268,6 @@ async def test_utf7_body_is_decoded_and_defanged(sandbox: Sandbox):
 )
 async def test_wide_multipart_does_not_hide_text_parts(sandbox: Sandbox):
     async with connect(sandbox.config) as client:
-        _md, data = await call(client, "search_messages", subject="2000 parts", accounts=[WORK])
+        _md, data = await call(client, "find_messages", subject="2000 parts", accounts=[WORK])
         md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
     assert "part 1999" in msg["body"]["text"] or msg["attachments"], md
