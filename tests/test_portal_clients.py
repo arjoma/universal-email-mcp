@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -72,7 +73,7 @@ def authz(b: Browser, scope: str = "mail.read mail.organize", name: str = "Test 
     return Authz(b.client, register(b.client, name=name), scope=scope)
 
 
-def approve(b: Browser, a: Authz, grants: list[str], identities: list[str] = (), **extra):
+def approve(b: Browser, a: Authz, grants: list[str], identities: Sequence[str] = (), **extra):
     page = a.consent_page()
     form = {**hidden_fields(page.text), "action": "approve", "grant": grants, **extra}
     if identities:

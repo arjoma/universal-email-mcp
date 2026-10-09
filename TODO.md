@@ -169,6 +169,34 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       thousands of levels deep would raise `RecursionError`, which the startup path
       survives as "not read").
 
+### Portal (3d follow-ups)
+- [ ] Custom (free-entry) servers take a host name only, on the standard TLS ports 993 / 995 /
+      465. Later: autodiscovery (Thunderbird ISPDB, autoconfig, RFC 6186) to prefill, STARTTLS
+      and other ports behind an operator switch, a separate SMTP host.
+- [ ] Not yet in the portal (M4 list): activity page, privacy page (export / delete
+      everything), pending approvals (3f), a rename for accounts, an "allowed only for this
+      client" pre-selection from the scope the client asked for on the account page.
+- [ ] Re-authentication re-checks `User.primary_address` (lower-cased) against the login
+      server; a server that treats the login name case-sensitively would refuse a user who
+      signed in with different capitalisation. Keep the typed login name on the user record.
+- [ ] A half-filled identity form is lost when the re-authentication redirect happens (the
+      add-account form asks for the password first, so nothing is lost there). Carrying the
+      non-secret fields through the redirect would fix it.
+- [ ] Removing an account revokes every client that references it, even ones that also use
+      other accounts; reducing those grants instead may be friendlier (the spec of 3d said
+      revoke).
+- [ ] Removing the stored credentials does not end portal sessions, and a password change at
+      the provider is only noticed at the next sign-in or connection test (3e reports
+      `reauth_required` per call).
+- [ ] The `LiveTester` runs blocking connections in the default thread pool (bounded by a
+      semaphore of 8 and a 45 s deadline; the socket threads continue after a timeout until
+      their own socket timeout). Same executor issue as the CIMD fetch and IMAP login item
+      of 3c (a).
+- [ ] German comes with M4 (the switch appears once a second catalog exists);
+      `/authorize` ignores `ui_locales`.
+- [ ] Identity SMTP credentials are copies of the account's login (kept current on password
+      change). Separate SMTP logins (different user name or password) are not offered yet.
+
 ### Remote HTTP and store (3a-3c follow-ups)
 - [ ] Refresh-token reuse is strict: any second use of a rotated token (also two truly
       concurrent refreshes, e.g. a client retrying after a lost response) revokes the whole
@@ -178,18 +206,14 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       fetch) are in memory per instance: N instances allow N times the limit, a restart
       resets them. A shared counter in the store would fix it. The per-address limit also
       lets an attacker lock a known address out of sign-in for 15 minutes.
-- [ ] Consent is per request: every authorization creates a new grant (a client that
-      reconnects shows up twice in the future "connected clients" list). Reuse or replace a
-      grant of the same client and user (3d), and show a "you already allowed this" shortcut.
-- [ ] Until 3d the consent page offers the sign-in mailbox as pseudo account/identity
-      `primary`; real `MailAccount` / `Identity` ids replace it (rows already come from the
-      store when records exist). Grants referencing `primary` need a migration or must be
-      treated as "the primary mailbox" by 3e.
+- [ ] Consent is per request: every authorization creates a new grant, so a client that
+      reconnects shows up twice in "Connected applications" (the user disconnects the old
+      one). Replacing the older grant of the same client and user was left out on purpose:
+      two devices of one user that use the same client would then disconnect each other in
+      turn. Needs a per-device notion or a "you already allowed this" shortcut.
 - [ ] Re-consent / scope step-up: a refresh cannot widen the scope; a client needing more
       must run `/authorize` again. Incremental consent (`WWW-Authenticate` `scope=` on 403)
       is not implemented.
-- [ ] The `uem_lang` cookie is read but nothing sets it yet (language switch UI, 3d); only
-      English ships (German in M4). `/authorize` ignores `ui_locales`.
 - [ ] DCR: no `/register` management (RFC 7592), no software statements; a client asking for
       `client_secret_*` or non-`none` auth is refused. CIMD documents are cached for a fixed
       hour (HTTP cache headers are ignored) and fetched without a conditional request.
@@ -205,15 +229,13 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       pool and the login semaphore is released on timeout while the thread runs on - give
       them their own bounded executor and an overall deadline; (b) rate limits key IPv6 by
       full address (use /64) and failed sign-ins have no global cap per login domain (the
-      mail server may ban the egress IP; document whitelisting); (c) browser-based clients
-      (MCP Inspector) are blocked by the Origin check and missing CORS on metadata,
-      `/register`, `/token`, `/revoke` - these use no cookies and could be exempted; (d)
-      granting `send` needs a fresh password (design section 6) - not enforced; (e) the
+      mail server may ban the egress IP; document whitelisting); (c) and (d) are done in 3d (CORS for the cookie-less
+      endpoints; `send` needs a fresh password); (e) the
       consent redirect after Allow crosses CSP `form-action` per hop (a callback that
       redirects on to another origin is blocked in Chromium); answer with a 200 page that
       continues via meta refresh; (f) reject repeated request parameters; `busy` error
       detected by message text; HTML routes return JSON 500 on store errors; (g) login
-      hardening: reject CR/LF/NUL in passwords, quote the IMAP user name; the user id assumes
+      hardening: quote the IMAP user name (CR/LF/NUL in passwords are refused since 3d); the user id assumes
       the mail server maps logins 1:1 to mailboxes (document); (h) a refresh with a narrower
       `scope` still returns the full scope; (i) dead code: `login_profile`,
       `RateLimiter.retry_after`, `Row.checked`; huge `UEM_*_TTL` values overflow at startup;
@@ -221,7 +243,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 
 - [ ] Dev mode still serves the TOML accounts; the per-user service (3e) replaces them (in
       OAuth mode `/mcp` offers only `account_info` until then).
-      `OperatorConfig.mail_servers` is parsed but unused until 3d.
 - [ ] Consider reporting not-ready after SIGTERM.
 - [ ] Wire the operator limits (`UEM_MAX_*`) and policy (`UEM_*`) per user in 3e; today they
       overlay the TOML config of the dev mode only.

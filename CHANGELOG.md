@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- User portal (work package 3d; `docs/portal.md`), server-rendered at `/portal` without
+  scripts: **mail accounts** (add IMAP or POP3 from the operator's `MAIL_SERVERS` or - only if
+  that list is empty - by host name with SSRF guards and encrypted ports only; the login is
+  tested before anything is stored; test button for IMAP/POP3 and SMTP; per-account
+  permissions read / organize / delete / drafts as the user's own upper bound; password
+  change; removal deletes the credentials and disconnects the clients that could use the
+  account), **sender identities** (address, display name, signature, sending account, account
+  for drafts and sent copies, default, "sending allowed"; header-injection-safe), **connected
+  applications** (list with fenced name, host, created, last used, scopes; reduce or
+  disconnect), a **language switch** (`uem_lang` cookie; English ships, the mechanism is
+  tested with a catalog) and a portal sign-in. The sign-in mailbox becomes a real account
+  ("Main") on the first sign-in; grants that referenced the 3c pseudo account `primary` are
+  rewritten. **Re-authentication**: adding or removing accounts, changing a password, raising
+  permissions, allowing an identity to send and granting `send` at the consent page need the
+  password again within `UEM_REAUTH_WINDOW` (default 5 minutes). The consent page now lists
+  the user's real accounts and the identities that may send. Connection tests are rate limited
+  per user, address and target and never show server text. Audit events `portal.*`.
+- CORS for the cookie-less endpoints (`/.well-known/*`, `/register`, `/token`, `/revoke`,
+  `/mcp`) in OAuth mode, so browser-based MCP clients (MCP Inspector) can connect: preflight
+  answered, `Access-Control-Allow-Origin: *` without credentials, `Authorization` and
+  `Mcp-Protocol-Version` allowed. Portal and `/authorize` routes keep the strict `Origin`
+  check and never send CORS headers.
+- Operator variables `UEM_REAUTH_WINDOW`, `UEM_MAX_ACCOUNTS_PER_USER`,
+  `UEM_MAX_IDENTITIES_PER_USER`.
+- `Identity` store record: `send` and `smtp_account_id` fields.
+- `mail.smtp.check_login()`: connect and authenticate without sending.
 - OAuth 2.1 authorization server for remote mode (work package 3c; `docs/oauth.md`).
   `serve` without dev flags is now the OAuth server: `/.well-known/oauth-protected-resource`
   (RFC 9728) and `/.well-known/oauth-authorization-server` (RFC 8414), `/authorize`
@@ -238,6 +264,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Sign-in no longer discards the password: on the first sign-in it is stored (sealed) as the
+  credential of the sign-in mailbox account so that the assistant can read that mailbox;
+  later sign-ins refresh it when it changed. The sign-in page says so. The consent page no
+  longer offers the pseudo account `primary`.
+
 - Defanging of mail text is more complete: bare domains with a well-known top-level domain
   (`evil.com`, also in e-mail addresses) get `[.]` so renderers with fuzzy link detection
   cannot link them, the host after a `word:` scheme prefix is broken up too, and code
@@ -255,6 +286,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   INBOX, Sent, the archive, the message's folder and folders that had hits.
 
 ### Security
+
+- Re-authentication for sensitive portal actions and for granting `send`; connection tests
+  to user-named servers use the SSRF-safe connector (public addresses only, mail ports only,
+  verified TLS) and are rate limited; passwords with line breaks or NUL are refused.
 
 - Message bodies are defanged, not only fenced: images become `[image: alt]`,
   links `text (hxxps[:]//…)`, HTML tags and reference-link definitions are

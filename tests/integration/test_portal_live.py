@@ -15,7 +15,7 @@ from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, ServerProfile, TlsSettings
 from universal_email_mcp.oauth.identity import ImapLoginVerifier, Pseudonyms
 from universal_email_mcp.portal.connect import LiveTester
-from universal_email_mcp.store import Identity, MailAccount, MemoryBackend, Store, KeyRing
+from universal_email_mcp.store import Identity, KeyRing, MailAccount, MemoryBackend, Store
 
 from .conftest import ImapServer
 
