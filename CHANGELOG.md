@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   account, own namespace only, names sanitised and framed as data, not
   instructions. `account_info` returns the current map (text and structured
   `folder_map`), re-reading the folder list.
+- `send_message` (identity `send = true`; offered only when the policy is not
+  read-only/`off` and an identity can send): sends a saved draft (`draft_id`, re-read
+  from the server and re-validated: exactly one From that is a sending identity,
+  every To/Cc/Bcc header instance parsed) or a new message (the `save_draft`
+  arguments; composed, shown, stored as a draft, then sent). SMTP backend
+  (`mail/smtp.py`) over the SSRF-safe connector: implicit TLS or mandatory STARTTLS
+  (TLS >= 1.2, verified on the host name, never a plain login), AUTH, SIZE, per-
+  recipient refusal aborts before `DATA`, `Bcc` never transmitted, unknown outcome
+  after the body is reported and never retried. Recipient check before sending:
+  internal / known (sent-to history) / new / look-alike (typos, confusables, `xn--`
+  homographs, mixed scripts, other top-level domains - also for addresses that were
+  written to before). Policy: `[policy] send` = `off` | `draft` | `confirm` |
+  `confirm-external` | `on`, `internal_domains`, `max_sends_per_hour`/`_per_day`,
+  `limits.max_send_bytes`; identity keys `save_sent` and `file_replies`. The user
+  confirms through MCP elicitation (both protocol eras: mid-call request and
+  2026-07-28 input-required retry; the question carries a content fingerprint); a
+  client that cannot elicit, or a declined confirmation, leaves a draft. After a
+  send: copy into Sent and optionally the original's folder, draft removed,
+  `\Answered` on the replied-to mail. Audit events (`send.requested`/`confirmed`/
+  `declined`/`draft_kept`/`sent`/`failed`) as JSON lines on stderr, counts only.
 - Local download links: `universal-email-mcp local` runs a listener on `127.0.0.1`
   (random port, or `[downloads] port`) that streams attachments from IMAP at
   `/a/<token>`. Tokens are HMAC-signed with a per-run key and expire (`link_ttl`,

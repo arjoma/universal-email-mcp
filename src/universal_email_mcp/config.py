@@ -26,16 +26,20 @@ from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import (
     ACCOUNT_KINDS,
     ARCHIVE_SCHEMES,
+    FILE_REPLIES,
     FOLDER_ROLES,
+    SAVE_SENT,
     TLS_MODES,
     Account,
     AccountKind,
     ArchiveScheme,
     CredentialRef,
     Endpoint,
+    FileReplies,
     FolderRole,
     Identity,
     Permissions,
+    SaveSent,
     ServerProfile,
     TlsMode,
     TlsSettings,
@@ -46,7 +50,7 @@ APP_NAME = "universal-email-mcp"
 KEYRING_SERVICE = APP_NAME
 CONFIG_ENV = "UEM_CONFIG"
 
-SendPolicy = Literal["off", "confirm", "confirm-external", "on"]
+SendPolicy = Literal["off", "draft", "confirm", "confirm-external", "on"]
 SEND_POLICIES: tuple[SendPolicy, ...] = get_args(SendPolicy)
 PERMISSION_NAMES = ("read", "organize", "delete", "drafts")
 
@@ -67,6 +71,12 @@ class Policy:
     send: SendPolicy = "confirm"
     allowed_recipient_domains: tuple[str, ...] = ()
     max_recipients: int = 20
+    internal_domains: tuple[str, ...] = ()
+    """Domains whose addresses count as internal (own organisation). Your own
+    identity addresses are internal; a whole domain only if listed here."""
+    max_sends_per_hour: int = 20
+    max_sends_per_day: int = 100
+    """Send limits per SMTP account (counted in memory while the server runs)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +93,9 @@ class Limits:
     """Headers read per account and call for fuzzy search and contact lookup."""
     max_batch_messages: int = 50
     """Messages one mark/move/delete call may change (all accounts together)."""
+    max_send_bytes: int = 25 * 1024 * 1024
+    """Largest message ``send_message`` hands to an SMTP server (the server's own
+    SIZE limit applies as well)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,18 +348,34 @@ def _parse_downloads(c: _Ctx, t: dict[str, Any]) -> Downloads:
 
 def _parse_policy(c: _Ctx, t: dict[str, Any]) -> Policy:
     w = "[policy]"
-    c.check_keys(t, ("read_only", "send", "allowed_recipient_domains", "max_recipients"), w)
+    c.check_keys(
+        t,
+        (
+            "read_only",
+            "send",
+            "allowed_recipient_domains",
+            "max_recipients",
+            "internal_domains",
+            "max_sends_per_hour",
+            "max_sends_per_day",
+        ),
+        w,
+    )
     send = c.str_(t, "send", w, "confirm") or "confirm"
     if send not in SEND_POLICIES:
         raise c.err(
             w, f"send = {send!r} is invalid", hint=f"Use one of: {', '.join(SEND_POLICIES)}."
         )
     domains = tuple(normalize_hostname(d) for d in c.str_list(t, "allowed_recipient_domains", w))
+    internal = tuple(normalize_hostname(d) for d in c.str_list(t, "internal_domains", w))
     return Policy(
         read_only=c.bool_(t, "read_only", w, False),
         send=cast(SendPolicy, send),
         allowed_recipient_domains=domains,
         max_recipients=int(c.num(t, "max_recipients", w, 20, integer=True)),
+        internal_domains=internal,
+        max_sends_per_hour=int(c.num(t, "max_sends_per_hour", w, 20, integer=True)),
+        max_sends_per_day=int(c.num(t, "max_sends_per_day", w, 100, integer=True)),
     )
 
 
@@ -361,6 +390,7 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         "account_timeout",
         "max_headers_scanned",
         "max_batch_messages",
+        "max_send_bytes",
     )
     c.check_keys(t, keys, w)
     d = Limits()
@@ -381,6 +411,7 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         max_batch_messages=int(
             c.num(t, "max_batch_messages", w, d.max_batch_messages, integer=True)
         ),
+        max_send_bytes=int(c.num(t, "max_send_bytes", w, d.max_send_bytes, integer=True)),
     )
 
 
@@ -535,8 +566,22 @@ def _parse_identity(
         "default",
         "send",
         "signature",
+        "save_sent",
+        "file_replies",
     )
     c.check_keys(t, keys, w)
+    save_sent = c.str_(t, "save_sent", w, "auto") or "auto"
+    if save_sent not in SAVE_SENT:
+        raise c.err(
+            w, f"save_sent = {save_sent!r} is invalid", hint=f"Use: {', '.join(SAVE_SENT)}."
+        )
+    file_replies = c.str_(t, "file_replies", w, "sent") or "sent"
+    if file_replies not in FILE_REPLIES:
+        raise c.err(
+            w,
+            f"file_replies = {file_replies!r} is invalid",
+            hint=f"Use: {', '.join(FILE_REPLIES)}.",
+        )
     addresses = c.str_list(t, "addresses", w)
     single = c.str_(t, "address", w)
     if single:
@@ -562,6 +607,20 @@ def _parse_identity(
     store_account = account_ref("store_account", base)
     if smtp_account and accounts[smtp_account.casefold()].server.smtp is None:
         raise c.err(w, f"account {smtp_account!r} has no SMTP server")
+    if c.bool_(t, "send", w, False):
+        if smtp_account is None:
+            raise c.err(
+                w,
+                "send = true needs an SMTP account",
+                hint="Set account (or smtp_account) to an account with an SMTP server.",
+            )
+        if store_account is None:
+            raise c.err(
+                w,
+                "send = true needs an account for Drafts and Sent copies",
+                hint="Set account (or store_account) to an IMAP account with the 'drafts' "
+                "permission: a message is always saved as a draft before it is sent.",
+            )
     if store_account and accounts[store_account.casefold()].kind != "imap":
         raise c.err(w, f"store_account {store_account!r} must be an IMAP account")
     return Identity(
@@ -573,6 +632,8 @@ def _parse_identity(
         default=c.bool_(t, "default", w, False),
         send=c.bool_(t, "send", w, False),
         signature=c.str_(t, "signature", w) or "",
+        save_sent=cast(SaveSent, save_sent),
+        file_replies=cast(FileReplies, file_replies),
     )
 
 
@@ -591,6 +652,8 @@ def _settle_default_identity(c: _Ctx, identities: list[Identity]) -> list[Identi
             default=True,
             send=first.send,
             signature=first.signature,
+            save_sent=first.save_sent,
+            file_replies=first.file_replies,
         )
     return identities
 

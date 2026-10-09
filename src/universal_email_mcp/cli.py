@@ -11,7 +11,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from universal_email_mcp import __version__
+from universal_email_mcp import __version__, audit
 from universal_email_mcp.config import Config, load_config, resolve_password
 from universal_email_mcp.errors import ConfigError, CredentialMissing, MailError
 from universal_email_mcp.mail.net import NetPolicy
@@ -180,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     # imapclient/imaplib debug logs contain protocol traffic (mail data): keep them off.
     logging.getLogger("imapclient").setLevel(logging.WARNING)
+    audit.setup()  # audit events (send attempts: counts only) always go to stderr
 
     handlers: dict[str, Any] = {"probe": _cmd_probe, "local": _cmd_local}
     if args.command is None:

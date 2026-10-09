@@ -28,6 +28,11 @@ FOLDER_ROLES: tuple[FolderRole, ...] = get_args(FolderRole)
 ArchiveScheme = Literal["auto", "flat", "yearly", "monthly"]
 ARCHIVE_SCHEMES: tuple[ArchiveScheme, ...] = get_args(ArchiveScheme)
 
+SaveSent = Literal["auto", "always", "never"]
+SAVE_SENT: tuple[SaveSent, ...] = get_args(SaveSent)
+FileReplies = Literal["sent", "thread_folder", "both"]
+FILE_REPLIES: tuple[FileReplies, ...] = get_args(FileReplies)
+
 AccountKind = Literal["imap", "pop3"]
 ACCOUNT_KINDS: tuple[AccountKind, ...] = get_args(AccountKind)
 
@@ -55,6 +60,8 @@ class ServerProfile:
     smtp: Endpoint | None = None
     folder_roles: dict[FolderRole, str] = field(default_factory=dict[FolderRole, str])
     label: str = ""
+    smtp_saves_sent: bool = False
+    """The SMTP server files a copy in Sent itself (``save_sent = "auto"`` then does not)."""
 
 
 # --------------------------------------------------------------------------- accounts
@@ -134,6 +141,12 @@ class Identity:
     default: bool = False
     send: bool = False
     signature: str = ""
+    save_sent: SaveSent = "auto"
+    """Copy of sent mail into the store account's Sent folder: ``auto`` = yes unless the
+    SMTP server saves it itself, ``always``, ``never``."""
+    file_replies: FileReplies = "sent"
+    """Where the copy of a reply goes when the original lives in a user folder:
+    ``sent`` (Sent only), ``thread_folder`` (the original's folder only) or ``both``."""
 
 
 # --------------------------------------------------------------------------- folders
