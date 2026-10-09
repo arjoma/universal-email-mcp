@@ -129,7 +129,7 @@ class PortalEndpoints:
 
     # ------------------------------------------------------------------ plumbing
 
-    def _page(
+    def page(
         self,
         request: Request,
         template: str,
@@ -154,7 +154,7 @@ class PortalEndpoints:
             **ctx,
         )
 
-    def _redirect(self, path: str, notice: str = "") -> Response:
+    def redirect(self, path: str, notice: str = "") -> Response:
         if notice:
             path = f"{path}?{urlencode({'notice': notice})}"
         response = RedirectResponse(path, status_code=303)
@@ -163,10 +163,10 @@ class PortalEndpoints:
 
     def _to_signin(self, request: Request) -> Response:
         target = "/portal/signin?" + urlencode({"next": safe_next(request.url.path)})
-        return self._redirect(target)
+        return self.redirect(target)
 
-    def _to_reauth(self, target: str) -> Response:
-        return self._redirect("/portal/reauth?" + urlencode({"next": safe_next(target)}))
+    def to_reauth(self, target: str) -> Response:
+        return self.redirect("/portal/reauth?" + urlencode({"next": safe_next(target)}))
 
     async def _auth(self, request: Request) -> Auth | None:
         raw = self.web.session_cookie(request)
@@ -180,16 +180,16 @@ class PortalEndpoints:
         user = await self.store.get(User, session.user_id)
         return Auth(session, user) if user else None
 
-    async def _get(self, request: Request) -> Auth | Response:
+    async def get_auth(self, request: Request) -> Auth | Response:
         return await self._auth(request) or self._to_signin(request)
 
-    async def _post(
+    async def post_auth(
         self, request: Request, *, limited: bool = True
     ) -> tuple[Auth, FormData] | Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
             await self.svc.audit("auth.csrf_failed", area="portal")
-            return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
+            return self.page(request, "error.html", status=403, csrf=False, reason="csrf")
         auth = await self._auth(request)
         if auth is None:
             return self._to_signin(request)
@@ -225,15 +225,15 @@ class PortalEndpoints:
         return 0
 
     def _too_many(self, request: Request, wait: int) -> Response:
-        response = self._page(request, "error.html", status=429, csrf=False, reason="ratelimited")
+        response = self.page(request, "error.html", status=429, csrf=False, reason="ratelimited")
         response.headers["retry-after"] = str(wait)
         return response
 
-    def _fresh(self, auth: Auth) -> bool:
+    def fresh(self, auth: Auth) -> bool:
         return self.store.reauth_fresh(auth.session, self.svc.cfg.reauth_window)
 
-    def _not_found(self, request: Request, auth: Auth | None = None) -> Response:
-        return self._page(request, "error.html", status=404, csrf=False, reason="notfound")
+    def not_found(self, request: Request, auth: Auth | None = None) -> Response:
+        return self.page(request, "error.html", status=404, csrf=False, reason="notfound")
 
     async def _account(self, auth: Auth, account_id: str) -> MailAccount | None:
         if not _ID.match(account_id):
@@ -271,12 +271,12 @@ class PortalEndpoints:
 
     async def home(self, request: Request) -> Response:
         auth = await self._auth(request)
-        return self._redirect("/portal/accounts" if auth else "/portal/signin")
+        return self.redirect("/portal/accounts" if auth else "/portal/signin")
 
     async def signin_get(self, request: Request) -> Response:
         if await self._auth(request):
-            return self._redirect(safe_next(request.query_params.get("next")))
-        return self._page(
+            return self.redirect(safe_next(request.query_params.get("next")))
+        return self.page(
             request,
             "portal_signin.html",
             error="",
@@ -291,13 +291,13 @@ class PortalEndpoints:
         typed = raw_address.strip() if isinstance(raw_address, str) else ""
         if not self.web.check_csrf(request, form):
             await self.svc.audit("auth.csrf_failed", area="portal")
-            return self._page(
+            return self.page(
                 request, "portal_signin.html", status=403, error="csrf", address=typed, next=nxt
             )
         password = form.get("password")
         check = await signin.check_login(self.svc, request, typed, password)
         if not check.ok:
-            return self._page(
+            return self.page(
                 request,
                 "portal_signin.html",
                 status=check.status,
@@ -313,7 +313,7 @@ class PortalEndpoints:
             self.web.session_cookie(request),
             store_password=bool(form.get("store_password")),
         )
-        response = self._redirect(nxt)
+        response = self.redirect(nxt)
         self.web.set_session(response, raw)
         self.web.rotate_csrf(response)
         return response
@@ -322,20 +322,20 @@ class PortalEndpoints:
         form = await request.form()
         if not self.web.check_csrf(request, form):
             await self.svc.audit("auth.csrf_failed", area="portal")
-            return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
+            return self.page(request, "error.html", status=403, csrf=False, reason="csrf")
         raw = self.web.session_cookie(request)
         if raw:
             await self.store.delete_portal_session(raw)
-        response = self._redirect("/portal/signin", "signed_out")
+        response = self.redirect("/portal/signin", "signed_out")
         self.web.delete_cookie(response, "session")
         self.web.rotate_csrf(response)
         return response
 
     async def reauth_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
-        return self._page(
+        return self.page(
             request,
             "reauth.html",
             section="",
@@ -345,7 +345,9 @@ class PortalEndpoints:
         )
 
     async def reauth_post(self, request: Request) -> Response:
-        got = await self._post(request, limited=False)  # a password check: signin_* limits apply
+        got = await self.post_auth(
+            request, limited=False
+        )  # a password check: signin_* limits apply
         if isinstance(got, Response):
             return got
         auth, form = got
@@ -357,20 +359,20 @@ class PortalEndpoints:
             status = (
                 401 if error == signin.BAD_CREDENTIALS else 429 if error == "rate_limited" else 503
             )
-            return self._page(
+            return self.page(
                 request, "reauth.html", status=status, auth=auth, error=error, next=nxt
             )
         await self.store.mark_reauth(auth.session)
         await self.svc.audit("portal.reauth", outcome="ok", user=auth.user.id)
-        return self._redirect(nxt)
+        return self.redirect(nxt)
 
     async def language(self, request: Request) -> Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
             await self.svc.audit("auth.csrf_failed", area="portal")
-            return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
+            return self.page(request, "error.html", status=403, csrf=False, reason="csrf")
         lang = str(form.get("lang", "")).lower()
-        response = self._redirect(safe_next(form.get("next"), "/portal"))
+        response = self.redirect(safe_next(form.get("next"), "/portal"))
         if lang in self.web.translator.languages:
             response.set_cookie(
                 LANG_COOKIE,
@@ -386,11 +388,11 @@ class PortalEndpoints:
     # ------------------------------------------------------------------ accounts
 
     async def accounts(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         accounts = await self.store.list_for_user(MailAccount, auth.user.id)
-        return self._page(
+        return self.page(
             request,
             "accounts.html",
             section="accounts",
@@ -431,12 +433,12 @@ class PortalEndpoints:
         }
 
     async def account_new_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
-        if not self._fresh(auth):
-            return self._to_reauth(request.url.path)
-        return self._page(
+        if not self.fresh(auth):
+            return self.to_reauth(request.url.path)
+        return self.page(
             request, "account_new.html", section="accounts", auth=auth, **self._add_form_context()
         )
 
@@ -477,12 +479,12 @@ class PortalEndpoints:
         return f"{user_id}:{endpoint.host.lower()}:{endpoint.port}:{username}"
 
     async def account_new_post(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
-        if not self._fresh(auth):
-            return self._to_reauth("/portal/accounts/new")
+        if not self.fresh(auth):
+            return self.to_reauth("/portal/accounts/new")
         protocol = str(form.get("protocol", "imap"))
         values = {
             "name": clean_text(form.get("name"), MAX_NAME),
@@ -495,7 +497,7 @@ class PortalEndpoints:
         }
 
         def again(code: str, status: int = 400) -> Response:
-            return self._page(
+            return self.page(
                 request,
                 "account_new.html",
                 status=status,
@@ -520,7 +522,7 @@ class PortalEndpoints:
             protocol=account.protocol,
             with_identity=identity is not None,
         )
-        return self._redirect(f"/portal/accounts/{account.id}", "account_added")
+        return self.redirect(f"/portal/accounts/{account.id}", "account_added")
 
     async def _build_account(
         self, request: Request, auth: Auth, form: FormData, values: dict[str, Any]
@@ -585,12 +587,12 @@ class PortalEndpoints:
         return account, identity
 
     async def account_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         return self._account_page(request, auth, account)
 
     def _account_page(
@@ -603,7 +605,7 @@ class PortalEndpoints:
         error: str = "",
         status: int = 200,
     ) -> Response:
-        return self._page(
+        return self.page(
             request,
             "account.html",
             status=status,
@@ -616,13 +618,13 @@ class PortalEndpoints:
         )
 
     async def account_test(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _form = got
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         endpoint = ops.account_endpoint(account)
         try:
             await self._check_limits(
@@ -658,16 +660,16 @@ class PortalEndpoints:
         return self._account_page(request, auth, account, results=results)
 
     async def account_permissions(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         new = self._chosen_permissions(form, account.protocol)
-        if set(new) - set(account.permissions) and not self._fresh(auth):
-            return self._to_reauth(f"/portal/accounts/{account.id}")
+        if set(new) - set(account.permissions) and not self.fresh(auth):
+            return self.to_reauth(f"/portal/accounts/{account.id}")
         await ops.update_retry(
             self.store, MailAccount, account.id, lambda a: replace(a, permissions=new)
         )
@@ -678,18 +680,18 @@ class PortalEndpoints:
             account=account.id,
             permissions=" ".join(new),
         )
-        return self._redirect(f"/portal/accounts/{account.id}", "permissions_saved")
+        return self.redirect(f"/portal/accounts/{account.id}", "permissions_saved")
 
     async def account_password_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
-        if not self._fresh(auth):
-            return self._to_reauth(request.url.path)
-        return self._page(
+            return self.not_found(request, auth)
+        if not self.fresh(auth):
+            return self.to_reauth(request.url.path)
+        return self.page(
             request,
             "account_password.html",
             section="accounts",
@@ -699,18 +701,18 @@ class PortalEndpoints:
         )
 
     async def account_password_post(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
-        if not self._fresh(auth):
-            return self._to_reauth(f"/portal/accounts/{account.id}/password")
+            return self.not_found(request, auth)
+        if not self.fresh(auth):
+            return self.to_reauth(f"/portal/accounts/{account.id}/password")
 
         def again(code: str, status: int = 400) -> Response:
-            return self._page(
+            return self.page(
                 request,
                 "account_password.html",
                 status=status,
@@ -739,17 +741,17 @@ class PortalEndpoints:
             return again(f"test_{outcome.status}")
         await ops.set_password(self.store, auth.user.id, account.id, password)
         await self.svc.audit("portal.account_password", user=auth.user.id, account=account.id)
-        return self._redirect(f"/portal/accounts/{account.id}", "password_saved")
+        return self.redirect(f"/portal/accounts/{account.id}", "password_saved")
 
     async def account_remove_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
-        if not self._fresh(auth):
-            return self._to_reauth(request.url.path)
+            return self.not_found(request, auth)
+        if not self.fresh(auth):
+            return self.to_reauth(request.url.path)
         grants = [
             g
             for g in await self.store.list_for_user(Grant, auth.user.id)
@@ -760,7 +762,7 @@ class PortalEndpoints:
             for i in await self.store.list_for_user(Identity, auth.user.id)
             if i.smtp_account_id == account.id
         ]
-        return self._page(
+        return self.page(
             request,
             "account_remove.html",
             section="accounts",
@@ -771,15 +773,15 @@ class PortalEndpoints:
         )
 
     async def account_remove_post(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _form = got
         account = await self._account(auth, request.path_params["account_id"])
         if account is None:
-            return self._not_found(request, auth)
-        if not self._fresh(auth):
-            return self._to_reauth(f"/portal/accounts/{account.id}/remove")
+            return self.not_found(request, auth)
+        if not self.fresh(auth):
+            return self.to_reauth(f"/portal/accounts/{account.id}/remove")
         removal = await ops.remove_account(
             self.store, auth.user.id, account.id, self.svc.cfg.offered_scopes
         )
@@ -790,17 +792,17 @@ class PortalEndpoints:
             grants=removal.grants_revoked if removal else 0,
             identities=removal.identities_removed if removal else 0,
         )
-        return self._redirect("/portal/accounts", "account_removed")
+        return self.redirect("/portal/accounts", "account_removed")
 
     # ------------------------------------------------------------------ identities
 
     async def identities(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         idents = await self.store.list_for_user(Identity, auth.user.id)
         accounts = {a.id: a for a in await self.store.list_for_user(MailAccount, auth.user.id)}
-        return self._page(
+        return self.page(
             request,
             "identities.html",
             section="identities",
@@ -858,10 +860,10 @@ class PortalEndpoints:
         }
 
     async def identity_new_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
-        return self._page(
+        return self.page(
             request,
             "identity_form.html",
             section="identities",
@@ -870,12 +872,12 @@ class PortalEndpoints:
         )
 
     async def identity_edit_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         ident = await self._identity(auth, request.path_params["identity_id"])
         if ident is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         values = {
             "address": ident.addresses[0] if ident.addresses else "",
             "display_name": ident.display_name,
@@ -885,7 +887,7 @@ class PortalEndpoints:
             "default": ident.is_default,
             "send": ident.send,
         }
-        return self._page(
+        return self.page(
             request,
             "identity_form.html",
             section="identities",
@@ -894,7 +896,7 @@ class PortalEndpoints:
         )
 
     async def identity_save(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
@@ -902,7 +904,7 @@ class PortalEndpoints:
         if "identity_id" in request.path_params:
             existing = await self._identity(auth, request.path_params["identity_id"])
             if existing is None:
-                return self._not_found(request, auth)
+                return self.not_found(request, auth)
         values = {
             "address": str(form.get("address", ""))[:MAX_USERNAME],
             "display_name": str(form.get("display_name", ""))[: MAX_DISPLAY_NAME * 2],
@@ -917,9 +919,9 @@ class PortalEndpoints:
             fields = await self._identity_fields(auth, values, existing)
         except FormProblem as e:
             return await self._again(request, auth, values, e.code, existing)
-        if fields["send"] and not self._fresh(auth):
+        if fields["send"] and not self.fresh(auth):
             target = f"/portal/identities/{existing.id}" if existing else "/portal/identities/new"
-            return self._to_reauth(target)
+            return self.to_reauth(target)
         if existing is None:
             idents = await self.store.list_for_user(Identity, auth.user.id)
             if len(idents) >= self.svc.cfg.max_identities:
@@ -948,7 +950,7 @@ class PortalEndpoints:
             await ops.set_default_identity(self.store, auth.user.id, ident.id)
         await ops.clamp_grants(self.store, auth.user.id, self.svc.cfg.offered_scopes)
         await self.svc.audit(event, user=auth.user.id, identity=ident.id, can_send=fields["send"])
-        return self._redirect("/portal/identities", "identity_saved")
+        return self.redirect("/portal/identities", "identity_saved")
 
     async def _again(
         self,
@@ -958,7 +960,7 @@ class PortalEndpoints:
         code: str,
         existing: Identity | None,
     ) -> Response:
-        return self._page(
+        return self.page(
             request,
             "identity_form.html",
             status=429 if code == "rate_limited" else 400,
@@ -1029,25 +1031,25 @@ class PortalEndpoints:
         return fields
 
     async def identity_default(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _ = got
         ident = await self._identity(auth, request.path_params["identity_id"])
         if ident is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         await ops.set_default_identity(self.store, auth.user.id, ident.id)
         await self.svc.audit("portal.identity_edit", user=auth.user.id, identity=ident.id)
-        return self._redirect("/portal/identities", "identity_default")
+        return self.redirect("/portal/identities", "identity_default")
 
     async def identity_remove_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         ident = await self._identity(auth, request.path_params["identity_id"])
         if ident is None:
-            return self._not_found(request, auth)
-        return self._page(
+            return self.not_found(request, auth)
+        return self.page(
             request,
             "identity_remove.html",
             section="identities",
@@ -1056,13 +1058,13 @@ class PortalEndpoints:
         )
 
     async def identity_remove_post(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _ = got
         ident = await self._identity(auth, request.path_params["identity_id"])
         if ident is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         touched = await ops.remove_identity(self.store, auth.user.id, ident.id)
         await self.svc.audit(
             "portal.identity_remove",
@@ -1070,16 +1072,16 @@ class PortalEndpoints:
             identity=ident.id,
             grants=touched or 0,
         )
-        return self._redirect("/portal/identities", "identity_removed")
+        return self.redirect("/portal/identities", "identity_removed")
 
     async def identity_test(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _ = got
         ident = await self._identity(auth, request.path_params["identity_id"])
         if ident is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         endpoint = ops.identity_smtp_endpoint(ident)
         accounts = {a.id: a for a in await self.store.list_for_user(MailAccount, auth.user.id)}
         view = self._identity_view(ident, accounts)
@@ -1091,7 +1093,7 @@ class PortalEndpoints:
         }  # fmt: skip
         ctx = await self._identity_form_context(auth, values, identity_id=ident.id)
         if endpoint is None:
-            return self._page(
+            return self.page(
                 request, "identity_form.html", status=400, section="identities", auth=auth,
                 **{**ctx, "error": "smtp_account"},
             )  # fmt: skip
@@ -1100,7 +1102,7 @@ class PortalEndpoints:
                 request, auth, self._target(endpoint, ident.smtp_username, auth.user.id)
             )
         except FormProblem as e:
-            return self._page(
+            return self.page(
                 request, "identity_form.html", status=429, section="identities", auth=auth,
                 **{**ctx, "error": e.code},
             )  # fmt: skip
@@ -1113,7 +1115,7 @@ class PortalEndpoints:
             "portal.identity_test", user=auth.user.id, identity=ident.id,
             outcome=outcome.status,
         )  # fmt: skip
-        return self._page(
+        return self.page(
             request, "identity_form.html", section="identities", auth=auth,
             **{**ctx, "results": [{"kind": "smtp", "outcome": outcome}]},
         )  # fmt: skip
@@ -1121,13 +1123,13 @@ class PortalEndpoints:
     # ------------------------------------------------------------------ connected clients
 
     async def clients(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         grants = await self.store.list_for_user(Grant, auth.user.id)
         names = await self._names(auth.user.id)
         views = [await self._grant_view(g, names) for g in reversed(grants)]
-        return self._page(request, "clients.html", section="clients", auth=auth, grants=views)
+        return self.page(request, "clients.html", section="clients", auth=auth, grants=views)
 
     async def _names(self, user_id: str) -> dict[str, str]:
         out = {a.id: a.name for a in await self.store.list_for_user(MailAccount, user_id)}
@@ -1165,12 +1167,12 @@ class PortalEndpoints:
         }
 
     async def client_get(self, request: Request) -> Response:
-        auth = await self._get(request)
+        auth = await self.get_auth(request)
         if isinstance(auth, Response):
             return auth
         grant = await self._grant(auth, request.path_params["grant_id"])
         if grant is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         return await self._client_page(request, auth, grant)
 
     async def _client_page(
@@ -1188,7 +1190,7 @@ class PortalEndpoints:
             for a in grant.account_ids
             if a in names
         ]
-        return self._page(
+        return self.page(
             request,
             "client.html",
             status=status,
@@ -1201,13 +1203,13 @@ class PortalEndpoints:
         )
 
     async def client_save(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, form = got
         grant = await self._grant(auth, request.path_params["grant_id"])
         if grant is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         keep: dict[str, set[str]] = {}
         for item in form.getlist("grant"):
             account_id, _, perm = str(item).rpartition(":")
@@ -1224,19 +1226,19 @@ class PortalEndpoints:
             return await self._client_page(request, auth, grant, error="keep_one", status=400)
         await ops.reduce_grant(self.store, grant.id, offered, keep, idents)
         await self.svc.audit("portal.grant_edit", user=auth.user.id, grant=grant.id, scope=preview)
-        return self._redirect("/portal/clients", "client_saved")
+        return self.redirect("/portal/clients", "client_saved")
 
     async def client_revoke(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self.post_auth(request)
         if isinstance(got, Response):
             return got
         auth, _ = got
         grant = await self._grant(auth, request.path_params["grant_id"])
         if grant is None:
-            return self._not_found(request, auth)
+            return self.not_found(request, auth)
         await self.store.revoke_grant(grant.id)
         await self.svc.audit("portal.grant_revoke", user=auth.user.id, grant=grant.id)
-        return self._redirect("/portal/clients", "client_revoked")
+        return self.redirect("/portal/clients", "client_revoked")
 
 
 def portal_group(ps: PortalService) -> RouteGroup:
