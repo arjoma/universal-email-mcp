@@ -39,6 +39,16 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       as skipped). Restructure: a time budget instead of a folder count, and later
       rounds only in folders that had hits.
 
+## Tool surface review leftovers (PR #7)
+- [ ] Fuzzy message score keys can shift between pages: the exact-match boost
+      covers only the first `limit*4` UIDs, and `limit` is not in the argument hash.
+- [ ] `list_messages` could reuse `paging.keyset_page` for its retry logic.
+- [ ] A fuzzy `query` is scored per header text (sender, recipients, subject
+      separately), so words spread over several fields ("rechnung huber") do not
+      add up — consider scoring the combined text too.
+- [ ] WP 2d look-alike check must handle "the user really wrote to a typo
+      address" (`sent_to=true` for `oliver.grnat@`).
+
 ## M1 review leftovers
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
       `SINCE`/`BEFORE` compare the server's INTERNALDATE day (server time zone) —
