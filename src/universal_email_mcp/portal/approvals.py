@@ -136,7 +136,7 @@ class ApprovalPages:
         elif grant is None:
             state = "void"
         else:
-            state = "pending" if rec.status == "pending" else "rejected"
+            state = "pending" if rec.status == "pending" else "approved"
         return Loaded(rec, state, grant)
 
     def _pool(self) -> UserPool:
@@ -184,7 +184,7 @@ class ApprovalPages:
             elif grant is None:
                 state = "void"
             else:
-                state = "pending"
+                state = "pending" if rec.status == "pending" else "approved"
             items.append(
                 {
                     "id": rec.id,
@@ -285,6 +285,9 @@ class ApprovalPages:
             return await self._detail_page(request, auth, loaded, status=409)
         except MailError as e:
             audit.event("approval.refused", **who, reason=e.code)
+            return await self._detail_page(request, auth, loaded, status=409)
+        if prepared.keep_reason is not None:  # policy "draft": nothing to approve, keep it
+            self._pool().release(ctx)
             return await self._detail_page(request, auth, loaded, status=409)
         pool = self._pool()
         try:

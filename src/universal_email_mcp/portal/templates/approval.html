@@ -7,6 +7,8 @@
 <p class="note" role="alert">{{ _("This request has expired. Nothing was sent. The message is still in your Drafts folder; ask the application to send it again if you want it to go out.") }}</p>
 {% elif approval.state == "rejected" %}
 <p class="note" role="status">{{ _("You rejected this message. Nothing was sent. It is still in your Drafts folder.") }}</p>
+{% elif approval.state == "approved" %}
+<p class="note" role="alert">{{ _("This request was approved already. Nothing more can be done here.") }}</p>
 {% elif approval.state == "void" %}
 <p class="note" role="alert">{{ _("The application was disconnected, so this request is void. Nothing was sent.") }}</p>
 {% elif problem == "changed" %}

@@ -777,3 +777,14 @@ def test_derived_secrets_are_stable_distinct_and_follow_the_ring() -> None:
     # the active key comes first; an older key stays usable for unsealing
     old = KeyRing({"k1": b"a" * 32}).derive("purpose-a")
     assert ring.derive("purpose-a")[0] != old[0] and old[0] in ring.derive("purpose-a")
+
+
+async def test_claim_send_expired_marker_is_replaced_once(store: Store, clock: Clock) -> None:
+    import asyncio
+    from datetime import timedelta
+
+    ttl = timedelta(minutes=10)
+    assert await store.claim_send("u_1", "h" * 64, ttl)
+    clock.advance(minutes=11)  # expired, not purged
+    got = await asyncio.gather(*(store.claim_send("u_1", "h" * 64, ttl) for _ in range(4)))
+    assert sum(got) == 1

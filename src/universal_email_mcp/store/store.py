@@ -640,10 +640,14 @@ class Store:
                 )
             )
         except AlreadyExists:
-            existing = await self.get(PendingApproval, self._send_marker_id(user_id, content_hash))
-            if existing is not None:
+            marker = self._send_marker_id(user_id, content_hash)
+            stale = await self.get_any(PendingApproval, marker)
+            if stale is None or stale.expires_at > now:
                 return False
-            await self.delete(PendingApproval, self._send_marker_id(user_id, content_hash))
+            try:  # an expired, not yet purged marker: replace it, but only if nobody else did
+                await self.delete(PendingApproval, marker, expected_version=stale.version)
+            except StoreConflict:
+                return False
             return await self.claim_send(user_id, content_hash, ttl)
         return True
 

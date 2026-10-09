@@ -88,7 +88,7 @@ policy decides whether the user must confirm. Then:
   user approves it on the portal page "Pending approvals" ([portal.md](portal.md)); and
   `send-unless-flagged` sends directly unless the recipient check flags something (a new address
   or a look-alike - then it goes to the portal). A **look-alike is never sent without a human**,
-  whatever the mode.
+  whatever the mode. (The trust assumption: a client that declares elicitation is taken to put the question to the user; the portal fallbacks exist for clients that cannot, and `portal` for operators who do not want to rely on it.)
 * **Limits.** `UEM_MAX_RECIPIENTS`, `UEM_ALLOWED_RECIPIENT_DOMAINS`, message size and the send rate
   (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`) apply; the rate is **per user**, counted in the store (every
   completed send writes an activity entry without address or subject), so it is shared by all of

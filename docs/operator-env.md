@@ -95,7 +95,7 @@ counted per user in the store (shared by all instances), not per SMTP account.
 
 When the policy wants the user's confirmation but the client cannot ask (legacy protocol over
 stateless HTTP, or a client without form elicitation), `SEND_FALLBACK` decides. Nothing is ever
-sent for a new address or a look-alike without a human.
+sent for a look-alike without a human; under `confirm` / `confirm-external` nor to a new address (with `UEM_SEND_POLICY=on` a new address needs no question).
 
 | Value | Effect |
 |---|---|

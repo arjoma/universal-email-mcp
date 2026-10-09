@@ -51,6 +51,7 @@ from universal_email_mcp.errors import (
     MessageNotFound,
     NotPermitted,
     RateLimited,
+    SendOutcomeUnknown,
     TooLarge,
 )
 from universal_email_mcp.mail import smtp
@@ -730,7 +731,9 @@ class Sender:
                     receipt = await asyncio.to_thread(run)
                 except MailError as e:
                     audit.event("send.failed", **base, code=e.code)
-                    await self._unclaim(claimed)
+                    if not isinstance(e, SendOutcomeUnknown):
+                        # unknown outcome: the mail may be out, so the claim stays (no resend)
+                        await self._unclaim(claimed)
                     if p.ref is not None:
                         e.hint = (e.hint + " " if e.hint else "") + (
                             f"The message is kept as a draft (id {p.ref.encode()})."
