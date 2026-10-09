@@ -1,0 +1,60 @@
+{% extends "portal_base.html" %}
+{% block title %}{% if identity_id %}{{ _("Edit the sender identity") }}{% else %}{{ _("Add a sender identity") }}{% endif %}{% endblock %}
+{% block heading %}{% if identity_id %}{{ _("Edit the sender identity") }}{% else %}{{ _("Add a sender identity") }}{% endif %}{% endblock %}
+{% block body %}
+{{ m.error_box(error) }}
+{% if results %}
+<h2>{{ _("Test result") }}</h2>
+<ul class="plain results">
+  {% for r in results %}{{ m.test_result(r) }}{% endfor %}
+</ul>
+{% endif %}
+<form method="post" action="{% if identity_id %}/portal/identities/{{ identity_id }}{% else %}/portal/identities/new{% endif %}">
+  {{ m.csrf() }}
+  <label for="address">{{ _("E-mail address") }}</label>
+  <input id="address" name="address" type="email" required maxlength="254" value="{{ values.address }}">
+  <label for="display_name">{{ _("Display name") }}</label>
+  <input id="display_name" name="display_name" type="text" maxlength="80" value="{{ values.display_name }}">
+  <label for="signature">{{ _("Signature") }}</label>
+  <textarea id="signature" name="signature" rows="4" maxlength="2000">{{ values.signature }}</textarea>
+
+  <label for="smtp_account">{{ _("Send through the server of") }}</label>
+  <select id="smtp_account" name="smtp_account">
+    <option value="">{{ _("(none: this identity cannot send)") }}</option>
+    {% for key, label in smtp_choices %}
+    <option value="{{ key }}"{% if key == values.smtp_account %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <p class="hint">{{ _("Sending uses the user name and password of that account.") }}</p>
+
+  <label for="store_account">{{ _("Keep drafts and sent copies in") }}</label>
+  <select id="store_account" name="store_account">
+    <option value="">{{ _("(none)") }}</option>
+    {% for key, label in store_choices %}
+    <option value="{{ key }}"{% if key == values.store_account %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+
+  <label class="choice"><input type="checkbox" name="default"{% if values.default %} checked{% endif %}> {{ _("Use as the default sender") }}</label>
+  {% if send_possible %}
+  <label class="choice"><input type="checkbox" name="send"{% if values.send %} checked{% endif %}> {{ _("Allow applications to send mail as this identity (you still decide per application; this asks for your password)") }}</label>
+  {% endif %}
+
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Save") }}</button>
+    <a class="button" href="/portal/identities">{{ _("Cancel") }}</a>
+  </div>
+</form>
+{% if identity_id %}
+<h2>{{ _("More") }}</h2>
+<form method="post" action="/portal/identities/{{ identity_id }}/test" class="inline">
+  {{ m.csrf() }}
+  <button type="submit">{{ _("Test the sending login") }}</button>
+</form>
+<form method="post" action="/portal/identities/{{ identity_id }}/default" class="inline">
+  {{ m.csrf() }}
+  <button type="submit">{{ _("Make this the default sender") }}</button>
+</form>
+<p><a class="danger" href="/portal/identities/{{ identity_id }}/remove">{{ _("Remove this identity") }}</a></p>
+{% endif %}
+{% endblock %}

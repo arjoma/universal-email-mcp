@@ -15,7 +15,6 @@ on a page and never redirected (OAuth 2.1 section 4.1.2.1).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -28,9 +27,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from universal_email_mcp.errors import AuthFailed, MailError
+from universal_email_mcp.errors import MailError
 from universal_email_mcp.jsonlog import log_event
-from universal_email_mcp.oauth import pkce
+from universal_email_mcp.oauth import pkce, signin
 from universal_email_mcp.oauth.clients import (
     ClientError,
     ClientInfo,
@@ -43,7 +42,7 @@ from universal_email_mcp.oauth.config import (
     SCOPE_SEND,
     permission_of,
 )
-from universal_email_mcp.oauth.identity import AddressError, parse_address, short_id
+from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.oauth.redirects import (
     RedirectError,
     csp_form_target,
@@ -52,6 +51,7 @@ from universal_email_mcp.oauth.redirects import (
     validate_redirect_uri,
 )
 from universal_email_mcp.oauth.service import OAuthService, oauth_error, same_resource
+from universal_email_mcp.portal import ops
 from universal_email_mcp.portal.assets import PORTAL_CSS
 from universal_email_mcp.portal.web import client_ip, security_headers
 from universal_email_mcp.server.http import RouteGroup
@@ -69,12 +69,7 @@ from universal_email_mcp.store import (
 
 log = logging.getLogger(__name__)
 
-PRIMARY_ID = "primary"
-"""Pseudo account / identity of the sign-in mailbox, offered on the consent page until the
-portal (3d) lets users add their own accounts and identities."""
 MAX_PARAM = 512
-MAX_LOGIN_THREADS = 16
-LOGIN_TIMEOUT = 25.0
 MAX_REGISTER_BYTES = 8 * 1024
 
 _AUTHZ_FIELDS = (
@@ -152,7 +147,6 @@ class Row:
 class OAuthEndpoints:
     def __init__(self, svc: OAuthService) -> None:
         self.svc = svc
-        self._login_slots = asyncio.Semaphore(MAX_LOGIN_THREADS)
 
     # -- metadata ---------------------------------------------------------------------
 
@@ -322,10 +316,10 @@ class OAuthEndpoints:
         )
 
     async def _rows(self, user: User) -> tuple[list[Row], list[tuple[str, str]]]:
-        """Accounts and identities the user can grant (the sign-in mailbox until 3d)."""
+        """What the user can hand out: their accounts (per scope: the account's own
+        permissions within what the operator offers) and the identities that may send."""
         store, offered = self.svc.store, self.svc.cfg.offered_scopes
         account_scopes = tuple(s for s in ACCOUNT_SCOPES if s in offered)
-        accounts = await store.list_for_user(MailAccount, user.id)
         rows = [
             Row(
                 a.id,
@@ -333,17 +327,16 @@ class OAuthEndpoints:
                 tuple(s for s in account_scopes if permission_of(s) in a.permissions),
                 (),
             )
-            for a in accounts
+            for a in await store.list_for_user(MailAccount, user.id)
         ]
-        if not rows:
-            rows = [Row(PRIMARY_ID, user.primary_address, account_scopes, ())]
         identities: list[tuple[str, str]] = []
         if SCOPE_SEND in offered:
             for ident in await store.list_for_user(Identity, user.id):
-                label = ident.display_name or (ident.addresses[0] if ident.addresses else ident.id)
+                if not ident.send:
+                    continue
+                address = ident.addresses[0] if ident.addresses else ident.id
+                label = f"{ident.display_name} <{address}>" if ident.display_name else address
                 identities.append((ident.id, label))
-            if not identities:
-                identities = [(PRIMARY_ID, user.primary_address)]
         return rows, identities
 
     async def _consent_page(
@@ -383,6 +376,7 @@ class OAuthEndpoints:
             rows=view_rows,
             account_scopes=wanted,
             identities=view_idents,
+            send_asked=SCOPE_SEND in req.scopes,
             form_action_extra=csp_form_target(req.redirect_uri),
             **self._page_context(req),
         )
@@ -413,62 +407,19 @@ class OAuthEndpoints:
 
     async def _sign_in(self, request: Request, form: FormData, req: AuthzRequest) -> Response:
         svc = self.svc
-        ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-        raw_address, password = form.get("address"), form.get("password")
+        raw_address = form.get("address")
         typed = raw_address.strip() if isinstance(raw_address, str) else ""
-        if not svc.limits.signin_ip.allow(ip or "-"):
-            svc.audit("ratelimit.hit", scope="signin_ip")
-            return self._signin_page(request, req, error="rate_limited", status=429, address=typed)
-        if not isinstance(password, str) or not password or len(password) > 1024:
+        password = form.get("password")
+        check = await signin.check_login(svc, request, typed, password)
+        if not check.ok:
             return self._signin_page(
-                request, req, error="bad_credentials", status=401, address=typed
+                request, req, error=check.error, status=check.status, address=typed
             )
-        try:
-            address = parse_address(typed)
-        except AddressError:
-            return self._signin_page(
-                request, req, error="bad_credentials", status=401, address=typed
-            )
-        user_id = svc.pseudonyms.user_id(address.normal)
-        if svc.limits.signin_address.blocked(user_id):
-            svc.audit("ratelimit.hit", scope="signin_address", user=short_id(user_id))
-            return self._signin_page(request, req, error="rate_limited", status=429, address=typed)
-
-        def failed(outcome: str) -> Response:
-            svc.limits.signin_address.add(user_id)
-            svc.audit("auth.sign_in", outcome=outcome, user=short_id(user_id))
-            return self._signin_page(
-                request, req, error="bad_credentials", status=401, address=typed
-            )
-
-        profile = svc.login_domains.get(address.domain)
-        if profile is None:
-            return failed("unknown_domain")
-        try:
-            async with self._login_slots:
-                await asyncio.wait_for(
-                    svc.login.verify(address, password, profile), timeout=LOGIN_TIMEOUT
-                )
-        except AuthFailed:
-            return failed("bad_credentials")
-        except (MailError, TimeoutError) as e:
-            log_event(
-                log,
-                logging.WARNING,
-                "login server problem",
-                event="auth.sign_in",
-                error=type(e).__name__,
-            )
-            svc.audit("auth.sign_in", outcome="unavailable", user=short_id(user_id))
-            return self._signin_page(request, req, error="unavailable", status=503, address=typed)
-
-        svc.limits.signin_address.reset(user_id)
-        await svc.store.get_or_create_user(user_id, address.normal)
-        raw, _ = await svc.store.create_portal_session(user_id, svc.cfg.portal_max)
+        assert isinstance(password, str)
+        raw = await signin.complete_sign_in(svc, check, password)
         response = self._back_to_authorize(request, req)
         svc.portal.set_session(response, raw)
         svc.portal.rotate_csrf(response)
-        svc.audit("auth.sign_in", outcome="ok", user=short_id(user_id))
         return response
 
     # -- consent result ---------------------------------------------------------------
@@ -495,21 +446,26 @@ class OAuthEndpoints:
             ]
         if not account_scopes and not identity_ids:
             return await self._consent_page(request, req, session, error="nothing", status=400)
-        for scopes in account_scopes.values():
-            scopes.add(SCOPE_READ)  # everything else builds on reading
-        granted = {s for scopes in account_scopes.values() for s in scopes}
-        if identity_ids:
-            granted.update((SCOPE_SEND, SCOPE_READ))
-        scope = " ".join(s for s in svc.cfg.offered_scopes if s in granted)
+        if identity_ids and not svc.store.reauth_fresh(session, svc.cfg.reauth_window):
+            # Letting a client send mail as the user needs the password again (design 6).
+            password = form.get("password")
+            if not isinstance(password, str) or not password:
+                return self._reauth_page(request, req, form, user)
+            error = await signin.verify_user_password(svc, request, user, password)
+            if error:
+                status = 401 if error == signin.BAD_CREDENTIALS else 429
+                return self._reauth_page(request, req, form, user, error=error, status=status)
+            session = await svc.store.mark_reauth(session)
+            svc.audit("portal.reauth", outcome="ok", user=short_id(user.id), reason="consent_send")
+        scope = ops.compute_scope(svc.cfg.offered_scopes, account_scopes, identity_ids)
         grant = await svc.store.create_grant(
             user_id=user.id,
             client_id=req.client.id,
             client_name=req.client.name,
             account_ids=list(account_scopes),
-            account_scopes={
-                a: " ".join(permission_of(s) for s in ACCOUNT_SCOPES if s in sc)
-                for a, sc in account_scopes.items()
-            },
+            account_scopes=ops.account_scope_strings(
+                {a: sc | {SCOPE_READ} for a, sc in account_scopes.items()}
+            ),
             identity_ids=identity_ids,
             scope=scope,
         )
@@ -532,6 +488,31 @@ class OAuthEndpoints:
             accounts=len(account_scopes),
         )
         return self._redirect_back(req, code=code)
+
+    def _reauth_page(
+        self,
+        request: Request,
+        req: AuthzRequest,
+        form: FormData,
+        user: User,
+        *,
+        error: str = "",
+        status: int = 200,
+    ) -> Response:
+        """Ask for the password again before the grant that allows sending is created.
+        The selections travel along as hidden fields (they are not secret)."""
+        carried = [("grant", str(v)) for v in form.getlist("grant")] + [
+            ("identity", str(v)) for v in form.getlist("identity")
+        ]
+        return self.svc.portal.page(
+            request,
+            "consent_reauth.html",
+            status=status,
+            error=error,
+            address=user.primary_address,
+            carried=carried,
+            **self._page_context(req),
+        )
 
     def _redirect_back(self, req: AuthzRequest, **params: str) -> Response:
         return self._redirect_to(req.redirect_uri, req.state, **params)

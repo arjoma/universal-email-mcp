@@ -1,0 +1,14 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Remove this identity") }}{% endblock %}
+{% block heading %}{{ _("Remove this identity?") }}{% endblock %}
+{% block body %}
+<p><strong>{{ identity.address }}</strong></p>
+<p>{{ _("Applications that were allowed to send as this identity lose that permission.") }}</p>
+<form method="post" action="/portal/identities/{{ identity.id }}/remove">
+  {{ m.csrf() }}
+  <div class="buttons">
+    <button type="submit" class="danger">{{ _("Remove the identity") }}</button>
+    <a class="button" href="/portal/identities/{{ identity.id }}">{{ _("Cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

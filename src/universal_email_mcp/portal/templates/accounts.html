@@ -1,0 +1,36 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Mail accounts") }}{% endblock %}
+{% block heading %}{{ _("Mail accounts") }}{% endblock %}
+{% block body %}
+{{ m.notice_box(notice) }}
+<p class="hint">{{ _("These are the mailboxes that applications you connect may use. Each account has permissions that act as an upper limit; every application gets at most what you allow it.") }}</p>
+{% if accounts %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("Name") }}</th>
+      <th scope="col">{{ _("Protocol") }}</th>
+      <th scope="col">{{ _("Server") }}</th>
+      <th scope="col">{{ _("Permissions") }}</th>
+      <th scope="col"><span class="sr-only">{{ _("Actions") }}</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in accounts %}
+    <tr>
+      <th scope="row">{{ a.name }}</th>
+      <td>{{ a.protocol }}</td>
+      <td><code>{{ a.host }}</code></td>
+      <td>{% for p in a.permissions %}{{ m.permission_label(p) }}{% if not loop.last %}; {% endif %}{% endfor %}</td>
+      <td><a href="/portal/accounts/{{ a.id }}">{{ _("Manage") }}</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="note">{{ _("You have no mail account yet. Add one so that applications can work with it.") }}</p>
+{% endif %}
+<div class="buttons">
+  <a class="button primary" href="/portal/accounts/new">{{ _("Add a mail account") }}</a>
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Change what an application may do") }}{% endblock %}
+{% block heading %}{{ _("Change what an application may do") }}{% endblock %}
+{% block body %}
+<p class="client-name">{% if grant.name %}{{ grant.name }}{% else %}<em>{{ _("(unnamed application)") }}</em>{% endif %}</p>
+{{ m.error_box(error) }}
+<p class="hint">{{ _("You can only take permissions away here. To give an application more, disconnect it and let it connect again.") }}</p>
+<form method="post" action="/portal/clients/{{ grant.id }}">
+  {{ m.csrf() }}
+  {% for row in rows %}
+  <fieldset>
+    <legend>{{ row.name }}</legend>
+    {% for p in row.perms %}
+    <label class="choice"><input type="checkbox" name="grant" value="{{ row.id }}:{{ p }}" checked> {{ m.permission_label(p) }}</label>
+    {% endfor %}
+  </fieldset>
+  {% endfor %}
+  {% if idents %}
+  <fieldset>
+    <legend>{{ _("Send mail as") }}</legend>
+    {% for key, label in idents %}
+    <label class="choice"><input type="checkbox" name="identity" value="{{ key }}" checked> {{ label }}</label>
+    {% endfor %}
+  </fieldset>
+  {% endif %}
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Save") }}</button>
+    <a class="button" href="/portal/clients">{{ _("Cancel") }}</a>
+  </div>
+</form>
+<form method="post" action="/portal/clients/{{ grant.id }}/revoke" class="inline">
+  {{ m.csrf() }}
+  <button type="submit" class="danger">{{ _("Disconnect this application") }}</button>
+</form>
+{% endblock %}

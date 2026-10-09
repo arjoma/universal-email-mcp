@@ -30,6 +30,16 @@ TEMPLATE_DIR = PORTAL_DIR / "templates"
 LOCALE_DIR = PORTAL_DIR / "locales"
 DEFAULT_LANGUAGE = "en"
 LANG_COOKIE = "uem_lang"
+LANGUAGE_NAMES = {
+    "en": "English",
+    "de": "Deutsch",
+    "fr": "Français",
+    "es": "Español",
+    "it": "Italiano",
+    "nl": "Nederlands",
+    "pt": "Português",
+}
+"""Names of languages in themselves (never translated); unknown codes show as the code."""
 _LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z0-9]{2,8})?$")
 
 
@@ -47,6 +57,10 @@ class Catalog(gettext.NullTranslations):
         singular = n == 1
         key = msgid1 if singular else msgid2
         return self._messages.get(key) or key
+
+
+def language_name(code: str) -> str:
+    return LANGUAGE_NAMES.get(code.split("-", 1)[0], code)
 
 
 def load_catalogs(directory: Path = LOCALE_DIR) -> dict[str, Catalog]:

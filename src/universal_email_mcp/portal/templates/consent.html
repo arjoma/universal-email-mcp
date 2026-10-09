@@ -53,9 +53,13 @@
   </table>
   <p class="hint">{{ _("Reading is always included when anything else is allowed. You can change or withdraw this at any time.") }}</p>
   {% else %}
-  <p class="note">{{ _("You have not connected a mail account yet, so this application gets access to nothing for now. Accounts you add later are not shared with it automatically.") }}</p>
+  <p class="note">{{ _("You have not connected a mail account yet, so this application gets access to nothing for now. Accounts you add later are not shared with it automatically.") }}
+    <a href="/portal/accounts" target="_blank" rel="noopener">{{ _("Manage your mail accounts") }}</a></p>
   {% endif %}
 
+  {% if send_asked and not identities %}
+  <p class="hint">{{ _("The application asks to send mail, but none of your sender identities allows sending yet. You can enable it in the portal.") }}</p>
+  {% endif %}
   {% if identities %}
   <h3>{{ scope_label("mail.send") }}</h3>
   <ul class="plain">

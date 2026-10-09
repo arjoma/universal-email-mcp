@@ -9,9 +9,11 @@
 <link rel="stylesheet" href="/portal/assets/portal.css">
 </head>
 <body>
-<main>
+<main{% block mainattr %}{% endblock %}>
+{% block nav %}{% endblock %}
 <h1>{% block heading %}{% endblock %}</h1>
 {% block body %}{% endblock %}
+{% block footer %}{% endblock %}
 </main>
 </body>
 </html>

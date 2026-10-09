@@ -6,10 +6,17 @@
 <p>{{ _("The application that sent you here could not be verified, so nothing was done.") }}</p>
 {% elif reason == "redirect" %}
 <p>{{ _("The application asked to be sent back to an address it has not registered, so nothing was done.") }}</p>
+{% elif reason == "csrf" %}
+<p>{{ _("The form has expired. Please go back, reload the page and try again.") }}</p>
+{% elif reason == "notfound" %}
+<p>{{ _("This page does not exist, or it does not belong to you.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
 {% elif reason == "busy" %}
 <p>{{ _("Too many requests. Please try again in a minute.") }}</p>
 {% else %}
 <p>{{ _("This request is not valid, so nothing was done.") }}</p>
 {% endif %}
+{% if reason not in ("csrf", "notfound") %}
 <p class="hint">{{ _("You can close this window and start again in the application.") }}</p>
+{% endif %}
 {% endblock %}

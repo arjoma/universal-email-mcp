@@ -22,7 +22,7 @@ from mcp.types import TextContent
 
 from tests.http_util import mcp_client, running
 from tests.https_server import Reply, doc_server, resolver
-from tests.oauth_util import hidden_fields, operator
+from tests.oauth_util import account_id_of, hidden_fields, operator
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, ServerProfile, TlsSettings
 from universal_email_mcp.oauth.app import build_oauth_app
@@ -79,7 +79,11 @@ class Browser:
             form = hidden_fields(consent.text)
             r = await http.post(
                 urlsplit(url)._replace(path="/authorize", query="").geturl(),
-                data={**form, "action": self.action, "grant": ["primary:mail.read"]},
+                data={
+                    **form,
+                    "action": self.action,
+                    "grant": [f"{account_id_of(consent.text)}:mail.read"],
+                },
             )
             assert r.status_code == 303
             q = {k: v[0] for k, v in parse_qs(urlsplit(r.headers["location"]).query).items()}

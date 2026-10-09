@@ -1,0 +1,41 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Connected applications") }}{% endblock %}
+{% block heading %}{{ _("Connected applications") }}{% endblock %}
+{% block body %}
+{{ m.notice_box(notice) }}
+<p class="hint">{{ _("Applications you allowed to use your mail accounts. You can reduce what an application may do, or disconnect it at any time.") }}</p>
+{% if grants %}
+{% for g in grants %}
+<section class="client" aria-label="{{ _('Application') }}">
+  <p class="client-name">{% if g.name %}{{ g.name }}{% else %}<em>{{ _("(unnamed application)") }}</em>{% endif %}</p>
+  <dl>
+    <dt>{{ _("Identified by") }}</dt>
+    <dd>{% if g.host %}<code>{{ g.host }}</code>{% elif g.registered %}{{ _("Self-registered application (name not verified)") }}{% else %}{{ _("unknown") }}{% endif %}</dd>
+    <dt>{{ _("Connected") }}</dt><dd>{{ g.created }}</dd>
+    <dt>{{ _("Last used") }}</dt><dd>{% if g.last_used %}{{ g.last_used }}{% else %}{{ _("never") }}{% endif %}</dd>
+    <dt>{{ _("Access ends (unless used again)") }}</dt><dd>{% if g.expires %}{{ g.expires }}{% else %}{{ _("never") }}{% endif %}</dd>
+    <dt>{{ _("May use") }}</dt>
+    <dd>
+      <ul class="plain">
+        {% for a in g.accounts %}
+        <li>{% if a.name %}{{ a.name }}{% else %}<em>{{ _("(removed account)") }}</em>{% endif %}: {% for p in a.permissions %}{{ m.permission_label(p) }}{% if not loop.last %}; {% endif %}{% endfor %}</li>
+        {% endfor %}
+        {% for i in g.identities %}
+        <li>{{ _("Send mail as") }} {{ i }}</li>
+        {% endfor %}
+      </ul>
+    </dd>
+  </dl>
+  <div class="buttons">
+    <a class="button" href="/portal/clients/{{ g.id }}">{{ _("Change") }}</a>
+    <form method="post" action="/portal/clients/{{ g.id }}/revoke" class="inline-form">
+      {{ m.csrf() }}
+      <button type="submit" class="danger">{{ _("Disconnect") }}</button>
+    </form>
+  </div>
+</section>
+{% endfor %}
+{% else %}
+<p class="note">{{ _("No application is connected.") }}</p>
+{% endif %}
+{% endblock %}

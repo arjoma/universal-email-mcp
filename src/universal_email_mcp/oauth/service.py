@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -26,6 +27,9 @@ class Limiters:
     register_global: RateLimiter
     token_ip: RateLimiter
     client_fetch: RateLimiter
+    test_user: RateLimiter
+    test_ip: RateLimiter
+    test_target: RateLimiter
 
     @classmethod
     def from_config(cls, cfg: OAuthConfig) -> Limiters:
@@ -37,6 +41,9 @@ class Limiters:
             register_global=RateLimiter(r.register_global, r.register_window.total_seconds()),
             token_ip=RateLimiter(r.token_per_ip, r.token_window.total_seconds()),
             client_fetch=RateLimiter(r.client_fetch_per_ip, r.client_fetch_window.total_seconds()),
+            test_user=RateLimiter(r.test_per_user, r.test_window.total_seconds()),
+            test_ip=RateLimiter(r.test_per_ip, r.test_window.total_seconds()),
+            test_target=RateLimiter(r.test_per_target, r.signin_window.total_seconds()),
         )
 
 
@@ -50,6 +57,8 @@ class OAuthService:
     login_domains: Mapping[str, ServerProfile]
     portal: Portal
     limits: Limiters
+    login_slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(16))
+    """Bounds the threads the mailbox login checks (sign-in, re-authentication) can occupy."""
 
     def audit(self, name: str, **fields: Any) -> None:
         audit.event(name, **fields)

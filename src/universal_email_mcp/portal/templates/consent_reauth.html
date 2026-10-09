@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Confirm your password") }}{% endblock %}
+{% block heading %}{{ _("Confirm your password") }}{% endblock %}
+{% block body %}
+{% include "_client.html" %}
+<p>{{ _("You are about to allow this application to send mail as you. Type your password again to confirm.") }}</p>
+<p class="signed-in">{% trans address=address %}Signed in as {{ address }}.{% endtrans %}</p>
+{% if error == "bad_credentials" %}
+<p class="error" role="alert">{{ _("The password is not correct.") }}</p>
+{% elif error == "rate_limited" %}
+<p class="error" role="alert">{{ _("Too many attempts. Please wait a few minutes and try again.") }}</p>
+{% elif error %}
+<p class="error" role="alert">{{ _("The mail server could not be reached. Please try again later.") }}</p>
+{% endif %}
+<form method="post" action="/authorize" autocomplete="off">
+  {% for name, value in hidden.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  {% for name, value in carried %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="approve">
+  <label for="password">{{ _("Password") }}</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required autofocus maxlength="1024">
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Confirm and allow") }}</button>
+  </div>
+</form>
+<form method="post" action="/authorize" class="inline">
+  {% for name, value in hidden.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="deny">
+  <button type="submit" class="link">{{ _("Deny") }}</button>
+</form>
+{% endblock %}

@@ -12,6 +12,8 @@ from tests.oauth_util import (
     RESOURCE,
     Authz,
     FakeLogin,
+    account_id_of,
+    allow_sending,
     bearer,
     challenge_pair,
     hidden_fields,
@@ -137,12 +139,19 @@ def test_a_scope_the_client_did_not_ask_for_cannot_be_ticked(client):
     assert body["scope"] == "mail.read"
 
 
-def test_send_is_granted_over_identities(client):
+async def test_send_is_granted_over_identities(client, store):
     a = Authz(client, register(client), scope="mail.read mail.send")
+    assert a.sign_in().status_code == 303
+    assert 'name="identity"' not in a.consent_page().text  # sending is not enabled yet
+    ident = await allow_sending(store)
     page = a.consent_page()
-    assert 'name="identity"' in page.text
-    form = {**hidden_fields(page.text), "action": "approve", "grant": ["primary:mail.read"]}
-    form["identity"] = ["primary"]
+    assert f'name="identity" value="{ident}"' in page.text
+    form = {
+        **hidden_fields(page.text),
+        "action": "approve",
+        "grant": [f"{account_id_of(page.text)}:mail.read"],
+    }
+    form["identity"] = [ident]
     code = query_of(client.post("/authorize", data=form).headers["location"])["code"]
     assert a.exchange(code).json()["scope"] == "mail.read mail.send"
 
@@ -230,10 +239,12 @@ def test_loopback_parser_tricks_are_refused(client, uri):
     assert Authz(client, cid, redirect_uri=uri).open().status_code == 400
 
 
-def test_send_only_grant_still_includes_reading(client):
+async def test_send_only_grant_still_includes_reading(client, store):
     a = Authz(client, register(client), scope="mail.read mail.send")
+    assert a.sign_in().status_code == 303
+    ident = await allow_sending(store)
     page = a.consent_page()
-    form = {**hidden_fields(page.text), "action": "approve", "identity": ["primary"]}
+    form = {**hidden_fields(page.text), "action": "approve", "identity": [ident]}
     code = query_of(client.post("/authorize", data=form).headers["location"])["code"]
     assert a.exchange(code).json()["scope"] == "mail.read mail.send"
 

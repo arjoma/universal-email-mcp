@@ -1,0 +1,17 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Confirm your password") }}{% endblock %}
+{% block heading %}{{ _("Confirm your password") }}{% endblock %}
+{% block body %}
+<p>{{ _("This action needs your password again. Type the password of your sign-in mailbox to continue.") }}</p>
+{{ m.error_box(error) }}
+<form method="post" action="/portal/reauth">
+  {{ m.csrf() }}
+  <input type="hidden" name="next" value="{{ next }}">
+  <label for="password">{{ _("Password") }}</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required autofocus maxlength="1024">
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Continue") }}</button>
+    <a class="button" href="/portal/accounts">{{ _("Cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

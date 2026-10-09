@@ -1,0 +1,40 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Sender identities") }}{% endblock %}
+{% block heading %}{{ _("Sender identities") }}{% endblock %}
+{% block body %}
+{{ m.notice_box(notice) }}
+<p class="hint">{{ _("An identity is an address that drafts and sent mail come from. Applications can send as an identity only if you allow sending here and then grant it to the application.") }}</p>
+{% if identities %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("Address") }}</th>
+      <th scope="col">{{ _("Sending through") }}</th>
+      <th scope="col">{{ _("Drafts and sent copies in") }}</th>
+      <th scope="col">{{ _("Sending allowed") }}</th>
+      <th scope="col"><span class="sr-only">{{ _("Actions") }}</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for i in identities %}
+    <tr>
+      <th scope="row">{% if i.display_name %}{{ i.display_name }} ({{ i.address }}){% else %}{{ i.address }}{% endif %}{% if i.default %} <span class="badge">{{ _("default") }}</span>{% endif %}</th>
+      <td>{% if i.smtp_account %}{{ i.smtp_account }}{% elif i.smtp_host %}<code>{{ i.smtp_host }}</code>{% else %}-{% endif %}</td>
+      <td>{% if i.store_account %}{{ i.store_account }}{% else %}-{% endif %}</td>
+      <td>{% if i.send %}{{ _("yes") }}{% else %}{{ _("no") }}{% endif %}</td>
+      <td><a href="/portal/identities/{{ i.id }}">{{ _("Edit") }}</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="note">{{ _("You have no sender identity yet.") }}</p>
+{% endif %}
+{% if can_add %}
+<div class="buttons">
+  <a class="button primary" href="/portal/identities/new">{{ _("Add a sender identity") }}</a>
+</div>
+{% else %}
+<p class="hint">{{ _("Add a mail account first.") }}</p>
+{% endif %}
+{% endblock %}

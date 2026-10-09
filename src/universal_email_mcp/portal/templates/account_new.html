@@ -1,0 +1,55 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Add a mail account") }}{% endblock %}
+{% block heading %}{{ _("Add a mail account") }}{% endblock %}
+{% block body %}
+{{ m.error_box(error) }}
+<form method="post" action="/portal/accounts/new" autocomplete="off">
+  {{ m.csrf() }}
+  <label for="name">{{ _("Name of the account") }}</label>
+  <input id="name" name="name" type="text" required maxlength="40" value="{{ values.name }}">
+  <p class="hint">{{ _("A short name you recognise, for example Work. Applications see this name.") }}</p>
+
+  {% if fixed_server %}
+  <p><strong>{{ _("Mail server") }}:</strong> {{ fixed_server }}</p>
+  {% elif servers %}
+  <label for="server">{{ _("Mail server") }}</label>
+  <select id="server" name="server" required>
+    {% for key, label in servers %}
+    <option value="{{ key }}"{% if key == values.server %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <label for="host">{{ _("Mail server (host name)") }}</label>
+  <input id="host" name="host" type="text" required maxlength="253" value="{{ values.host }}" placeholder="{{ 'mail.example.com' }}">
+  <p class="hint">{{ _("Connections use encrypted ports only: IMAP 993, POP3 995, sending 465. The certificate must be valid for the host name.") }}</p>
+  {% endif %}
+
+  <fieldset>
+    <legend>{{ _("Protocol") }}</legend>
+    <label class="choice"><input type="radio" name="protocol" value="imap"{% if values.protocol == "imap" %} checked{% endif %}> {{ _("IMAP (recommended: folders, flags, drafts)") }}</label>
+    <label class="choice"><input type="radio" name="protocol" value="pop3"{% if values.protocol == "pop3" %} checked{% endif %}> {{ _("POP3 (read-only: no folders, no organizing)") }}</label>
+  </fieldset>
+
+  <label for="username">{{ _("User name") }}</label>
+  <input id="username" name="username" type="text" required maxlength="254" autocomplete="off" value="{{ values.username }}">
+  <label for="password">{{ _("Password") }}</label>
+  <input id="password" name="password" type="password" required maxlength="1024" autocomplete="new-password">
+  <p class="hint">{{ _("The password is checked right now and stored encrypted. It is never shown again.") }}</p>
+
+  <fieldset>
+    <legend>{{ _("What applications may do with this account at most") }}</legend>
+    {% for p in permissions %}
+    <label class="choice"><input type="checkbox" name="perm" value="{{ p }}"{% if p in values.perms or p == "read" %} checked{% endif %}{% if p == "read" %} disabled{% endif %}> {{ m.permission_label(p) }}</label>
+    {% endfor %}
+    <input type="hidden" name="perm" value="read">
+    <p class="hint">{{ _("Each application still needs your consent for what it gets. Permissions that POP3 cannot support are ignored.") }}</p>
+  </fieldset>
+
+  <label class="choice"><input type="checkbox" name="identity" value="1"{% if values.identity %} checked{% endif %}> {{ _("Also create a sender identity from the user name (if it is an e-mail address)") }}</label>
+
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Check and add") }}</button>
+    <a class="button" href="/portal/accounts">{{ _("Cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

@@ -87,6 +87,10 @@ class OAuthSettings:
     absolute_max: timedelta = timedelta(days=90)
     portal_idle: timedelta = timedelta(minutes=30)
     portal_max: timedelta = timedelta(hours=12)
+    reauth_window: timedelta = timedelta(minutes=5)
+    """How long after typing the password again a sensitive portal action may be done."""
+    max_accounts: int = 10
+    max_identities: int = 10
     default_language: str = "en"
     dcr_enabled: bool = True
     dcr_redirect_hosts: tuple[str, ...] = ()
@@ -356,6 +360,9 @@ def _oauth(env: Mapping[str, str]) -> OAuthSettings:
         absolute_max=_seconds(env, "UEM_SESSION_MAX_AGE", base.absolute_max, zero_ok=True),
         portal_idle=_seconds(env, "UEM_PORTAL_IDLE_TIMEOUT", base.portal_idle, zero_ok=False),
         portal_max=_seconds(env, "UEM_PORTAL_SESSION_MAX", base.portal_max, zero_ok=False),
+        reauth_window=_seconds(env, "UEM_REAUTH_WINDOW", base.reauth_window, zero_ok=False),
+        max_accounts=_number(env, "UEM_MAX_ACCOUNTS_PER_USER", base.max_accounts, int),
+        max_identities=_number(env, "UEM_MAX_IDENTITIES_PER_USER", base.max_identities, int),
         default_language=lang,
         dcr_enabled=_flag(env, "UEM_DCR", base.dcr_enabled),
         dcr_redirect_hosts=hosts,

@@ -27,6 +27,9 @@ from universal_email_mcp.oauth.fetch import FetchPolicy
 from universal_email_mcp.oauth.identity import ImapLoginVerifier, LoginVerifier, Pseudonyms
 from universal_email_mcp.oauth.service import Limiters, OAuthService
 from universal_email_mcp.operator import OperatorConfig
+from universal_email_mcp.portal.connect import ConnectionTester, LiveTester
+from universal_email_mcp.portal.pages import portal_group
+from universal_email_mcp.portal.service import CONNECT_TIMEOUT, READ_TIMEOUT, PortalService
 from universal_email_mcp.portal.web import Portal
 from universal_email_mcp.server.http import RouteGroup, create_app
 from universal_email_mcp.server.oauth_preview import build_preview_server
@@ -35,6 +38,8 @@ from universal_email_mcp.store import Backend, MemoryBackend, SessionPolicy, Sto
 log = logging.getLogger(__name__)
 
 PURGE_INTERVAL = 600.0
+CORS_PATHS = (MCP_PATH, "/.well-known", "/register", "/token", "/revoke")
+"""Cookie-less endpoints that browser-based MCP clients may call cross-origin."""
 
 
 def offered_scopes(policy: Policy) -> tuple[str, ...]:
@@ -82,6 +87,9 @@ def make_config(op: OperatorConfig, *, rate_limits: RateLimits | None = None) ->
         portal_idle=o.portal_idle,
         portal_max=o.portal_max,
         trusted_proxy_hops=o.trusted_proxy_hops,
+        reauth_window=o.reauth_window,
+        max_accounts=o.max_accounts,
+        max_identities=o.max_identities,
         rate_limits=rate_limits or RateLimits(),
     )
 
@@ -115,6 +123,7 @@ async def build_oauth_app(
     fetch_policy: FetchPolicy | None = None,
     login: LoginVerifier | None = None,
     rate_limits: RateLimits | None = None,
+    tester: ConnectionTester | None = None,
 ) -> Starlette:
     """The app of OAuth mode. The keyword arguments are injection points for tests."""
     from universal_email_mcp.server.serve import http_settings, mcp_group
@@ -123,6 +132,16 @@ async def build_oauth_app(
     cfg = make_config(op, rate_limits=rate_limits)
     svc = build_service(op, store, cfg, fetch_policy=fetch_policy, login=login)
     mcp = mcp_group(build_preview_server(), op)
+    portal = PortalService(
+        oauth=svc,
+        mail_servers=op.mail_servers,
+        tester=tester or LiveTester(),
+        net=NetPolicy(
+            allow_private=op.settings.allow_private_networks,
+            connect_timeout=CONNECT_TIMEOUT,
+            read_timeout=READ_TIMEOUT,
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
@@ -148,14 +167,16 @@ async def build_oauth_app(
     settings = replace(
         http_settings(op),
         ready_checks={"store": store_ready},
+        cors_paths=CORS_PATHS,
         resource_metadata_url=cfg.url("/.well-known/oauth-protected-resource" + MCP_PATH),
     )
     app = create_app(
         settings,
-        [oauth_group(svc), mcp, RouteGroup([], lifespan)],
+        [oauth_group(svc), portal_group(portal), mcp, RouteGroup([], lifespan)],
         token_check=StoreTokenVerifier(store, cfg),
     )
-    app.state.oauth_service = svc  # for tests and later route groups (portal, WP 3d)
+    app.state.oauth_service = svc  # for tests
+    app.state.portal_service = portal
     return app
 
 
