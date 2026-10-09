@@ -379,16 +379,8 @@ def pseudonym(prefix: str, raw: str, key: bytes | None = None) -> str:
     return f"{prefix}_{mac.hexdigest()[:12]}"
 
 
-def _pseudo(prefix: str, raw: str) -> str:
-    return pseudonym(prefix, raw)
-
-
 def network_of(raw: str) -> str | None:
     """The network (IPv4 /24, IPv6 /48) whose pseudonym is logged for ``raw``."""
-    return _network(raw)
-
-
-def _network(raw: str) -> str | None:
     try:
         addr = ipaddress.ip_address(raw.strip())
     except ValueError:
@@ -411,17 +403,17 @@ def _convert(name: str, kind: str, value: Any, strict: bool) -> Any:
             return value[:14]
         if isinstance(value, str) and value:
             _bad(strict, f"field {name}: not a user id")
-            return _pseudo("u", value)
+            return pseudonym("u", value)
         return None
     if kind.startswith("ref:"):
         if isinstance(value, str) and value:
-            return _pseudo(kind[4:], value)
+            return pseudonym(kind[4:], value)
         return None
     if kind == "ip":
         if not _state.log_ip:
             return None
-        net = _network(value) if isinstance(value, str) else None
-        return _pseudo("n", net) if net else None
+        net = network_of(value) if isinstance(value, str) else None
+        return pseudonym("n", net) if net else None
     if kind == "tok":
         if isinstance(value, str) and _TOKEN.fullmatch(value):
             return value
