@@ -168,11 +168,17 @@ startup. There is deliberately no way to switch a limit off; raise it instead.
 How they behave:
 
 * **Viewer.** A message view costs two hits of `UEM_RATE_VIEWER_USER` (page and HTML frame). Re-authentication is not counted by the portal limits (the sign-in limits cover it). Behind a proxy without `UEM_TRUSTED_PROXY_HOPS` every network limit is shared by all callers.
-* **Per instance.** These counters live in the memory of one process. With `n` instances
-  (Cloud Run scales out) a caller can use up to `n` times the limit, and a restart forgets
-  the counts. The send limit (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`) is the one shared limit: it
-  is counted in the store. A shared counter for the sign-in limits is a TODO; until then keep
-  `--max-instances` small or put a rate limiter in front (load balancer / Cloud Armor).
+* **Per instance - this matters most for sign-in.** These counters live in the memory of one
+  process. With `n` instances (Cloud Run scales out) a caller can use up to `n` times the
+  limit, and a restart forgets the counts. The send limit (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`)
+  is the one shared limit: it is counted in the store. For the sign-in limits that means a
+  password guesser gets `n x UEM_RATE_SIGNIN_ADDRESS` guesses per window against one mailbox
+  (default `n x 5` per 15 minutes; the mail server's own lockout is the other brake). **For
+  a pilot or a small deployment run few instances** (Cloud Run: `--max-instances=1` or `2`,
+  see [deploy-gcp.md](deploy-gcp.md); `--min-instances=1` keeps the counters from being
+  forgotten when an idle instance stops), lower `UEM_RATE_SIGNIN_ADDRESS` / `_IP` if you
+  scale out, and put a rate limiter in front for anything public (load balancer, Cloud
+  Armor). A counter shared through the store is deliberately not built yet (`TODO.md`).
 * **Network** = the client address, IPv4 as is and IPv6 grouped per /64 (one subscriber
   owns a /64, so single addresses cannot be rotated to dodge a limit). The address is the
   socket peer, or - with `UEM_TRUSTED_PROXY_HOPS` set - the `X-Forwarded-For` entry that

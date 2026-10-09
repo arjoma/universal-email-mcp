@@ -315,10 +315,13 @@ pages, downloads and MCP tool calls (per user and per grant, burst and sustained
 something are limited harder). Table, units and behaviour:
 [operator-env.md](operator-env.md#rate-limits). Points to know:
 
-* The counters live in the memory of one instance. With *n* instances a caller gets up to *n*
-  times the limit, and a restart forgets the counts. Only the send limit is shared (stored).
-  Keep `--max-instances` small, or put a limiter in front (load balancer, Cloud Armor). A shared
-  counter is in `TODO.md`.
+* **The counters live in the memory of one instance; sign-in limits are per instance.** With
+  *n* instances a caller gets up to *n* times the limit - a password guesser up to
+  `n x 5` guesses per 15 minutes against one mailbox - and a restart forgets the counts. Only the
+  send limit is shared (stored). **For the pilot run one or two instances**
+  (`--min-instances=1 --max-instances=2` on Cloud Run; one is safest for this), lower
+  `UEM_RATE_SIGNIN_ADDRESS` if you allow more, and put a limiter in front of anything public
+  (load balancer, Cloud Armor). A shared counter is in `TODO.md`; it is not built for 0.1.0.
 * Set `UEM_TRUSTED_PROXY_HOPS` to the real number of proxies (Cloud Run: 1; with an external load
   balancer verify it from the logs). Wrong values make the limits count your proxy or let
   callers forge their address.

@@ -28,35 +28,17 @@ from time to time (AGENTS.md, "Regular cleanup").
 - [ ] Run `deploy/gcp` against a real project once (see Deployment) and correct the docs.
 - [ ] Try SMTP against a real server and fill `ServerProfile.smtp_saves_sent`; check the
       archive scheme of the united-domains hoster with `probe` (see Send, IMAP).
-- [ ] Quote the IMAP login name (`ImapSession.connect` passes it unquoted to `imaplib`; `{ % * ]`
-      pass `parse_address`) or reject those characters.
-- [ ] A refresh with a narrower `scope` returns the full scope (`_refresh_grant`,
-      `rotate_refresh_token`).
-- [ ] Reject repeated request parameters (`oauth/endpoints._params` takes the last value).
-- [ ] Consent redirect: answer Allow/Deny with a 200 page that continues by meta refresh; a
-      303 to a callback that redirects on is blocked by CSP `form-action` in Chromium.
-- [ ] Sign-in brute force is limited per instance only (see Rate limits): at least document
-      "one instance" for 0.1.0, or add the shared counter.
-- [ ] `Store.delete_user` races a tool call in flight (see Store).
-- [ ] `rotate_keys` / `export_user` abort on one corrupt record, and `admin rotate-keys` does not
-      exist yet (see Store).
-- [ ] `send.*` audit events pass the account name, other events its id (see Audit).
-- [ ] Time windows near midnight (see Local mode) and fuzzy `unread`/`flagged` filters that can
-      contradict the flags shown.
-- [ ] Huge `UEM_*_TTL` values overflow at startup (`operator._seconds`); `--config` is silently
-      ignored in OAuth mode (`cli._cmd_serve`).
-- [ ] A tool call with `failed > 0` and some `succeeded` is audited as `ok`
-      (`server/peruser.py`).
+- [ ] Sign-in brute force is limited per instance only (see Rate limits). Documented for 0.1.0
+      (operator-env.md, admin guide: run one or two instances, lower the sign-in limits); the
+      shared counter is not built.
 
 ## Local mode / read tools
 
-- [ ] Time windows: `today`/`this_week` use the local time zone, IMAP `SINCE`/`BEFORE` the
-      INTERNALDATE day of the server; mail near midnight lands in the neighbouring day. Widen the
-      search by a day and filter on `received` client-side in `list_messages` and `query_search`
-      (do it when a real mailbox shows the effect).
-- [ ] Fuzzy results: `unread`/`flagged` filters use cached flags while the shown flags are read
-      fresh (`service/mail.py`); re-check against the fresh flags. Bare-domain defanging uses
-      the TLD allow-list `render._TLDS`, a rare TLD slips through.
+- [ ] Time windows use the server's local zone as a fixed offset taken from "now": a window
+      that reaches back over a DST change is one hour off at its start; remote mode has no
+      per-user zone yet (a portal setting could supply one). `flags_agree` drops a hit whose fresh
+      flags contradict `unread`/`flagged` but `total` still counts it.
+- [ ] Bare-domain defanging uses the TLD allow-list `render._TLDS`, a rare TLD slips through.
 - [ ] Cursor resume after the last returned message was expunged falls back to UID order
       (`_resume_index`), only approximate for SORT (REVERSE ARRIVAL) listings.
 - [ ] Look-alike senders: listings flag mixed-script names, but fuzzy search still ranks a
@@ -256,26 +238,20 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Store
 
-- [ ] `Store.delete_user` is not atomic against concurrent writes: a tool call in flight can
-      still write an activity entry, approval or send marker after the final sweep (expires by
-      TTL, but re-attaches if the same address signs up within 30 days). Retire the pool contexts
-      and wait for `ctx.active == 0` first, or check that the user exists when writing; tombstone.
-- [ ] `rotate_keys` and `export_user` abort on one corrupt record (skip and report); expired
-      records can still be `update`d; transactions read one by one (no `get_all`); a
-      pseudonym-key change needs a user-id migration.
-- [ ] Add `universal-email-mcp admin rotate-keys` (calls `store.rotation.rotate_keys`; the guide
-      uses a Cloud Run job with `python -c`) with a `--check` mode listing key ids still in use.
+- [ ] Expired records can still be `update`d; transactions read one by one (no `get_all`); a
+      pseudonym-key change needs a user-id migration. `Store.create_owned` guards the writes of
+      requests in flight (activity, approvals, send claims, grants, codes, sessions); the portal's
+      own creates (accounts, identities) are not guarded, and `UserPool` contexts of a deleted
+      user are only forgotten by the portal (`forget_user`), not retired in other instances.
+- [ ] `admin rotate-keys` has no `--check` mode listing the key ids still in use (a dry run only
+      counts what would be re-sealed); only records that need rotation are tested for
+      readability, a damaged record sealed with the active key is not found by it.
 - [ ] Merged feed writes cost create + get + update after the first call of the hour (try
       get-then-update first); a feed write is awaited inside the request (bounded by 3 s) and
       parallel merged writes of one entry contend (emulator: ~25 s for four racing calls).
 
 ## Audit and activity feed
 
-- [ ] `send.*` events (and the `send` feed entry) pass the account *name*, other events its id;
-      pass the id everywhere (`Prepared.execute` base) and drop the `_ID` heuristic in
-      `portal/activity.py` (keep the removed account's name in a separate feed field).
-- [ ] A tool call with `failed > 0` and some `succeeded` is logged as `ok`; log "partial" and
-      show "n failed" on the page.
 - [ ] Not in the user's feed: failed sign-ins (only for existing users), refresh-token reuse and
       code replay (no user in the event), rate-limit hits. A disconnect cannot name the application
       (store the client name with `portal.grant_revoke`).
