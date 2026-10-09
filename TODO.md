@@ -17,6 +17,24 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Single-VM deployment: a `docker-compose.yml` is pointless with the memory store (all
       accounts lost on restart); do it together with the SQLite store.
 
+### Operator tooling the docs describe as missing (docs 4e)
+- [ ] `universal-email-mcp admin` commands: revoke all grants of a user or of a client, delete a
+      user (`Store.delete_user`), list a user's records, print the full user id of an address.
+      Today an incident needs manual Firestore edits and a one-off Python job
+      (`docs/admin-guide.md`, section 11).
+- [ ] Deny list for OAuth clients (a client identified by a metadata URL can be authorised again
+      after its grants were deleted) and a per-user block (deny sign-in without changing `LOGIN_DOMAINS`).
+- [ ] Pseudonym key rotation: users are keyed by `HMAC(PSEUDONYM_KEY, address)`; a migration
+      (re-key users and their records, keep logs matchable) does not exist.
+- [ ] Access requests: the portal export does not contain the user's log lines; the operator uses
+      `audit --user`. Consider a documented export of those lines.
+- [ ] Portal second factor: sign-in reuses the mailbox password only (`docs/dpia-template.md`, R10).
+- [ ] Client matrix: the connection steps in `docs/user-guide.md` are generic; verify and add
+      client-specific steps (Claude.ai, Claude Desktop, ChatGPT) when the matrix (design section 12)
+      has been run against a real deployment.
+- [ ] Docs commands that use `uvx universal-email-mcp` only work after the first PyPI release
+      (0.0.1 is a placeholder); re-check them at 0.1.0.
+
 ### M1 read tools: review leftovers and sandbox findings
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
       `SINCE`/`BEFORE` compare the server's INTERNALDATE day (the zone stored with the
