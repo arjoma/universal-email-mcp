@@ -122,6 +122,13 @@ def test_escape_cell_defangs_urls_readably():
     assert escape_cell("xmpp:foo@evil.com") == "xmpp\\[:\\]foo＠evil\\[.\\]com"
 
 
+def test_address_cells_keep_domains_readable_free_text_does_not():
+    assert escape_cell("anna@huber-bau.at", address=True) == "anna＠huber-bau.at"
+    assert escape_cell("see evil.com", address=True) == "see evil\\[.\\]com"
+    assert escape_cell("see evil.com") == "see evil\\[.\\]com"
+    assert escape_cell("a@evil.com see evil.com", address=True) == "a＠evil.com see evil\\[.\\]com"
+
+
 def test_escape_cell_length_cap_and_plain_text():
     assert escape_cell("x" * 100, 10) == "x" * 9 + "…"
     assert escape_cell("Angebot Website") == "Angebot Website"

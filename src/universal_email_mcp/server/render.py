@@ -70,7 +70,7 @@ def _defang_url(url: str) -> str:
     return url.replace(".", "[.]")
 
 
-def defang(text: str) -> str:
+def defang(text: str, *, keep_address_domains: bool = False) -> str:
     """Make links in untrusted text inert and readable (no Markdown escaping).
 
     URL-like tokens get ``hxxp``, ``[:]//`` and ``[.]``; then, unconditionally,
@@ -79,11 +79,21 @@ def defang(text: str) -> str:
     (``＠``: no e-mail autolinks) and every ``word:`` scheme prefix glued to more
     text (``mailto:``, ``xmpp:``, ``javascript:`` …, with the dots of the host that
     follows) is broken up, so no autolink can form anywhere.
+
+    ``keep_address_domains``: the domain right after an ``@`` keeps its dots (the
+    ``＠`` already blocks the e-mail autolink) so addresses stay copyable.
     """
     text = _URL.sub(lambda m: _defang_url(m.group(0)), text)
     text = text.replace("://", "[:]//")
     text = _WWW.sub(lambda m: m.group(0)[:3] + "[.]", text)
-    text = _BARE_DOMAIN.sub(lambda m: m.group(0).replace(".", "[.]"), text)
+    text = _BARE_DOMAIN.sub(
+        lambda m: (
+            m.group(0)
+            if keep_address_domains and m.start() > 0 and text[m.start() - 1] == "@"
+            else m.group(0).replace(".", "[.]")
+        ),
+        text,
+    )
     text = text.replace("@", "＠")
     return _SCHEME_REST.sub(lambda m: f"{m.group(1)}[:]{_dots(m.group(2))}", text)
 
@@ -93,7 +103,9 @@ def _dots(rest: str) -> str:
     return re.sub(r"(?<=[A-Za-z])\.(?=[A-Za-z0-9])", "[.]", rest)
 
 
-def escape_cell(value: object, max_chars: int = DEFAULT_CELL_CHARS) -> str:
+def escape_cell(
+    value: object, max_chars: int = DEFAULT_CELL_CHARS, *, address: bool = False
+) -> str:
     """Make untrusted text safe and compact for one Markdown table cell.
 
     Removes invisible/bidi/control characters and line breaks, defangs URLs,
@@ -105,7 +117,7 @@ def escape_cell(value: object, max_chars: int = DEFAULT_CELL_CHARS) -> str:
     text = sanitize_line("" if value is None else str(value))
     if max_chars > 0 and len(text) > max_chars:
         text = text[: max_chars - 1].rstrip() + "…"
-    return defang(text).translate(_MD_SPECIAL)
+    return defang(text, keep_address_domains=address).translate(_MD_SPECIAL)
 
 
 # --------------------------------------------------------------------------- bodies

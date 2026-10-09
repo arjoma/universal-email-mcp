@@ -696,10 +696,11 @@ async def test_list_folders_keeps_tree_indentation():
 
 
 async def test_listing_flags_look_alike_senders():
-    a = FakeSession("A", {"INBOX": [1, 2, 3]})
+    a = FakeSession("A", {"INBOX": [1, 2, 3, 4]})
     for uid, (name, addr) in {
         1: ("Anna Huber", "anna@huber-bau.at"),
         2: ("Anna Hubеr", "anna@huber-bau.at"),  # Cyrillic е in the name  # noqa: RUF001
+        4: ("", "bob@huber-bau.at"),  # no display name: the address is shown
         3: ("Anna", "anna@paураl.com"),  # Cyrillic letters inside a Latin domain  # noqa: RUF001
     }.items():
         a.folders["INBOX"][uid] = replace(summary("A", "INBOX", uid), from_=(Address(name, addr),))
@@ -711,6 +712,7 @@ async def test_listing_flags_look_alike_senders():
     assert len(rows) == 2
     assert all("mixed scripts" in r for r in rows)
     assert text.count("look-alike sender") == 2
+    assert "bob＠huber-bau.at" in text  # address domains stay copyable
 
 
 def test_sender_warning_unit():
