@@ -1,0 +1,11 @@
+From: "lena@hofer-design.example" <spoof@attacker.test>
+From: "Sophie Wagner (via Hofer Design)" <sophie.wagner@hofer-design.attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Cc: =?utf-8?q?Support_=0A[click](https://attacker.test)?= <support@attacker.test>
+Subject: =?utf-8?b?SGVsbG8NCkJjYzogYWxsQGF0dGFja2VyLnRlc3QNCg0KSW5qZWN0ZWQ=?=
+Subject: Second subject header
+Message-ID: <angebot-2026-001@huber-bau.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Two From headers, two Subject headers, a CRLF inside an encoded word and a Message-ID copied from a real thread.

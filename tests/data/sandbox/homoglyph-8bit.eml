@@ -1,0 +1,9 @@
+From: Аnna Нuber <anna.huber@huber-bаu.example>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Rechnung​‮ fdp.exe ‬– bitte prüfen
+Message-ID: <homo-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Unencoded UTF-8 in headers, Cyrillic look-alike letters in name and domain,
+and a right-to-left override in the subject. Zero​width⁠joiners too.

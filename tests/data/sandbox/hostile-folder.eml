@@ -1,0 +1,8 @@
+From: Folder Bot <folders@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Mail in a folder with a hostile name
+Message-ID: <folder-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+The folder name itself is untrusted (shared folders, other clients).

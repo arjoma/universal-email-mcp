@@ -137,8 +137,9 @@ afresh (also after an interrupted seed). Bump `CORPUS_VERSION` in
 `tests/sandbox.py` when the corpus changes; `up` then recreates the container.
 The script only removes a container carrying its label and never overwrites a
 config or env file it did not generate. Corpus and config live in
-`tests/sandbox.py`, container helpers in `tests/dovecot.py` (shared with the
-integration tests); hostile mails carry `X-UEM-Sandbox: hostile <kind>`.
+`tests/sandbox.py` (hand-written attack samples in `tests/data/sandbox/*.eml`),
+container helpers in `tests/dovecot.py` (shared with the integration tests);
+hostile mails carry `X-UEM-Sandbox: hostile <kind>`.
 
 ## Releases
 

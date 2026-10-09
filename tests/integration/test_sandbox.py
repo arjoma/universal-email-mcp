@@ -135,16 +135,23 @@ async def test_every_message_renders_safely(sandbox: Sandbox):
             walk(acc["account"], acc["folders"])
         seen = 0
         for account, folder in folders:
-            md, data = await call(
-                client,
-                "list_messages",
-                accounts=[account],
-                folders=[folder],
-                since="2000-01-01",
-                limit=50,
-            )
-            assert not any(a in md for a in ACTIVE), (folder, md)
-            for m in data["messages"]:
+            listed: list[dict[str, Any]] = []
+            cursor: str | None = None
+            while True:  # INBOX is close to the page cap (max_results 50)
+                md, data = await call(
+                    client,
+                    "list_messages",
+                    accounts=[account],
+                    folders=[folder],
+                    since="2000-01-01",
+                    limit=50,
+                    **({"cursor": cursor} if cursor else {}),
+                )
+                assert not any(a in md for a in ACTIVE), (folder, md)
+                listed += data["messages"]
+                if not (cursor := data.get("next_cursor")):
+                    break
+            for m in listed:
                 md, msg = await call(client, "get_message", id=m["id"])
                 seen += 1
                 body = msg["body"]["text"]
@@ -178,4 +185,52 @@ async def test_duplicate_message_id_does_not_displace_original(sandbox: Sandbox)
     async with connect(sandbox.config) as client:
         _md, data = await call(client, "search_messages", query="Bankverbindung", accounts=[WORK])
         _md, thread = await call(client, "get_thread", id=data["messages"][0]["id"])
-        assert "Angebot Website-Relaunch" in subjects(thread)
+    # Outside the client context, which would wrap the failure in an ExceptionGroup.
+    assert "Angebot Website-Relaunch" in subjects(thread)
+
+
+async def test_threading_loops_and_reference_bomb_terminate(sandbox: Sandbox):
+    threads: dict[str, list[str]] = {}
+    async with connect(sandbox.config) as client:
+        _md, data = await call(
+            client, "search_messages", **{"from": "loop@attacker.test"}, accounts=[WORK]
+        )
+        for m in data["messages"]:
+            _md, thread = await call(client, "get_thread", id=m["id"])
+            threads[m["subject"]] = sorted(subjects(thread))
+        _md, data = await call(client, "search_messages", subject="Long thread", accounts=[WORK])
+        _md, bomb = await call(client, "get_thread", id=data["messages"][0]["id"])
+        _md, data = await call(client, "search_messages", query="minimal message", accounts=[WORK])
+        _md, alone = await call(client, "get_thread", id=data["messages"][0]["id"])
+    cycle = ["Re: Chicken or egg (A)", "Re: Chicken or egg (B)"]
+    assert threads == {
+        "Re: Re: Re: I am my own parent": ["Re: Re: Re: I am my own parent"],
+        cycle[0]: cycle,
+        cycle[1]: cycle,
+    }
+    # 5001 References (one of them real) join the real thread, nothing more.
+    assert "Re: Long thread" in subjects(bomb) and len(bomb["messages"]) < 15
+    assert subjects(alone) == ["No sender, no date, no Message-ID"]
+
+
+async def test_utf7_body_is_decoded_and_defanged(sandbox: Sandbox):
+    async with connect(sandbox.config) as client:
+        _md, data = await call(client, "search_messages", subject="Legacy charset", accounts=[WORK])
+        md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
+    body = msg["body"]["text"]
+    assert "+ADw-" not in body and "alert(1)" in body  # decoded, not shown as UTF-7
+    for form in (md, body):
+        assert not any(a in form for a in ACTIVE), form
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="get_message shows only the first of several inline text/plain parts and "
+    "neither lists the others nor says that text was left out",
+)
+async def test_wide_multipart_does_not_hide_text_parts(sandbox: Sandbox):
+    async with connect(sandbox.config) as client:
+        _md, data = await call(client, "search_messages", subject="2000 parts", accounts=[WORK])
+        md, msg = await call(client, "get_message", id=data["messages"][0]["id"])
+    assert "part 1999" in msg["body"]["text"] or msg["attachments"], md

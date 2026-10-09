@@ -1,0 +1,10 @@
+From: Loop <loop@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Re: Chicken or egg (B)
+Message-ID: <loop-b@attacker.test>
+In-Reply-To: <loop-a@attacker.test>
+References: <loop-a@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+B replies to A, A replies to B: a two-message reference cycle.

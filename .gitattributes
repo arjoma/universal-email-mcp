@@ -1,0 +1,4 @@
+# Mail samples: keep the bytes exactly as committed (no line-ending conversion).
+tests/data/sandbox/*.eml -text
+# Invalid UTF-8, NUL and escape bytes on purpose.
+tests/data/sandbox/broken-encodings.eml binary
