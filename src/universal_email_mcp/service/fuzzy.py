@@ -19,7 +19,7 @@ from functools import lru_cache
 
 from rapidfuzz import fuzz
 
-from universal_email_mcp.models import Address, FolderInfo, MessageSummary
+from universal_email_mcp.models import Address, FolderInfo
 
 DEFAULT_THRESHOLD = 75.0
 """Minimum score for a fuzzy hit."""
@@ -35,29 +35,49 @@ def _strip_accents(s: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
-@lru_cache(maxsize=65536)
+MAX_TEXT_CHARS = 1000
+"""Characters of a text that are normalised and compared (longer mail text is cut)."""
+_CACHED_CHARS = 200
+"""Only short texts (names, subjects, folder names) are cached: bounded memory."""
+
+
 def variants(text: str) -> tuple[str, ...]:
     """Normalised spellings of ``text``: transliterated (ä→ae) and accent-stripped
-    (ä→a), casefolded, punctuation collapsed to spaces. One entry if both agree."""
+    (ä→a), casefolded, punctuation collapsed to spaces. One entry if both agree.
+    Only the first ``MAX_TEXT_CHARS`` characters count, also after decomposition
+    (one character can expand to many: U+FDFA → 18)."""
+    text = text[:MAX_TEXT_CHARS]
+    if len(text) <= _CACHED_CHARS:
+        return _variants_cached(text)
+    return _variants(text)
+
+
+@lru_cache(maxsize=32768)
+def _variants_cached(text: str) -> tuple[str, ...]:
+    return _variants(text)
+
+
+def _variants(text: str) -> tuple[str, ...]:
     base = unicodedata.normalize("NFC", text).casefold()
     translit = _strip_accents(base.translate(_TRANSLIT))
     stripped = _strip_accents(base)
     out: list[str] = []
     for v in (translit, stripped):
-        v = " ".join(_TOKEN_SPLIT.split(v)).strip()
+        v = " ".join(_TOKEN_SPLIT.split(v[:MAX_TEXT_CHARS])).strip()
         if v not in out:
             out.append(v)
     return tuple(out)
 
 
-@lru_cache(maxsize=8192)
 def fold_variants(text: str) -> tuple[str, ...]:
     """Like :func:`variants` (casefolded, ä→ae and ä→a), but punctuation, spaces and
     wildcard characters are kept — for pattern matching (:mod:`.query`). The second
-    spelling is lower-cased instead of casefolded, so ``ß`` stays one character."""
-    text = unicodedata.normalize("NFC", text)
-    translit = _strip_accents(text.casefold().translate(_TRANSLIT))
-    return tuple(dict.fromkeys((translit, _strip_accents(text.lower()))))
+    spelling is lower-cased instead of casefolded, so ``ß`` stays one character.
+    Not cached (candidates are mail text); each spelling is cut to
+    ``MAX_TEXT_CHARS`` after decomposition."""
+    text = unicodedata.normalize("NFC", text[:MAX_TEXT_CHARS])
+    translit = _strip_accents(text.casefold().translate(_TRANSLIT))[:MAX_TEXT_CHARS]
+    return tuple(dict.fromkeys((translit, _strip_accents(text.lower())[:MAX_TEXT_CHARS])))
 
 
 def normalize(text: str) -> str:
@@ -130,61 +150,12 @@ def address_texts(addrs: Iterable[Address]) -> list[str]:
 # --------------------------------------------------------------------------- messages
 
 
-@dataclass(frozen=True, slots=True)
-class FuzzyQuery:
-    """Fields of a fuzzy message search; all given fields must match (AND)."""
-
-    from_: str | None = None
-    to: str | None = None
-    subject: str | None = None
-    text: str | None = None
-    """Matched against sender, recipients and subject (headers only)."""
-
-    def is_empty(self) -> bool:
-        return not any(v and v.strip() for v in (self.from_, self.to, self.subject, self.text))
-
-
 _REPLY_PREFIX = re.compile(r"^\s*(?:(?:re|aw|fw|fwd|wg|sv|antw|vs)\s*(?:\[\d+\])?\s*:\s*)+", re.I)
 
 
 def strip_subject_prefixes(subject: str) -> str:
     """``Re: AW: Fwd: Angebot`` → ``Angebot`` (reply/forward markers, EN/DE/Nordic)."""
     return _REPLY_PREFIX.sub("", subject)
-
-
-def score_message(q: FuzzyQuery, m: MessageSummary) -> float:
-    """Score of a message against all given query fields: the weakest field counts
-    (AND semantics), so one strong field cannot hide a missing one."""
-    scores: list[float] = []
-    senders = address_texts(m.from_)
-    recipients = address_texts((*m.to, *m.cc))
-    if q.from_ and q.from_.strip():
-        scores.append(score_any(q.from_, senders))
-    if q.to and q.to.strip():
-        scores.append(score_any(q.to, recipients))
-    subject = strip_subject_prefixes(m.subject)
-    if q.subject and q.subject.strip():
-        scores.append(score(q.subject, subject))
-    if q.text and q.text.strip():
-        scores.append(score_any(q.text, [*senders, *recipients, subject]))
-    return min(scores) if scores else 0.0
-
-
-def rank_messages(
-    q: FuzzyQuery,
-    messages: Iterable[MessageSummary],
-    *,
-    threshold: float = DEFAULT_THRESHOLD,
-) -> list[tuple[float, MessageSummary]]:
-    """Messages scoring ≥ ``threshold``, best first, newer first on ties."""
-    hits = [(s, m) for m in messages if (s := score_message(q, m)) >= threshold]
-    hits.sort(key=lambda h: (-round(h[0]), -_ts(h[1])))
-    return hits
-
-
-def _ts(m: MessageSummary) -> float:
-    d = m.date or m.received
-    return d.timestamp() if d else 0.0
 
 
 # --------------------------------------------------------------------------- folders
@@ -202,8 +173,9 @@ def folder_path(folder: FolderInfo, personal_prefix: str = "") -> tuple[str, ...
 
 
 @dataclass(frozen=True, slots=True)
-class FolderMatch:
-    folder: FolderInfo
+class PathMatch:
+    index: int
+    """Position of the matched path in the list given to :func:`match_paths`."""
     path: tuple[str, ...]
     score: float
 
@@ -230,28 +202,27 @@ def _alias_variants(part: str) -> list[str]:
     return out
 
 
-def match_folders(
+def match_paths(
     query: str,
-    folders: Sequence[FolderInfo],
+    paths: Sequence[tuple[str, ...]],
+    roles: Sequence[str | None] | None = None,
     *,
-    personal_prefix: str = "",
     threshold: float = DEFAULT_THRESHOLD,
-    include_groups: bool = False,
-) -> list[FolderMatch]:
-    """Rank selectable folders against a (possibly hierarchical) query.
+) -> list[PathMatch]:
+    """Rank folder paths (display parts, namespace prefix removed — see
+    :func:`folder_path`) against a (possibly hierarchical) query, best first.
 
     ``"clients/hubr"`` matches group and leaf separately (``Clients`` / ``Huber``);
     a single word is matched against the leaf, and weakly against the full path.
     Common English/German group names (clients/Kunden, projects/Projekte …) are
-    treated as synonyms. ``include_groups`` also ranks non-selectable folders
-    (groups that only hold subfolders).
+    treated as synonyms; a role name (``sent``) matches its folder.
     """
     q_parts = _split_query(query)
-    out: list[FolderMatch] = []
-    for f in folders:
-        if not f.selectable and not include_groups:
+    out: list[PathMatch] = []
+    for i, path in enumerate(paths):
+        if not path:
             continue
-        path = folder_path(f, personal_prefix)
+        role = roles[i] if roles is not None else None
         if len(q_parts) == 1:
             # "huber gmbh" should still find the leaf "Huber": also score the leaf
             # against the query (slightly discounted).
@@ -261,21 +232,20 @@ def match_folders(
             )
             whole = score(q_parts[0], " ".join(path)) - 5.0
             s = max(leaf, whole)
-            if f.role is not None and normalize(q_parts[0]) == f.role:
+            if role is not None and normalize(q_parts[0]) == role:
                 s = 100.0
         else:
             # Align the query parts with the end of the path: leaf ↔ last part …
             if len(q_parts) > len(path):
                 continue
             tail = path[-len(q_parts) :]
-            part_scores = [
+            s = min(
                 max(score(v, p) for v in _alias_variants(qp))
                 for qp, p in zip(q_parts, tail, strict=True)
-            ]
-            s = min(part_scores)
+            )
         if s >= threshold:
-            out.append(FolderMatch(f, path, s))
-    out.sort(key=lambda m: (-m.score, len(m.path), m.folder.display_name.casefold()))
+            out.append(PathMatch(i, path, s))
+    out.sort(key=lambda m: (-m.score, len(m.path), "/".join(m.path).casefold()))
     return out
 
 
@@ -283,7 +253,7 @@ AMBIGUITY_MARGIN = 5.0
 """Two folder matches closer than this (in score) are reported as a choice."""
 
 
-def pick_folder(matches: Sequence[FolderMatch]) -> FolderMatch | list[FolderMatch] | None:
+def pick(matches: Sequence[PathMatch]) -> PathMatch | list[PathMatch] | None:
     """The single best match, the tied candidates when ambiguous, or ``None``."""
     if not matches:
         return None

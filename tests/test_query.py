@@ -136,3 +136,19 @@ def test_hostile_pattern_text_is_not_interpreted():
     pattern = "*](https://evil.example)*"
     assert m(pattern, "Click [here](https://evil.example) now")
     assert not m(pattern, "Click here now")
+
+
+def test_nfkd_expansion_is_bounded():
+    # U+FDFA decomposes into 18 characters: 1000 of them must not mean 18 000
+    # characters compared per spelling, nor a slow fuzzy score.
+    from universal_email_mcp.service import fuzzy
+
+    text = "\ufdfa" * 1000
+    assert all(len(v) <= fuzzy.MAX_TEXT_CHARS for v in fuzzy.fold_variants(text))
+    t = time.perf_counter()
+    for pattern in ("?" * 200, "a?" * 100, "x*" + "?" * 150):
+        WildcardPattern.compile(pattern).match(text)
+    q = parse("huber gmbh")
+    assert q is not None
+    q.score([text] * 50)
+    assert time.perf_counter() - t < 0.5

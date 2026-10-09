@@ -159,7 +159,12 @@ class MessageOut(_Model):
 class FolderEntry(_Model):
     account: str
     name: str = Field(description="Leaf name.")
-    path: str = Field(description="Full folder name: pass it as 'parent' or 'folders'.")
+    path: str = Field(
+        description=(
+            "Full folder name: pass it as 'parent' or (selectable folders only) in "
+            "'folders'. Groups (selectable=false) hold only subfolders."
+        )
+    )
     level: int = Field(description="1 = the level listed; 2, 3 = deeper (depth > 1).")
     role: str | None = Field(description="inbox, sent, drafts, trash, junk or archive.")
     selectable: bool = Field(description="False for groups that only hold subfolders.")
@@ -235,7 +240,12 @@ class AccountInfoOut(_Model):
 class ContactOut(_Model):
     name: str
     email: str
-    sent_to: bool = Field(description="The user has sent mail to this address.")
+    sent_to: bool | None = Field(
+        description=(
+            "The user has sent mail to this address (Sent, last two years); null = "
+            "unknown (Sent missing or not read completely)."
+        )
+    )
     sent: int
     received: int
     last: datetime | None

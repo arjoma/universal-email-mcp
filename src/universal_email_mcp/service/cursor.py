@@ -4,8 +4,12 @@ A cursor carries the paging position of a multi-account, multi-folder listing:
 per source ``(account, folder)`` its UIDVALIDITY, how many messages were already
 returned, the last UID returned (the next page resumes right after it in a fresh
 SEARCH, so expunged messages cannot shift the position), and the highest UID seen
-on the first page (newer arrivals are left out of later pages). It is bound to the tool and a hash of
-the query arguments, and signed with HMAC-SHA256.
+on the first page (newer arrivals are left out of later pages). Ranked and
+folder lists instead carry, per account, the sort key of the last row shown
+(keyset paging: the next page starts after it, so rows that appear or vanish
+meanwhile cannot shift the position, and an account that failed keeps its
+place). It is bound to the tool and a hash of the query arguments, and signed
+with HMAC-SHA256.
 
 The key is per process in local mode (cursors die with the process — fine for a
 paging session); remote mode passes a shared key so any instance can continue.
@@ -42,6 +46,10 @@ class SourcePos:
     """Last UID passed in this source (0 = none yet): the next page starts after it."""
 
 
+Key = tuple[float | int | str, ...]
+"""A sort key of keyset paging (JSON scalars only)."""
+
+
 @dataclass(frozen=True, slots=True)
 class Cursor:
     tool: str
@@ -50,8 +58,8 @@ class Cursor:
     sources: dict[tuple[str, str], SourcePos] = field(
         default_factory=dict[tuple[str, str], SourcePos]
     )
-    offset: int = 0
-    """Offset into a ranked (fuzzy / contact) result list."""
+    after: dict[str, Key] = field(default_factory=dict[str, "Key"])
+    """Per account (or ``*`` for a merged list): sort key of the last row shown."""
     retries: int = 0
     """Consecutive pages issued only to retry failed accounts (capped)."""
 
@@ -81,7 +89,7 @@ class CursorCodec:
         data = {
             "t": cursor.tool,
             "q": cursor.query,
-            "o": cursor.offset,
+            "a": [[acc, list(key)] for acc, key in sorted(cursor.after.items())],
             "r": cursor.retries,
             "s": [
                 [acc, folder, p.uidvalidity, p.offset, p.max_uid, p.last_uid]
@@ -110,11 +118,17 @@ class CursorCodec:
             sources: dict[tuple[str, str], SourcePos] = {}
             for acc, folder, uv, off, mx, last in cast(list[list[Any]], data["s"]):
                 sources[(str(acc), str(folder))] = SourcePos(int(uv), int(off), int(mx), int(last))
+            after: dict[str, Key] = {}
+            for acc, key in cast(list[list[Any]], data["a"]):
+                parts = cast(list[Any], key)
+                if not all(isinstance(x, (str, int, float)) for x in parts):
+                    raise TypeError("bad key")
+                after[str(acc)] = tuple(parts)
             cur = Cursor(
                 tool=str(data["t"]),
                 query=str(data["q"]),
                 sources=sources,
-                offset=int(data["o"]),
+                after=after,
                 retries=int(data.get("r", 0)),
             )
         except (ValueError, KeyError, TypeError) as e:

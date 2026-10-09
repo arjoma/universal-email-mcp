@@ -276,7 +276,7 @@ async def test_list_folders_overview_and_drill_down(seeded: Seeded):
         assert clients["Huber"]["path"] == "Clients/Huber" and clients["Huber"]["messages"] == 1
         md, data = await call(client, "list_folders", accounts=["Work"], depth=2)
         assert ("Archive/2025", 2) in {(n["path"], n["level"]) for n in data["folders"]}
-        assert "└ Maier GmbH" in md
+        assert "└ Clients/Maier GmbH" in md
         _md, data = await call(client, "list_folders", query="*gmbh")
         assert [(n["account"], n["path"]) for n in data["folders"]] == [
             ("Work", "Clients/Maier GmbH")
