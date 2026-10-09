@@ -6,10 +6,55 @@ connects to `PUBLIC_URL/mcp`, is sent through the browser to **sign in** and **c
 gets tokens. This page is for operators and client authors; variables are in
 [operator-env.md](operator-env.md), stored records in [stored-data.md](stored-data.md).
 
-> **Preview:** authentication and authorization are complete, but the per-user mail tools
-> arrive with work package 3e. Until then a connected client sees one tool, `account_info`,
-> which reports the connection (client name, granted scopes, number of mailboxes and
-> identities). The grants chosen on the consent page are stored and enforced from 3e on.
+> **Status:** sign-in, consent, tokens and the per-user mail tools (work package 3e) work;
+> sending from remote mode follows with 3f (see "What `/mcp` serves" below).
+
+## What `/mcp` serves
+
+Every request is authenticated by its access token (live token, existing grant, audience
+`PUBLIC_URL/mcp`) and then served from a **per-user service** built from the store
+(`service/userpool.py`, `server/peruser.py`): the accounts the grant names, with their
+credentials decrypted in memory only, the user's identities, the operator's limits and policy.
+Revoking the grant or the token stops the very next request (the token is checked on every
+call); a changed or removed account takes effect on the next request too.
+
+* **Tools offered = what the grant allows.** The tool list is computed per request from the
+  grant, as in local mode from the configuration: a read-only grant sees the six read tools
+  (`account_info`, `list_folders`, `find_messages`, `get_message`, `get_attachment`,
+  `find_contacts`); `mail.organize` / `mail.delete` / `mail.drafts` on at least one account add
+  `mark_messages`, `move_messages`, `create_folder` / `delete_messages` / `save_draft`.
+* **Effective permission per account** = the account's own permissions (portal) ∩ the grant's
+  scope for that account ∩ the scope of the token ∩ the operator policy (`UEM_READ_ONLY` leaves
+  only `read`; POP3 accounts stay read-only). An account without `read` is not part of the grant's
+  view. The check runs again on every call, per account: an organize grant on one mailbox and a
+  read grant on another lets writes through to the first and refuses them (`NOT_PERMITTED`)
+  on the second, and a client that calls a tool it was never shown gets "unknown tool".
+* **Isolation.** A request only ever sees records of its own user (queried by `user_id` and
+  checked again when the configuration is built); message ids and paging cursors name accounts
+  and are resolved inside the caller's own view, cursors are signed with a per-user key derived
+  from `PSEUDONYM_KEY`. Another user's ids resolve to "unknown account" or to the caller's own
+  mailbox of the same name, never to the other user's.
+* **Instructions per user.** The server instructions (handshake and `server/discover`) describe
+  the tools of the grant and carry the folder map of the user's accounts, read with the same
+  3 second timeout as in local mode (an account that does not answer is shown as "not read";
+  `account_info` refreshes the map). A client pinned to 2026-07-28 that never asks for
+  discovery does not see instructions.
+* **`reauth_required`.** When a mail server rejects a stored password, the tool result names the
+  account with code `REAUTH_REQUIRED` and says that the user has to enter the password again in the
+  portal (`PUBLIC_URL/portal/accounts`); the other accounts keep working. The account record is
+  marked (`auth_failed_at`, plus a sealed digest of the failed login) and no login is tried again
+  for `UEM_REAUTH_RETRY_AFTER` seconds unless the password or user name changed (the flag lifts
+  itself then; a working login clears it). No retry storm against the hoster.
+* **Resource caps** (`UEM_MAX_CONNECTIONS*`, `UEM_MAX_CONCURRENT_CALLS_PER_USER`, ...,
+  see [operator-env.md](operator-env.md)): mail connections are pooled per grant, closed after
+  `UEM_CONNECTION_IDLE_TTL`, capped per user and per instance (the longest idle connection is
+  closed to make room, otherwise the call fails with `BUSY`), and a user can run only so many
+  tool calls at once (`BUSY` beyond that - the client may retry).
+* **Sending.** `mail.send` and sender identities are stored with the grant, but `send_message` is
+  **not offered** in remote mode until work package 3f (request-state sealing for the
+  confirmation, pending approvals in the portal). Drafts work: `save_draft` writes into the
+  Drafts folder of the account an identity is linked to (identities that copy to a drafts-capable
+  account of the grant are usable for drafts without the right to send).
 
 ## Endpoints
 

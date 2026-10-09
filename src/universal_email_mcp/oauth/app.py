@@ -12,6 +12,7 @@ from starlette.applications import Starlette
 
 from universal_email_mcp.config import Policy
 from universal_email_mcp.mail.net import NetPolicy
+from universal_email_mcp.models import TlsSettings
 from universal_email_mcp.oauth.bearer import StoreTokenVerifier
 from universal_email_mcp.oauth.clients import ClientRegistry
 from universal_email_mcp.oauth.config import (
@@ -31,8 +32,10 @@ from universal_email_mcp.portal.connect import ConnectionTester, LiveTester
 from universal_email_mcp.portal.pages import portal_group
 from universal_email_mcp.portal.service import CONNECT_TIMEOUT, READ_TIMEOUT, PortalService
 from universal_email_mcp.portal.web import Portal
+from universal_email_mcp.server.app import build_server
 from universal_email_mcp.server.http import RouteGroup, create_app
-from universal_email_mcp.server.oauth_preview import build_preview_server
+from universal_email_mcp.server.peruser import PerUserServer, wrap_routes
+from universal_email_mcp.service.userpool import UserPool
 from universal_email_mcp.store import Backend, MemoryBackend, SessionPolicy, Store, User
 
 log = logging.getLogger(__name__)
@@ -124,14 +127,17 @@ async def build_oauth_app(
     login: LoginVerifier | None = None,
     rate_limits: RateLimits | None = None,
     tester: ConnectionTester | None = None,
+    mail_tls: TlsSettings | None = None,
 ) -> Starlette:
-    """The app of OAuth mode. The keyword arguments are injection points for tests."""
+    """The app of OAuth mode. The keyword arguments are injection points for tests
+    (``mail_tls``: TLS settings for the users' mail servers, e.g. a self-signed test server)."""
     from universal_email_mcp.server.serve import http_settings, mcp_group
 
     store = store or make_store(op)
     cfg = make_config(op, rate_limits=rate_limits)
     svc = build_service(op, store, cfg, fetch_policy=fetch_policy, login=login)
-    mcp = mcp_group(build_preview_server(), op)
+    pool = UserPool(store, op, build_server, tls=mail_tls or TlsSettings())
+    mcp = mcp_group(PerUserServer(pool), op, lambda routes: wrap_routes(routes, pool))
     portal = PortalService(
         oauth=svc,
         mail_servers=op.mail_servers,
@@ -151,9 +157,11 @@ async def build_oauth_app(
             if isinstance(store.backend, MemoryBackend)
             else None
         )
+        pool.start()
         try:
             yield
         finally:
+            await pool.aclose()
             if purger is not None:
                 purger.cancel()
                 with suppress(asyncio.CancelledError):
@@ -177,6 +185,7 @@ async def build_oauth_app(
     )
     app.state.oauth_service = svc  # for tests
     app.state.portal_service = portal
+    app.state.user_pool = pool
     return app
 
 

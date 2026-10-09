@@ -32,7 +32,7 @@ single-field equality (`user_id`, `grant_id`), no composite index is needed.
 | Record (collection) | Plain fields | Sealed (AES-256-GCM) | Lifetime |
 |---|---|---|---|
 | user (`users`) | pseudonym id, default identity, created | primary address, settings (ids of the sign-in mailbox account) | until deleted |
-| account (`accounts`) | name, protocol, permissions (the user's upper bound), preset | host, port, TLS, login name, **password** | until removed |
+| account (`accounts`) | name, protocol, permissions, preset, `auth_failed_at` (set by the MCP side when the server rejected the login) | host, port, TLS, login name, **password**, `auth_failed_mark` (digest of the failed login; the flag only holds while it matches) | until removed |
 | identity (`identities`) | copies account (drafts, sent), SMTP source account, send allowed, default flag | SMTP host/port/TLS, addresses, display name, signature, SMTP login and **password** | until removed |
 | portal session (`portal_sessions`) | user, times, id = SHA-256 of the cookie | - | 12 h (configurable) |
 | OAuth client (`oauth_clients`) | CIMD URL / DCR id, name, redirect URIs | - | 30 days unused (extended on use) |

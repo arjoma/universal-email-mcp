@@ -12,6 +12,7 @@ and refresh token) are never stored: the record id is the SHA-256 digest of the 
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar
@@ -60,8 +61,15 @@ class MailAccount(Record):
     """One incoming mailbox. Server profile is plain, login name and password are sealed."""
 
     KIND: ClassVar[str] = "accounts"
-    SEALED: ClassVar[tuple[str, ...]] = ("host", "port", "tls", "username", "password")
-    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("password",)
+    SEALED: ClassVar[tuple[str, ...]] = (
+        "host",
+        "port",
+        "tls",
+        "username",
+        "password",
+        "auth_failed_mark",
+    )
+    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("password", "auth_failed_mark")
 
     user_id: str
     name: str
@@ -79,6 +87,29 @@ class MailAccount(Record):
     permissions: tuple[str, ...] = ("read",)
     display_name: str = ""
     created_at: datetime
+    auth_failed_at: datetime | None = None
+    """Set by the MCP side (WP 3e) when the mail server rejected the stored login: the
+    account "needs attention" (``reauth_required``) and is not tried again for a while."""
+    auth_failed_mark: str = field(default="", repr=False)
+    """Digest of the login (user name + password) that failed. The flag only holds while
+    it matches the stored login, so changing the password (portal) lifts it without the
+    portal having to know about this field."""
+
+    @property
+    def needs_reauth(self) -> bool:
+        return self.auth_failed_at is not None and self.auth_failed_mark == login_mark(
+            self.username, self.password
+        )
+
+
+def login_mark(username: str, password: str) -> str:
+    """Short digest identifying one login, kept sealed next to the failure flag. A slow
+    key-derivation function, not a bare hash: the mark never makes the password easier to
+    guess even if the sealed blob were opened."""
+    raw = hashlib.scrypt(
+        password.encode(), salt=f"uem-login-mark\0{username}".encode(), n=2**10, r=8, p=1, dklen=16
+    )
+    return raw.hex()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

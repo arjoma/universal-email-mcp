@@ -84,10 +84,14 @@ class CredentialRef:
     ``kind="env"``: ``name`` is an environment variable.
     ``kind="keyring"``: ``name`` is the key in the OS keyring under service
     ``universal-email-mcp``.
+    ``kind="inline"``: ``secret`` holds the password (remote mode; ``name`` is a label).
     """
 
-    kind: Literal["env", "keyring"]
+    kind: Literal["env", "keyring", "inline"]
     name: str
+    secret: str = field(default="", repr=False)
+    """``kind="inline"`` (remote mode): the password itself, decrypted from the store
+    for this request/process only. Never in ``repr``, never logged."""
 
 
 @dataclass(frozen=True, slots=True)

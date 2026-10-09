@@ -681,6 +681,10 @@ def resolve_password(
 ) -> str:
     """Fetch the account's password from the environment or the OS keyring."""
     ref = account.credential
+    if ref.kind == "inline":
+        if not ref.secret:
+            raise CredentialMissing(f"account {account.name!r} has no password stored")
+        return ref.secret
     if ref.kind == "env":
         value = (os.environ if env is None else env).get(ref.name)
         if not value:

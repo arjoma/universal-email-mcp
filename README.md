@@ -226,8 +226,9 @@ the resulting access token. A **self-service portal** at `/portal` lets each use
 their mail accounts (IMAP or POP3, connection tested before it is saved), set permissions,
 manage sender identities, see the connected AI clients and disconnect or reduce them
 ([`docs/portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md)).
-**Preview:** the per-user mail tools come with a later work package, so for now `/mcp`
-offers only `account_info` (who is connected, what was granted). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
+`/mcp` serves each user's own accounts from the store with exactly the tools the client's
+grant allows (read, organize, delete, drafts); sending from remote mode follows with a later
+work package. How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
 all variables: [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md).
 
 ```bash

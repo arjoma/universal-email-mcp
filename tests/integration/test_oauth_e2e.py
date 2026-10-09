@@ -18,7 +18,6 @@ from mcp.shared.auth import (
     OAuthClientMetadata,
     OAuthToken,
 )
-from mcp.types import TextContent
 
 from tests.http_util import mcp_client, running
 from tests.https_server import Reply, doc_server, resolver
@@ -151,14 +150,12 @@ async def test_sdk_oauth_client_with_dynamic_registration(
         auth = provider(url, browser)
         async with mcp_client(url + "/mcp", None, auth=auth) as c:
             tools = {t.name for t in (await c.list_tools()).tools}
-            assert tools == {"account_info"}
+            assert {"account_info", "find_messages"} <= tools  # the grant names no real account yet
+            # the consent page still offers the pseudo account `primary` (until the portal, 3d),
+            # which has no record: the per-user service finds no mailbox behind the grant
             r = await c.call_tool("account_info", {})
-            text = r.content[0]
-            assert isinstance(text, TextContent)
-            assert (
-                "authorized" in text.text and "E2E Client" in text.text and "mail.read" in text.text
-            )
-            assert user not in text.text  # the tool never echoes the address
+            assert r.is_error and "no accounts configured" in str(r.content[0])
+            assert "portal" in str(r.content[0])
         assert "E2E Client" in browser.seen_consent
         token = auth.context.current_tokens
         assert token is not None and token.refresh_token
@@ -228,8 +225,7 @@ async def test_sdk_oauth_client_with_client_id_metadata_document(
         async with running(app, sock) as url:
             auth = provider(url, browser, client_metadata_url=cid)
             async with mcp_client(url + "/mcp", None, auth=auth) as c:
-                r = await c.call_tool("account_info", {})
-                assert "CIMD Client" in r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
+                assert {t.name for t in (await c.list_tools()).tools} >= {"account_info"}
             assert (
                 auth.context.client_info is not None and auth.context.client_info.client_id == cid
             )

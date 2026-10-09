@@ -137,8 +137,10 @@ class Drafter:
         if not idents:
             raise InvalidArgument(
                 "no identities are configured",
-                hint="Add an [[identities]] table to the configuration (address, name, "
-                "account); drafts are written as one of the configured identities.",
+                hint="Local mode: add an [[identities]] table to the configuration (address, "
+                "name, account). Remote mode: the user adds a sender identity linked to the "
+                "mailbox in the portal and allows this client to draft. Drafts are written as "
+                "one of the configured identities.",
             )
         if explicit and explicit.strip():
             wanted = compose.header_text(explicit, "from", max_chars=200)

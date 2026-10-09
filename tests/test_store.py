@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -712,3 +712,26 @@ async def test_unknown_fields_survive_update(store: Store) -> None:
 async def test_export_omits_draft_refs(store: Store) -> None:
     await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="DRAFT-REF-X")  # fmt: skip
     assert "DRAFT-REF-X" not in repr(await store.export_user("u_1"))
+
+
+async def test_account_failure_flag_follows_the_login(store: Store) -> None:
+    from universal_email_mcp.store.records import login_mark
+
+    acc = cast(MailAccount, make(MailAccount))
+    assert not acc.needs_reauth
+    flagged = replace(
+        acc,
+        auth_failed_at=datetime.now(UTC),
+        auth_failed_mark=login_mark(acc.username, acc.password),
+    )
+    assert flagged.needs_reauth
+    assert not replace(flagged, password="a new password").needs_reauth  # lifted by a new login
+    stored = await store.create(flagged)
+    doc = await store.backend.get(MailAccount.KIND, stored.id)
+    assert doc is not None and login_mark(acc.username, acc.password) not in repr(doc)  # sealed
+    back = await store.get(MailAccount, stored.id)
+    assert back is not None and back.needs_reauth
+    # records written before the flag existed decode with the defaults
+    old = await store.create(cast(MailAccount, make(MailAccount, "u_1", "old1")))
+    again = await store.get(MailAccount, old.id)
+    assert again is not None and again.auth_failed_at is None and not again.needs_reauth
