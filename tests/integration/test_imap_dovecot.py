@@ -441,6 +441,20 @@ def test_errors_are_mail_errors(mailbox: Mailbox):
         )
 
 
+@pytest.mark.parametrize("name", ['a"b@example.org', "a\\b@example.org", "x{1}@example.org", "*"])
+def test_hostile_login_name_is_a_clean_auth_failure(mailbox: Mailbox, name: str):
+    """Quote/brace/wildcard characters in the login name never desync the protocol."""
+    with pytest.raises(AuthFailed) as exc:
+        ImapSession.connect(
+            Endpoint(mailbox.server.host, mailbox.server.imaps_port, "tls"),
+            name,
+            "wrong-password",
+            net=NET,
+            tls=INSECURE,
+        )
+    assert exc.value.code == "AUTH_FAILED"
+
+
 # Last on purpose: Dovecot delays logins from an IP after a failed one.
 def test_wrong_password(mailbox: Mailbox):
     with pytest.raises(AuthFailed) as exc:

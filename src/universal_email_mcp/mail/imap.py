@@ -68,6 +68,7 @@ from universal_email_mcp.mail.bodystructure import (
     find,
     leaves,
 )
+from universal_email_mcp.mail.credentials import check_credentials, imap_quote
 from universal_email_mcp.mail.folders import RawFolder, assign_roles, decode_folder_name
 from universal_email_mcp.mail.mime import (
     SUMMARY_HEADERS,
@@ -696,10 +697,11 @@ class ImapSession:
             t1 = time.monotonic()
             if "LOGINDISABLED" in pre_caps and "AUTH=PLAIN" not in pre_caps:
                 raise AuthFailed("the server does not allow password login on this connection")
+            check_credentials(username, password)
             mechanism = "AUTHENTICATE PLAIN" if "AUTH=PLAIN" in pre_caps else "LOGIN"
             try:
                 if mechanism == "LOGIN":
-                    client.login(username, password)
+                    client.login(imap_quote(username), password)
                 else:
                     client.plain_login(username, password)
             except LoginError as e:

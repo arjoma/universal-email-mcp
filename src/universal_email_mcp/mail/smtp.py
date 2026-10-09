@@ -41,6 +41,7 @@ from universal_email_mcp.errors import (
     TlsError,
     TooLarge,
 )
+from universal_email_mcp.mail.credentials import check_credentials
 from universal_email_mcp.mail.mime import sanitize_line
 from universal_email_mcp.mail.net import (
     NetPolicy,
@@ -230,6 +231,7 @@ def _open_authenticated(
             f"{host} offers no authentication",
             hint="A submission server must require a login; check host and port.",
         )
+    check_credentials(username, password)
     try:
         conn.login(username, password)
     except smtplib.SMTPAuthenticationError as e:
