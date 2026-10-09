@@ -80,6 +80,7 @@ _ATTACHMENT_TYPES = (b"multipart/", b"application/", b"image/", b"audio/", b"vid
 """Content-Type prefixes of the ``has_attachment`` server pre-filter."""
 
 _HEADER_FIELDS = "BODY.PEEK[HEADER.FIELDS (" + " ".join(h.upper() for h in SUMMARY_HEADERS) + ")]"
+_RECIPIENT_FIELDS = "BODY.PEEK[HEADER.FIELDS (TO CC)]"
 _SUMMARY_ITEMS = ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE", "BODYSTRUCTURE", _HEADER_FIELDS]
 _SUMMARY_ITEMS_NO_BS = [i for i in _SUMMARY_ITEMS if i != "BODYSTRUCTURE"]
 
@@ -876,6 +877,36 @@ class ImapSession:
             order=cast(Literal["arrival", "uid"], order),
         )
 
+    def search_recipients(
+        self, folder: str, addresses: Sequence[str], *, since: date | None = None
+    ) -> SearchResult:
+        """Messages whose To or Cc contains any of ``addresses`` (one ``SEARCH``
+        with ``OR TO x CC x …``), newest first. The server matches substrings —
+        verify hits with :meth:`fetch_recipients`. Addresses are untrusted and
+        sanitised like any search value; at most ``MAX_RELATED_IDS`` are used."""
+        wire, uidvalidity, exists = self._examine(folder)
+        values = [v for v in (_clean_search_value(a) for a in addresses) if v][:MAX_RELATED_IDS]
+        if exists == 0 or not values:
+            return SearchResult(self.account_name, wire, uidvalidity, (), "uid")
+        keys: list[list[bytes]] = []
+        for v in values:
+            keys += [[b"TO", _astring(v)], [b"CC", _astring(v)]]
+        args: list[bytes] = [b"UNDELETED"]
+        if since:
+            args += [b"SINCE", _imap_date(since)]
+        args += [b"OR"] * (len(keys) - 1)
+        for k in keys:
+            args += k
+        charset = None if all(v.isascii() for v in values) else "UTF-8"
+        uids, order = self._search_call(args, charset)
+        return SearchResult(
+            account=self.account_name,
+            folder=wire,
+            uidvalidity=uidvalidity,
+            uids=tuple(uids),
+            order=cast(Literal["arrival", "uid"], order),
+        )
+
     def _search_call(self, args: list[bytes], charset: str | None) -> tuple[list[int], str]:
         return self._call("SEARCH", lambda: self._run_search(args, charset))
 
@@ -942,6 +973,23 @@ class ImapSession:
         if not uids:
             return []
         return self._summaries(wire, current, list(uids))
+
+    def fetch_recipients(
+        self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
+    ) -> dict[int, tuple[str, ...]]:
+        """Lower-cased To/Cc addresses of ``uids`` — only those two header fields
+        are fetched (no envelope, no BODYSTRUCTURE), in batches."""
+        wire, current, _exists = self._examine(folder)
+        if uidvalidity is not None and uidvalidity != current:
+            raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")
+        if not uids:
+            return {}
+        fetched = self._fetch_raw(list(uids), ["UID", _RECIPIENT_FIELDS])
+        out: dict[int, tuple[str, ...]] = {}
+        for uid, fields in fetched.items():
+            h = parse_header_block(_header_bytes(fields))
+            out[uid] = tuple(e for a in (*h.to, *h.cc) if "@" in (e := a.email.strip().lower()))
+        return out
 
     def fetch_flags(
         self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None

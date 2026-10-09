@@ -168,6 +168,33 @@ class FakeSession:
         )
         return SearchResult(self.account_name, folder, self.uidvalidity, tuple(uids), "uid")
 
+    def search_recipients(
+        self, folder: str, addresses: Sequence[str], *, since: Any = None
+    ) -> SearchResult:
+        """Substring match like a real server (``hanna@`` contains ``anna@``)."""
+        self._tick(f"RSEARCH {folder} {len(addresses)}")
+        wanted = [a.lower() for a in addresses]
+        uids = sorted(
+            (
+                u
+                for u, m in self.folders[folder].items()
+                if any(w in x.email.lower() for x in (*m.to, *m.cc) for w in wanted)
+            ),
+            reverse=True,
+        )
+        return SearchResult(self.account_name, folder, self.uidvalidity, tuple(uids), "uid")
+
+    def fetch_recipients(
+        self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
+    ) -> dict[int, tuple[str, ...]]:
+        self._tick(f"RFETCH {folder} {len(uids)}")
+        if uidvalidity is not None and uidvalidity != self.uidvalidity:
+            raise UidValidityChanged("changed")
+        box = self.folders[folder]
+        return {
+            u: tuple(x.email.lower() for x in (*box[u].to, *box[u].cc)) for u in uids if u in box
+        }
+
     def fetch_flags(
         self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
     ) -> dict[int, tuple[str, ...]]:

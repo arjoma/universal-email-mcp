@@ -538,8 +538,14 @@ def build_server(service: MailService) -> MCPServer:
             where = "at the top level"
         if not q and page.depth > 1:
             where += f" ({page.depth} levels)"
-        if page.leaf and not q:
-            foot = [escape_cell("; ".join(page.leaf), 80) + " has no subfolders"]
+        leaf_notes = [
+            (f"{escape_cell(acc, 30)}: " if multi_account else "")
+            + f"{escape_cell(name, 80)} has no subfolders"
+            for acc, name in page.leaf
+        ]
+        if leaf_notes and len(page.leaf) == len(entries) and not page.cursor:
+            foot = leaf_notes
+            leaf_notes = []
         elif entries:
             foot = [
                 f"{page.offset + 1}–{page.offset + len(entries)} of {page.total} folders {where}"
@@ -548,6 +554,7 @@ def build_server(service: MailService) -> MCPServer:
             foot = ["no more results (the list changed since the first page)"]
         else:
             foot = [f"no {'sub' if page.parent and not q else ''}folders {where}"]
+        foot += leaf_notes
         if page.cursor:
             foot.append(f"more: cursor=`{page.cursor}`")
         if page.similar:

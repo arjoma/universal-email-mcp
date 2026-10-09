@@ -69,12 +69,17 @@ OVERVIEW_CONTACT_DAYS = 7
 OVERVIEW_HEADERS = 150
 """Headers per account the contact overview reads (newest first, INBOX + Sent)."""
 OVERVIEW_CONTACTS = 20
+OVERVIEW_SENT_UPDATE = 500
+"""The overview tops up an existing sent-to set by at most this many headers."""
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
 _THREAD_ROLES: tuple[FolderRole, ...] = ("inbox", "sent")
 _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "drafts"})
 
 THREAD_PARTICIPANT_THRESHOLD = 85.0
 """Folder-name score for a conversation participant (thread folder order)."""
+MAX_PARTICIPANT_TERMS = 10
+MAX_TERM_WORDS = 5
+MAX_TERM_CHARS = 60
 
 
 # =========================================================================== results
@@ -149,8 +154,8 @@ class FolderPage:
     """The resolved parent per account (full names), when ``parent`` was given."""
     similar: list[str] = field(default_factory=list[str])
     """Close folder names when a query matched nothing."""
-    leaf: list[str] = field(default_factory=list[str])
-    """Parents without subfolders (shown as the folder itself)."""
+    leaf: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    """(account, parent) shown as the folder itself: it has no subfolders."""
     counts_capped: bool = False
     exhausted: bool = False
     """A cursor was given but nothing was left (the list changed)."""
@@ -163,8 +168,6 @@ class FolderPage:
 class _AccountFolderRows:
     rows: list[tuple[Key, FolderRow]]
     parent: str | None = None
-    leaf: bool = False
-    """The parent has no subfolders: the row is the folder itself."""
     notes: list[str] = field(default_factory=list[str])
     similar: list[str] = field(default_factory=list[str])
     error: FolderNotFound | AmbiguousFolder | None = None
@@ -276,7 +279,7 @@ class MailService:
         self.cursors = cursors or CursorCodec()
         self._viewer_base = viewer_base
         self._prefixes: dict[str, str] = {}
-        self.sent_to = SentToIndex(self.index)
+        self.sent_to = SentToIndex()
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
 
     @property
@@ -383,11 +386,9 @@ class MailService:
         qh = query_hash(args)
         cur = self.cursors.decode(cursor, tool=tool, query=qh) if cursor else None
         selected, problems = self.router.select(accounts)
-        rank = {a.name: i for i, a in enumerate(selected)}
 
         def work(session: ImapSession) -> _AccountFolderRows:
             acc = session.account_name
-            r = rank[acc]
             roots = folder_list.build(
                 session.list_folders(refresh=cur is None), self._prefix(session)
             )
@@ -403,21 +404,16 @@ class MailService:
                 if note:
                     out.notes.append(f"{acc}: {note}")
                 if not node.children and query is None:
-                    out.leaf = True
-                    out.rows = [((r, 0), FolderRow(acc, node, 1))]
+                    out.rows = [(node.key, FolderRow(acc, node, 1))]
                     return out
                 base = node.children
             if query is None:
                 out.rows = [
-                    ((r, i), FolderRow(acc, n, lvl))
-                    for i, (n, lvl) in enumerate(folder_list.levels(base, depth))
+                    (n.key, FolderRow(acc, n, lvl)) for n, lvl in folder_list.levels(base, depth)
                 ]
                 return out
             matches = folder_list.search(base, query)
-            out.rows = [
-                ((-(m.score or 0.0), r, i), FolderRow(acc, m.node, 1, m.score))
-                for i, m in enumerate(matches)
-            ]
+            out.rows = [(m.key, FolderRow(acc, m.node, 1, m.score)) for m in matches]
             if not matches:
                 out.similar = folder_list.similar_names(list(folder_list.walk(base)), query)
             return out
@@ -445,7 +441,6 @@ class MailService:
         notes: list[str] = []
         near: list[str] = []
         parents: list[str] = []
-        leaves: list[str] = []
         for name, r in per_account.items():
             notes += r.notes
             if r.error is not None and (
@@ -454,8 +449,6 @@ class MailService:
                 notes.append(f"{name}: {r.error.message}")
             if r.parent:
                 parents.append(r.parent)
-            if r.leaf and r.parent:
-                leaves.append(r.parent)
             near += r.similar
         page = keyset_page(
             {name: r.rows for name, r in per_account.items()},
@@ -467,6 +460,13 @@ class MailService:
             problems=fan.problems,
         )
         rows = [row for _acc, row in page.items]
+        # A parent without subfolders comes back as its own row.
+        resolved = {name: r.parent for name, r in per_account.items() if r.parent}
+        leaves = [
+            (row.account, row.node.full_name)
+            for row in rows
+            if query is None and resolved.get(row.account) == row.node.full_name
+        ]
         capped = False
         if counts and rows:
             capped = await self._folder_counts(selected, rows)
@@ -483,7 +483,7 @@ class MailService:
             mode=mode,
             depth=depth,
             parent=list(dict.fromkeys(parents)),
-            leaf=list(dict.fromkeys(leaves)),
+            leaf=leaves,
             similar=list(dict.fromkeys(near))[:5],
             counts_capped=capped,
             exhausted=page.exhausted,
@@ -872,10 +872,17 @@ class MailService:
         at most ``OVERVIEW_HEADERS`` headers per account, most recent first. With a
         query a deeper window (``DEFAULT_CONTACT_DAYS``, up to ``MAX_CONTACT_DAYS``;
         ``max_headers_scanned`` headers per account, served incrementally by the
-        header index), matched on name and address (wildcard or fuzzy). ``sent_to``
-        comes from the per-account sent-to sets (:mod:`.trust`) in both modes.
+        header index), matched on name and address (wildcard or fuzzy).
+
+        ``sent_to`` (:mod:`.trust`): the search mode extends the per-account sent-to
+        sets incrementally; the overview only tops up a set that exists already.
+        Contacts on the page the sets cannot decide get an exact per-address check.
+        It is ``None`` (unknown) when an account failed or could not decide.
+
         Recency is the arrival time (INTERNALDATE). Contacts merge all accounts, so
-        the keyset cursor is one position in the merged ranking.
+        the keyset cursor is one position in the merged ranking: when an account
+        fails on one page and answers again later, its contacts that rank before
+        the cursor are not shown, and counts/ranks of shared contacts may shift.
         """
         overview = query is None
         default_days = OVERVIEW_CONTACT_DAYS if overview else DEFAULT_CONTACT_DAYS
@@ -913,8 +920,14 @@ class MailService:
                 read += len(uids)
                 for sm in self.index.summaries(session, res.folder, res.uidvalidity, uids):
                     out.append((role, sm))
-            sent_to = self.sent_to.get(session, now=now)
-            if sent_to.note:
+            acc = session.account_name
+            if not overview:
+                sent_to = self.sent_to.update(session, now=now)
+            elif self.sent_to.has_index(acc):
+                sent_to = self.sent_to.update(session, now=now, max_new=OVERVIEW_SENT_UPDATE)
+            else:
+                sent_to = self.sent_to.snapshot(acc)
+            if sent_to.note and not overview:
                 notes.append(sent_to.note)
             return out, notes, read, sent_to
 
@@ -924,6 +937,7 @@ class MailService:
         contacts: dict[str, Contact] = {}
         names: dict[str, dict[str, int]] = {}
         sent_sets = [r[3] for r in fan.results.values()]
+        missing = any(a.name not in fan.results for a in selected)
         for acc_name, (items, n, read, _sent) in fan.results.items():
             notes += n
             scanned += read
@@ -955,7 +969,12 @@ class MailService:
             # frequency × recency; mail the user wrote counts double
             c.rank = round((c.received + 2 * c.sent) / (1 + max(0.0, age) / 30), 3)
             known = [st.has(key) for st in sent_sets]
-            c.sent_to = True if True in known else (None if None in known else False)
+            if c.sent or True in known:
+                c.sent_to = True
+            elif None in known or missing:
+                c.sent_to = None
+            else:
+                c.sent_to = False
         result = list(contacts.values())
         near: list[str] = []
         mode: Literal["overview", "wildcard", "fuzzy"] = "overview"
@@ -980,8 +999,10 @@ class MailService:
             query=qh,
             problems=fan.problems,
         )
+        shown = [c for _k, c in page.items]
+        await self._check_sent_to(selected, fan.results.keys(), shown, now, missing)
         return ContactResult(
-            contacts=[c for _k, c in page.items],
+            contacts=shown,
             total=page.total,
             offset=page.offset,
             cursor=page.cursor,
@@ -994,6 +1015,37 @@ class MailService:
             similar=near,
             exhausted=page.exhausted,
         )
+
+    async def _check_sent_to(
+        self,
+        selected: Sequence[Account],
+        answered: Iterable[str],
+        contacts: Sequence[Contact],
+        now: datetime,
+        missing: bool,
+    ) -> None:
+        """Decide ``sent_to`` for the shown contacts the sets left open: one exact
+        Sent search per address and account (bounded, see :meth:`SentToIndex.check`)."""
+        open_ = [c for c in contacts if c.sent_to is None]
+        names = set(answered)
+        accs = [a for a in selected if a.name in names]
+        if not open_ or not accs:
+            return
+        emails = [c.email for c in open_]
+
+        def work(session: ImapSession) -> dict[str, bool | None]:
+            return self.sent_to.check(session, emails, now=now)
+
+        fan = await self._fan(accs, work)
+        failed = missing or len(fan.results) < len(accs)
+        for c in open_:
+            answers = [r.get(c.email.strip().lower()) for r in fan.results.values()]
+            if True in answers:
+                c.sent_to = True
+            elif None in answers or failed:
+                c.sent_to = None
+            else:
+                c.sent_to = False
 
     def _own_addresses(self) -> set[str]:
         own = {a.lower() for i in self.config.identities for a in i.addresses}
@@ -1103,9 +1155,12 @@ def _participant_terms(s: MessageSummary, own: set[str]) -> list[str]:
         labels = domain.split(".")[:-1]
         site = " ".join(x for x in labels if x not in _MAIL_PROVIDERS)
         for t in (a.name, local, site):
-            t = " ".join(t.replace(".", " ").replace("-", " ").replace("_", " ").split())
+            words = t[:200].replace(".", " ").replace("-", " ").replace("_", " ").split()
+            t = " ".join(words[:MAX_TERM_WORDS])[:MAX_TERM_CHARS]
             if len(t) >= 3 and t not in terms:
                 terms.append(t)
+                if len(terms) >= MAX_PARTICIPANT_TERMS:
+                    return terms
     return terms
 
 
@@ -1117,9 +1172,10 @@ def thread_folder_order(
     own: set[str],
 ) -> list[FolderInfo]:
     """Folders to search for a conversation, most promising first: the message's
-    own folder, INBOX and Sent, the archive (and its subfolders), folders named
-    like a participant (fuzzy: ``Clients/Huber Bau`` for ``anna@huber-bau.example``),
-    then the rest alphabetically."""
+    own folder, INBOX and Sent, the archive folder, folders named like a
+    participant (fuzzy: ``Clients/Huber Bau`` for ``anna@huber-bau.example``), the
+    archive's subfolders (a year/month scheme must not crowd out the rest), then
+    the rest alphabetically."""
     paths = [fuzzy.folder_path(f, personal_prefix) for f in folders]
     archives = [p for f, p in zip(folders, paths, strict=True) if f.role == "archive"]
     named: dict[int, float] = {}
@@ -1134,11 +1190,13 @@ def thread_folder_order(
             return (0, 0.0, name)
         if f.role in _THREAD_ROLES:
             return (1, 0.0, name)
-        if any(p[: len(a)] == a for a in archives):
+        if f.role == "archive":
             return (2, 0.0, name)
         if i in named:
             return (3, -named[i], name)
-        return (4, 0.0, name)
+        if any(p[: len(a)] == a for a in archives):
+            return (4, 0.0, name)
+        return (5, 0.0, name)
 
     return [folders[i] for i in sorted(range(len(folders)), key=rank)]
 
