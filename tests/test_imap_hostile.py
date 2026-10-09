@@ -8,14 +8,24 @@ import time
 import pytest
 
 from universal_email_mcp.errors import MailError, ProtocolError, TlsError
-from universal_email_mcp.mail.imap import MAX_HEADER_FETCH, ImapSession
+from universal_email_mcp.mail.imap import (
+    MAX_HEADER_FETCH,
+    MAX_LITERAL_BYTES,
+    MAX_UNTAGGED_BYTES,
+    ImapSession,
+)
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, TlsMode, TlsSettings
 
 from .imap_server import ScriptedImapServer
 
 
-def _connect(srv: ScriptedImapServer, mode: TlsMode, **kw: int) -> ImapSession:
+def _connect(
+    srv: ScriptedImapServer,
+    mode: TlsMode,
+    max_literal: int = MAX_LITERAL_BYTES,
+    max_untagged: int = MAX_UNTAGGED_BYTES,
+) -> ImapSession:
     return ImapSession.connect(
         Endpoint("localhost", srv.port, mode),
         "user",
@@ -24,7 +34,8 @@ def _connect(srv: ScriptedImapServer, mode: TlsMode, **kw: int) -> ImapSession:
         net=NetPolicy(allow_private=True, connect_timeout=5, read_timeout=10),
         tls=TlsSettings(verify=False),
         resolver=lambda _h, _p: ["127.0.0.1"],
-        **kw,
+        max_literal=max_literal,
+        max_untagged=max_untagged,
     )
 
 
