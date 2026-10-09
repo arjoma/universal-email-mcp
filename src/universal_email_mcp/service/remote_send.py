@@ -26,13 +26,15 @@ from universal_email_mcp.errors import RateLimited
 from universal_email_mcp.models import Identity, MessageRef
 from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.service.send import ApprovalTicket
-from universal_email_mcp.store import ActivityEntry, Store
+from universal_email_mcp.store import ActivityEntry, PendingApproval, Store
 
 log = logging.getLogger(__name__)
 
 CLAIM_TTL = timedelta(minutes=10)
 """How long a sent message's content stays claimed (at least the request-state lifetime)."""
 SEND_EVENT = "send"
+MAX_PENDING_APPROVALS = 20
+"""Sends of one user waiting in the portal at once (a client cannot flood the page)."""
 
 
 def approval_url(public_url: str | None, approval_id: str) -> str:
@@ -97,6 +99,21 @@ class StoreRemoteSend:
     async def request_approval(
         self, *, identity: Identity, content_hash: str, draft: MessageRef
     ) -> ApprovalTicket:
+        now = self.store.now()
+        live = [
+            a
+            for a in await self.store.list_for_user(PendingApproval, self.user_id)
+            if a.status == "pending" and a.expires_at > now
+        ]
+        minutes = max(1, int(self.store.policy.approval_ttl.total_seconds() // 60))
+        for a in live:  # the same message asked for again: the same link
+            if a.grant_id == self.grant_id and a.content_hash == content_hash:
+                return ApprovalTicket(a.id, approval_url(self.public_url, a.id), minutes)
+        if len(live) >= MAX_PENDING_APPROVALS:
+            raise RateLimited(
+                f"{len(live)} sends are waiting for the user's approval already",
+                hint="The user has to approve or reject some of them in the portal first.",
+            )
         rec = await self.store.create_approval(
             user_id=self.user_id,
             grant_id=self.grant_id,
@@ -104,7 +121,6 @@ class StoreRemoteSend:
             content_hash=content_hash,
             draft_ref=draft.encode(),
         )
-        minutes = max(1, int(self.store.policy.approval_ttl.total_seconds() // 60))
         return ApprovalTicket(
             id=rec.id, url=approval_url(self.public_url, rec.id), expires_in_minutes=minutes
         )

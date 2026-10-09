@@ -735,3 +735,45 @@ async def test_account_failure_flag_follows_the_login(store: Store) -> None:
     old = await store.create(cast(MailAccount, make(MailAccount, "u_1", "old1")))
     again = await store.get(MailAccount, old.id)
     assert again is not None and again.auth_failed_at is None and not again.needs_reauth
+
+
+# ---------------------------------------------------------------- WP 3f: markers, expired reads, derived keys
+
+
+async def test_claim_send_is_once_per_user_and_content(store: Store, clock: Clock) -> None:
+    from datetime import timedelta
+
+    ttl = timedelta(minutes=10)
+    assert await store.claim_send("u_1", "h" * 64, ttl) is True
+    assert await store.claim_send("u_1", "h" * 64, ttl) is False  # replay
+    assert await store.claim_send("u_2", "h" * 64, ttl) is True  # other user, same text
+    assert await store.claim_send("u_1", "g" * 64, ttl) is True  # other content
+    await store.release_send("u_1", "h" * 64)  # the send failed: try again
+    assert await store.claim_send("u_1", "h" * 64, ttl) is True
+    assert await store.claim_send("u_1", "h" * 64, ttl) is False
+    clock.advance(minutes=11)  # markers expire on their own
+    assert await store.claim_send("u_1", "h" * 64, ttl) is True
+
+
+async def test_expired_records_can_be_read_explicitly(store: Store, clock: Clock) -> None:
+    ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="r")  # fmt: skip
+    clock.advance(minutes=11)
+    assert await store.get(PendingApproval, ap.id) is None
+    assert await store.list_for_user(PendingApproval, "u_1") == []
+    seen = await store.get_any(PendingApproval, ap.id)
+    assert seen is not None and seen.user_id == "u_1"
+    assert [a.id for a in await store.list_for_user(PendingApproval, "u_1", include_expired=True)] == [ap.id]  # fmt: skip
+
+
+def test_derived_secrets_are_stable_distinct_and_follow_the_ring() -> None:
+    ring = KeyRing({"k1": b"a" * 32, "k2": b"b" * 32})
+    first = ring.derive("purpose-a")
+    assert first == KeyRing({"k1": b"a" * 32, "k2": b"b" * 32}).derive(
+        "purpose-a"
+    )  # every instance
+    assert len(first) == 2 and all(len(x) == 32 for x in first)
+    assert first[0] != first[1] and first != ring.derive("purpose-b")
+    assert b"a" * 32 not in first and b"b" * 32 not in first
+    # the active key comes first; an older key stays usable for unsealing
+    old = KeyRing({"k1": b"a" * 32}).derive("purpose-a")
+    assert ring.derive("purpose-a")[0] != old[0] and old[0] in ring.derive("purpose-a")

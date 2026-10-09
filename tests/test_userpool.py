@@ -150,6 +150,88 @@ def test_identities_follow_grant_and_drafts_accounts():
     assert all(not i.send for i in cfg.identities)
 
 
+def _sender(user: str, copies: str, **kw: Any) -> Identity:
+    fields: dict[str, Any] = {
+        "smtp_host": "smtp.example.org",
+        "smtp_port": 587,
+        "smtp_tls": "starttls",
+        "smtp_username": "smtp-login",
+        "smtp_password": "smtp-SECRET",
+        "send": True,
+        **kw,
+    }
+    return Identity(
+        id="i_" + uuid.uuid4().hex[:8],
+        user_id=user,
+        addresses=("me@example.org",),
+        copies_account_id=copies,
+        created_at=datetime.now(UTC),
+        **fields,
+    )
+
+
+def _send_cfg(**kw: Any):
+    """Config of a grant that may send; keywords: scopes, grant_identity, identity_send,
+    perms, policy - anything else is a field of the identity record."""
+    scopes: str = kw.pop("scopes", ALL + " mail.send")
+    grant_identity: bool = kw.pop("grant_identity", True)
+    identity_send: bool = kw.pop("identity_send", True)
+    perms: tuple[str, ...] = kw.pop("perms", ("read", "drafts"))
+    policy: Policy = kw.pop("policy", None) or Policy()
+    acc = record("alice", "Work", perms=perms)
+    ident = replace(_sender("alice", acc.id, **kw), send=identity_send)
+    p = replace(
+        principal("alice", {acc.id: "read drafts"}, scopes),
+        identity_ids=(ident.id,) if grant_identity else (),
+    )
+    cfg, _ = build_user_config(operator(policy=policy), p, [acc], [ident])
+    return cfg, ident
+
+
+def test_a_sending_identity_needs_grant_identity_and_policy_together():
+    cfg, ident = _send_cfg()
+    (i,) = cfg.identities
+    assert i.send and i.smtp_account == f"smtp:{ident.id}" and i.store_account == "Work"
+    assert i.ref == ident.id
+    # the outgoing server is not a mailbox: it is in smtp_accounts only, with its own login
+    assert [a.name for a in cfg.accounts] == ["Work"]
+    smtp = cfg.smtp_account(i.smtp_account or "")
+    assert (smtp.server.smtp.host, smtp.server.smtp.port) == ("smtp.example.org", 587)  # pyright: ignore[reportOptionalMemberAccess]
+    assert smtp.username == "smtp-login" and smtp.credential.secret == "smtp-SECRET"
+    assert "SECRET" not in repr(cfg.smtp_accounts)
+    # take away any one of the three and it cannot send
+    for kw in (
+        {"scopes": ALL},  # the grant has no mail.send
+        {"grant_identity": False},  # this identity was not granted
+        {"identity_send": False},  # the user does not allow it
+        {"policy": Policy(send="off")},  # the operator does not allow it
+        {"policy": Policy(read_only=True)},
+        {"perms": ("read",)},  # no drafts permission: the safety net is missing
+    ):
+        cfg, _ = _send_cfg(**kw)
+        assert all(not i.send and i.smtp_account is None for i in cfg.identities), kw
+        assert cfg.smtp_accounts == (), kw
+
+
+def test_an_identity_without_a_complete_smtp_login_cannot_send():
+    for blank in ("smtp_host", "smtp_username", "smtp_password"):
+        cfg, _ = _send_cfg(**{blank: ""})
+        assert all(not i.send for i in cfg.identities), blank
+
+
+def test_the_smtp_server_that_files_sent_mail_itself_is_known_from_the_source_account():
+    acc = record("alice", "Work", perms=("read", "drafts"), preset="united-domains")
+    ident = _sender("alice", acc.id, smtp_account_id=acc.id)
+    p = replace(
+        principal("alice", {acc.id: "read drafts"}, ALL + " mail.send"), identity_ids=(ident.id,)
+    )
+    cfg, _ = build_user_config(operator(), p, [acc], [ident])
+    (smtp,) = cfg.smtp_accounts
+    from universal_email_mcp.presets import resolve_server_entry
+
+    assert smtp.server.smtp_saves_sent == resolve_server_entry("united-domains").smtp_saves_sent
+
+
 # ---------------------------------------------------------------- pool
 
 
