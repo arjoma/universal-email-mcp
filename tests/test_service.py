@@ -21,9 +21,9 @@ from universal_email_mcp.errors import (
 from universal_email_mcp.mail.imap import SearchCriteria
 from universal_email_mcp.server.app import build_server
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, SourcePos, query_hash
-from universal_email_mcp.service.fuzzy import FuzzyQuery
 from universal_email_mcp.service.index import HeaderIndex
 from universal_email_mcp.service.mail import MailService
+from universal_email_mcp.service.query import parse
 from universal_email_mcp.service.router import AccountRouter
 from universal_email_mcp.service.timewindow import resolve_window
 
@@ -34,15 +34,15 @@ from .fakes import Connector, FakeSession, config, summary
 
 def test_cursor_roundtrip_and_binding():
     codec = CursorCodec(b"k" * 32)
-    cur = Cursor("list_messages", "q1", {("A", "INBOX"): SourcePos(7, 20, 99, 42)})
+    cur = Cursor("find_messages", "q1", {("A", "INBOX"): SourcePos(7, 20, 99, 42)})
     text = codec.encode(cur)
-    assert codec.decode(text, tool="list_messages", query="q1") == cur
-    with pytest.raises(InvalidCursor, match="search_messages"):
-        codec.decode(text, tool="search_messages", query="q1")
+    assert codec.decode(text, tool="find_messages", query="q1") == cur
+    with pytest.raises(InvalidCursor, match="find_messages"):
+        codec.decode(text, tool="list_folders", query="q1")
     with pytest.raises(InvalidCursor, match="different arguments"):
-        codec.decode(text, tool="list_messages", query="q2")
+        codec.decode(text, tool="find_messages", query="q2")
     with pytest.raises(InvalidCursor, match="signature"):
-        CursorCodec(b"x" * 32).decode(text, tool="list_messages", query="q1")
+        CursorCodec(b"x" * 32).decode(text, tool="find_messages", query="q1")
 
 
 @pytest.mark.parametrize("bad", ["", "c1.", "c1.abc", "c1.!!.??", "x" * 20000, "m1.abc.def"])
@@ -155,7 +155,7 @@ def _service(**sessions: FakeSession) -> tuple[MailService, Connector]:
 
 async def _page(svc: MailService, cursor: str | None = None, limit: int = 3, **kw: Any):
     return await svc.list_messages(
-        tool="list_messages",
+        tool="find_messages",
         args={"k": 1},
         accounts=None,
         folders=kw.get("folders"),
@@ -224,37 +224,33 @@ async def test_fuzzy_search_ranks_and_pages():
         a.folders["INBOX"][uid] = summary("A", "INBOX", uid, subject=subject)
     svc, _ = _service(A=a)
 
-    async def run(cursor: str | None = None):
-        return await svc.fuzzy_search(
-            tool="search_messages",
-            args={"s": "rechnung"},
+    async def run(text: str, cursor: str | None = None):
+        q = parse(text)
+        assert q is not None
+        return await svc.find_messages(
+            args={"q": text},
             accounts=None,
             folders=None,
-            base=SearchCriteria(),
-            exact=SearchCriteria(subject="rechnung"),
-            query=FuzzyQuery(subject="rechnung"),
+            criteria=SearchCriteria(),
+            query=q,
             threshold=75,
             limit=1,
             cursor=cursor,
         )
 
-    p1 = await run()
+    p1 = await run("rechnung")
     assert p1.total >= 2 and not p1.exact and p1.hits[0].score is not None
-    p2 = await run(p1.cursor)
+    assert p1.mode == "fuzzy"
+    p2 = await run("rechnung", p1.cursor)
     assert p2.offset == 1 and p2.hits[0].summary.ref.uid != p1.hits[0].summary.ref.uid
+    # wildcard: umlaut-folded, whole words, newest first, complete scan → exact
+    w = await run("*mueller")
+    assert [h.summary.subject for h in w.hits] == ["Rechnung Müller"]
+    assert w.mode == "wildcard" and w.exact and w.hits[0].score == 100
+    assert (await run("rech?ung*")).total == 2
+    assert (await run("echnung*")).total == 0  # not at a word start
     with pytest.raises(InvalidArgument):
-        await svc.fuzzy_search(
-            tool="search_messages",
-            args={},
-            accounts=None,
-            folders=None,
-            base=SearchCriteria(),
-            exact=SearchCriteria(),
-            query=FuzzyQuery(),
-            threshold=75,
-            limit=1,
-            cursor=None,
-        )
+        parse("x" * 500)
 
 
 # ---------------------------------------------------------------- MCP surface
@@ -263,25 +259,25 @@ async def test_fuzzy_search_ranks_and_pages():
 async def test_mcp_tools_schema_and_errors():
     svc, conn = _service(A=FakeSession("A", {"INBOX": [1, 2], "Sent": [1]}))
     async with Client(build_server(svc)) as c:
-        r = await c.call_tool("list_messages", {"limit": 1})
+        r = await c.call_tool("find_messages", {"limit": 1})
         assert not r.is_error and r.structured_content is not None
         data = r.structured_content
         assert data["total"] == 2 and data["next_cursor"]
         assert set(data["messages"][0]) >= {"id", "from", "subject", "viewer_url", "unread"}
         block = r.content[0]
         assert isinstance(block, TextContent) and "| # | Date |" in block.text
-        r = await c.call_tool("list_messages", {"cursor": "c1.bogus.bogus"})
+        r = await c.call_tool("find_messages", {"cursor": "c1.bogus.bogus"})
         assert r.is_error
         assert isinstance(r.content[0], TextContent) and "INVALID_CURSOR" in r.content[0].text
         r = await c.call_tool("get_message", {"id": "m1.nope"})
         assert r.is_error and "INVALID_REF" in r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
-        r = await c.call_tool("search_messages", {})
+        r = await c.call_tool("find_messages", {"query": "a" * 300})
         assert r.is_error and "INVALID_ARGUMENT" in r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
-        r = await c.call_tool("list_messages", {"window": "someday"})
+        r = await c.call_tool("find_messages", {"window": "someday"})
         assert r.is_error and "INVALID_ARGUMENT" in r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
         conn.fail["A"] = AuthFailed("nope")
         await svc.router.aclose()
-        r = await c.call_tool("list_messages", {})
+        r = await c.call_tool("find_messages", {})
         assert r.is_error and r.structured_content is not None
         assert r.structured_content["problems"][0]["code"] == "AUTH_FAILED"
     await svc.aclose()
@@ -378,8 +374,8 @@ async def test_list_folders_keeps_tree_indentation():
     )
     svc, _ = _service(A=a)
     async with Client(build_server(svc)) as c:
-        r = await c.call_tool("list_folders", {})
+        r = await c.call_tool("list_folders", {"depth": 3})
         text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
-    rows = {line.split(" | ")[1] for line in text.splitlines() if line.startswith("| A ")}
+    rows = {line.split(" | ")[0][2:] for line in text.splitlines()[2:] if line.startswith("| ")}
     assert {"Clients", "└ Huber", "│ └ 2025"} <= rows
     await svc.aclose()
