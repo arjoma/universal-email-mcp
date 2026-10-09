@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -100,7 +101,10 @@ def imap_server() -> Iterator[ImapServer]:
         _wait_ready(server.host, server.imaps_port)
         yield server
     finally:
-        remove_container(rt, cid)
+        try:
+            remove_container(rt, cid)
+        except ContainerError as e:
+            warnings.warn(f"test container {cid[:12]} not removed: {e}", stacklevel=1)
 
 
 # ---------------------------------------------------------------- seeding

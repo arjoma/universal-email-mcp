@@ -170,6 +170,7 @@ async def test_oversized_mail_is_paged_and_truncated(sandbox: Sandbox):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="get_thread keeps one message per Message-ID; a hostile copy of a real "
     "Message-ID can displace the original from the conversation",
 )

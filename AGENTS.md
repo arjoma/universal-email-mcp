@@ -131,7 +131,12 @@ realistic and hostile mail plus a large folder tree, and writes the gitignored
 `sandbox.local.toml` and `.env.sandbox` (throw-away password). It prints the
 `probe` and `claude mcp add email-sandbox …` commands with an explicit `--config`
 (`uv run --env-file` does not override an exported `UEM_CONFIG`). Mail is on a tmpfs: a
-stopped container comes back freshly seeded. Corpus and config live in
+stopped container comes back freshly seeded. Seed dates are relative to the
+seeding time, so on a long-running container `today` runs dry: `reset` seeds
+afresh (also after an interrupted seed). Bump `CORPUS_VERSION` in
+`tests/sandbox.py` when the corpus changes; `up` then recreates the container.
+The script only removes a container carrying its label and never overwrites a
+config or env file it did not generate. Corpus and config live in
 `tests/sandbox.py`, container helpers in `tests/dovecot.py` (shared with the
 integration tests); hostile mails carry `X-UEM-Sandbox: hostile <kind>`.
 
