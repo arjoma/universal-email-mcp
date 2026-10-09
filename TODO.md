@@ -197,6 +197,14 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Identity SMTP credentials are copies of the account's login (kept current on password
       change). Separate SMTP logins (different user name or password) are not offered yet.
 
+- [ ] Review leftovers of 3d: add-account / password-change tests do not count against the
+      sign-in lockout of the guessed mailbox (they have their own limits: per user, per IP, per
+      user and target); multi-record writes (remove account/identity, first-sign-in migration)
+      are not atomic - a crash can leave a half state (migration is retried only while
+      `primary_done` is unset); account/identity limits and unique names are check-then-create
+      (concurrent POSTs can exceed them); `identity_save`/`remove_*` repeat store reads that a
+      small helper could share; no test for `identity_test` rate limiting.
+
 ### Remote HTTP and store (3a-3c follow-ups)
 - [ ] Refresh-token reuse is strict: any second use of a rotated token (also two truly
       concurrent refreshes, e.g. a client retrying after a lost response) revokes the whole

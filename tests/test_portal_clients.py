@@ -381,7 +381,8 @@ async def test_grants_of_the_pseudo_account_are_migrated_at_the_next_sign_in(app
     (ident,) = await store.list_for_user(Identity, pseudo)
     g = await store.get(Grant, old.id)
     assert g and g.account_ids == (acc.id,) and g.account_scopes == {acc.id: "read delete"}
-    assert g.identity_ids == (ident.id,) and "primary" not in repr(g)
+    assert g.identity_ids == () and "primary" not in repr(g)  # the new identity may not send
+    assert g.scope == "mail.read mail.delete" and not ident.send
     assert set(acc.permissions) == {
         "read",
         "organize",
@@ -394,3 +395,49 @@ async def test_grants_of_the_pseudo_account_are_migrated_at_the_next_sign_in(app
     with Browser(app, "bob@example.org") as bob2:
         bob2.signed_in()
     assert len(await store.list_for_user(MailAccount, pseudo)) == 1
+
+
+async def test_lowering_what_the_user_allows_reduces_existing_grants(alice, store):
+    ident = await send_ready(store)
+    a = authz(alice, "mail.read mail.organize mail.send")
+    main = account_id_of(a.consent_page().text)
+    _, r = approve(alice, a, [f"{main}:mail.read", f"{main}:mail.organize"], [ident])
+    a.exchange(query_of(r.headers["location"])["code"])
+    (grant,) = await store.list_for_user(Grant, ALICE)
+    assert grant.scope == "mail.read mail.organize mail.send"
+    alice.post(f"/portal/accounts/{main}/permissions", {"perm": ["read"]})
+    g = await store.get(Grant, grant.id)
+    assert g and g.account_scopes == {main: "read"} and "mail.organize" not in g.scope
+    # un-ticking "sending allowed" takes the right to send away too
+    (i,) = await store.list_for_user(Identity, ALICE)
+    alice.post(
+        f"/portal/identities/{i.id}",
+        {"address": "alice@example.org", "smtp_account": i.smtp_account_id, "store_account": ""},
+    )
+    g = await store.get(Grant, grant.id)
+    assert g and g.identity_ids == () and g.scope == "mail.read"
+
+
+async def test_pseudo_identity_of_a_migrated_grant_does_not_keep_the_send_right(app, store):
+    pseudo = Pseudonyms(b"p" * 32).user_id("bob@example.org")
+    await store.get_or_create_user(pseudo, "bob@example.org")
+    old = await store.create_grant(
+        user_id=pseudo, client_id="legacy", account_ids=["primary"],
+        account_scopes={"primary": "read"}, identity_ids=["primary"],
+        scope="mail.read mail.send",
+    )  # fmt: skip
+    with Browser(app, "bob@example.org") as bob:
+        bob.signed_in()
+    g = await store.get(Grant, old.id)
+    assert g and g.identity_ids == () and g.scope == "mail.read"
+
+
+async def test_sign_in_replaces_the_old_session_and_refreshes_the_identity_copy(app, store):
+    with Browser(app) as b:
+        b.signed_in()
+        old = b.client.cookies.get("__Host-uem_session")
+        b.sign_in()
+        assert b.client.cookies.get("__Host-uem_session") != old
+        other = Browser(app)
+        other.client.cookies.set("__Host-uem_session", old or "")
+        assert other.get("/portal/accounts").status_code == 303

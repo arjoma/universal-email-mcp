@@ -259,7 +259,9 @@ class PortalEndpoints:
                 next=nxt,
             )
         assert isinstance(password, str)
-        raw = await signin.complete_sign_in(self.svc, check, password)
+        raw = await signin.complete_sign_in(
+            self.svc, check, password, self.web.session_cookie(request)
+        )
         response = self._redirect(nxt)
         self.web.set_session(response, raw)
         self.web.rotate_csrf(response)
@@ -420,8 +422,8 @@ class PortalEndpoints:
             raise FormProblem("rate_limited")
 
     @staticmethod
-    def _target(endpoint: Endpoint, username: str) -> str:
-        return f"{endpoint.host.lower()}:{endpoint.port}:{username}"
+    def _target(endpoint: Endpoint, username: str, user_id: str = "") -> str:
+        return f"{user_id}:{endpoint.host.lower()}:{endpoint.port}:{username}"
 
     async def account_new_post(self, request: Request) -> Response:
         got = await self._post(request)
@@ -496,7 +498,7 @@ class PortalEndpoints:
         if not signin.valid_password(password):
             raise FormProblem("password")
         assert isinstance(password, str)
-        await self._check_limits(request, auth, self._target(endpoint, username))
+        await self._check_limits(request, auth, self._target(endpoint, username, auth.user.id))
         outcome = await self.ps.tester.incoming(protocol, endpoint, username, password, net)
         if not outcome.ok:
             raise FormProblem(f"test_{outcome.status}")
@@ -572,7 +574,9 @@ class PortalEndpoints:
             return self._not_found(request, auth)
         endpoint = ops.account_endpoint(account)
         try:
-            await self._check_limits(request, auth, self._target(endpoint, account.username))
+            await self._check_limits(
+                request, auth, self._target(endpoint, account.username, auth.user.id)
+            )
         except FormProblem as e:
             return self._account_page(request, auth, account, error=e.code, status=429)
         net = self.ps.net if account.preset else self.ps.custom_net
@@ -616,6 +620,7 @@ class PortalEndpoints:
         await ops.update_retry(
             self.store, MailAccount, account.id, lambda a: replace(a, permissions=new)
         )
+        await ops.clamp_grants(self.store, auth.user.id, self.svc.cfg.offered_scopes)
         self.svc.audit(
             "portal.account_permissions",
             user=short_id(auth.user.id),
@@ -670,7 +675,9 @@ class PortalEndpoints:
         assert isinstance(password, str)
         endpoint = ops.account_endpoint(account)
         try:
-            await self._check_limits(request, auth, self._target(endpoint, account.username))
+            await self._check_limits(
+                request, auth, self._target(endpoint, account.username, auth.user.id)
+            )
         except FormProblem as e:
             return again(e.code, 429)
         net = self.ps.net if account.preset else self.ps.custom_net
@@ -722,7 +729,9 @@ class PortalEndpoints:
             return self._not_found(request, auth)
         if not self._fresh(auth):
             return self._to_reauth(f"/portal/accounts/{account.id}/remove")
-        removal = await ops.remove_account(self.store, auth.user.id, account.id)
+        removal = await ops.remove_account(
+            self.store, auth.user.id, account.id, self.svc.cfg.offered_scopes
+        )
         self.svc.audit(
             "portal.account_remove",
             user=short_id(auth.user.id),
@@ -886,6 +895,7 @@ class PortalEndpoints:
             await ops.set_default_identity(self.store, auth.user.id, ident.id)
         elif existing is None and ident.is_default:
             await ops.set_default_identity(self.store, auth.user.id, ident.id)
+        await ops.clamp_grants(self.store, auth.user.id, self.svc.cfg.offered_scopes)
         self.svc.audit(event, user=short_id(auth.user.id), identity=ident.id, send=fields["send"])
         return self._redirect("/portal/identities", "identity_saved")
 
@@ -1035,13 +1045,16 @@ class PortalEndpoints:
                 **{**ctx, "error": "smtp_account"},
             )  # fmt: skip
         try:
-            await self._check_limits(request, auth, self._target(endpoint, ident.smtp_username))
+            await self._check_limits(
+                request, auth, self._target(endpoint, ident.smtp_username, auth.user.id)
+            )
         except FormProblem as e:
             return self._page(
                 request, "identity_form.html", status=429, section="identities", auth=auth,
                 **{**ctx, "error": e.code},
             )  # fmt: skip
-        net = self.ps.net
+        source = accounts.get(ident.smtp_account_id)
+        net = self.ps.net if source is None or source.preset else self.ps.custom_net
         outcome = await self.ps.tester.submission(
             endpoint, ident.smtp_username, ident.smtp_password, net
         )
@@ -1173,10 +1186,7 @@ class PortalEndpoints:
         if grant is None:
             return self._not_found(request, auth)
         await self.store.revoke_grant(grant.id)
-        self.svc.audit(
-            "portal.grant_revoke", user=short_id(auth.user.id), grant=grant.id,
-            client=grant.client_id[:200],
-        )  # fmt: skip
+        self.svc.audit("portal.grant_revoke", user=short_id(auth.user.id), grant=grant.id)
         return self._redirect("/portal/clients", "client_revoked")
 
 
