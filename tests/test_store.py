@@ -478,12 +478,12 @@ async def test_access_use_touches_grant_rarely(store: Store, clock: Clock) -> No
 async def test_approval_flow(store: Store, clock: Clock) -> None:
     ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="ref")  # fmt: skip
     assert ap.status == "pending"
-    done = await store.decide_approval(ap.id, True)
+    done = await store.decide_approval(ap.id, "u_1", True)
     assert done and done.status == "approved"
-    assert await store.decide_approval(ap.id, False) is None  # decided once
+    assert await store.decide_approval(ap.id, "u_1", False) is None  # decided once
     ap2 = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="ref")  # fmt: skip
     clock.advance(minutes=10)
-    assert await store.decide_approval(ap2.id, True) is None
+    assert await store.decide_approval(ap2.id, "u_1", True) is None
 
 
 async def test_activity_feed(store: Store, clock: Clock) -> None:
@@ -565,3 +565,43 @@ async def test_delete_user_leaves_nothing(store: Store, clock: Clock) -> None:
     # the other user is untouched
     assert (await store.get(User, "u_2")) and await store.backend.find("accounts", "user_id", "u_2")
     assert (await store.delete_user("u_1"))["users"] == 0  # idempotent
+
+
+async def test_approval_ownership_and_single_use(store: Store) -> None:
+    ap = await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="r")  # fmt: skip
+    assert await store.decide_approval(ap.id, "u_2", True) is None  # foreign user
+    assert await store.consume_approval(ap.id, "u_1", "h") is None  # not approved yet
+    assert await store.decide_approval(ap.id, "u_1", True)
+    assert await store.consume_approval(ap.id, "u_1", "other") is None  # other content
+    assert await store.consume_approval(ap.id, "u_2", "h") is None
+    assert await store.consume_approval(ap.id, "u_1", "h")
+    assert await store.consume_approval(ap.id, "u_1", "h") is None
+
+
+async def test_refresh_survives_concurrent_grant_touch(store: Store, clock: Clock) -> None:
+    grant, t = await connect(store)
+    clock.advance(minutes=6)
+    # a request touching last_used between the read and the commit of a rotation
+    auth, rotated = await asyncio.gather(
+        store.authenticate_access_token(t.access_token),
+        store.rotate_refresh_token(t.refresh_token, client_id="c"),
+    )
+    assert rotated.refresh_token
+    assert await store.get(Grant, grant.id) is not None
+
+
+async def test_issue_tokens_only_once(store: Store) -> None:
+    grant, _ = await connect(store)
+    with pytest.raises(InvalidToken):
+        await store.issue_tokens(grant)
+
+
+async def test_missing_sealed_blob_is_a_crypto_error(store: Store) -> None:
+    from universal_email_mcp.store.backend import Op
+
+    await store.create(make(MailAccount))
+    doc = dict(await store.backend.get("accounts", "r1") or {})
+    del doc["_sealed"]
+    await store.backend.commit([Op("replace", "accounts", "r1", doc, 1)])
+    with pytest.raises(CryptoError):
+        await store.get(MailAccount, "r1")
