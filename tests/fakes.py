@@ -66,6 +66,7 @@ class FakeSession:
 
     def __init__(self, account: str, folders: dict[str, list[int]], uidvalidity: int = 1) -> None:
         self.account_name = account
+        self.writes_started = 0
         self.uidvalidity = uidvalidity
         self.folders = {
             name: {

@@ -251,7 +251,7 @@ async def test_a_write_is_not_replayed_after_the_connection_broke():
     def append(s: FakeSession) -> None:
         nonlocal runs
         runs += 1
-        s.writes_started = getattr(s, "writes_started", 0) + 1  # the APPEND went out ...
+        s.writes_started += 1  # the APPEND went out ...
         raise ServerUnreachable("connection lost during APPEND")  # ... the answer never came
 
     session.fail_next = False
