@@ -843,6 +843,10 @@ class Sender:
                 self._sent.add(mid)
             if self.remote is not None:
                 await self._record_remote()
+        except asyncio.CancelledError:
+            if mid:  # the SMTP thread may still deliver: never allow a second copy
+                self._sent.add(mid)
+            raise
         finally:
             self._in_flight.discard(mid)
         await audit.record("send.sent", **base)
