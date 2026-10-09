@@ -387,6 +387,28 @@ async def test_portal_session_idle_and_absolute_timeout(store: Store, clock: Clo
     assert got is None  # absolute limit (1 h) reached although never idle
 
 
+async def test_portal_session_reauth(store: Store, clock: Clock) -> None:
+    window = timedelta(minutes=5)
+    raw, rec = await store.create_portal_session("u_1")
+    assert not store.reauth_fresh(rec, window)  # nobody typed a password yet
+    rec = await store.mark_reauth(rec)
+    assert rec.reauth_at == clock.t and store.reauth_fresh(rec, window)
+    clock.advance(minutes=5)
+    assert store.reauth_fresh(rec, window)
+    clock.advance(seconds=1)
+    assert not store.reauth_fresh(rec, window)
+    # a stale copy of the record (the sliding touch won the race) still ends up marked
+    got = await store.authenticate_portal_session(raw, idle_timeout=timedelta(hours=1))
+    assert got is not None and got.version > rec.version
+    fresh = await store.mark_reauth(rec)
+    assert store.reauth_fresh(fresh, window)
+    again = await store.get_portal_session(raw)
+    assert again and again.reauth_at == clock.t
+    raw2, rec2 = await store.create_portal_session("u_1", fresh_login=True)
+    assert store.reauth_fresh(rec2, window)
+    del raw2
+
+
 # --- grants and tokens ------------------------------------------------------------------
 
 
