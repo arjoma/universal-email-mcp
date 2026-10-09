@@ -42,7 +42,7 @@ from universal_email_mcp.errors import ConfigError, MailError
 FORMAT = "e1"
 KEY_BYTES = 32
 _NONCE_BYTES = 12
-_KEY_ID_RE = re.compile(r"^k[0-9]{1,6}$")
+_KEY_ID_RE = re.compile(r"^k[1-9][0-9]{0,5}$")
 
 
 class CryptoError(MailError):
@@ -87,7 +87,9 @@ class KeyRing:
             raise ConfigError("the store key ring is empty", hint="Set STORE_KEYS.")
         for key_id, key in keys.items():
             if not _KEY_ID_RE.match(key_id):
-                raise ConfigError(f"invalid store key id {key_id!r} (expected k1, k2, ...)")
+                raise ConfigError(
+                    f"invalid store key id {key_id!r} (expected k1, k2, ...; no leading zeros)"
+                )
             if len(key) != KEY_BYTES:
                 raise ConfigError(f"store key {key_id} must be exactly {KEY_BYTES} bytes")
         self._aead = {k: AESGCM(v) for k, v in keys.items()}

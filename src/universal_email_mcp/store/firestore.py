@@ -1,7 +1,7 @@
 """Firestore (native mode) backend. Needs the extra ``gcp``: ``pip install universal-email-mcp[gcp]``.
 
 Layout: one top-level collection per record kind (``<prefix><kind>``, prefix default empty so
-several instances can share a project via e.g. ``prefix="uem1_"``), document id = record id.
+several instances can share a project via e.g. ``prefix="uem1_"``), document id = SHA-256 of kind and record id (the real id is kept in ``_id``).
 Fields are the record fields; ``_v`` is the version, ``expires_at`` a timestamp for Firestore
 TTL policies, ``_sealed`` the encrypted blob. Every commit runs in one transaction (reads
 first, then writes), which makes token rotation atomic. Queries are single-field equality
@@ -13,22 +13,33 @@ therefore the store also checks ``expires_at`` on every read.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
-from urllib.parse import quote, unquote
 
 from google.cloud import firestore  # pyright: ignore[reportMissingTypeStubs]
 from google.cloud.firestore_v1.base_query import FieldFilter  # pyright: ignore
 
 from universal_email_mcp.store.backend import Doc, Op, StoreConflict, check_op
 
+ID_KEY = "_id"
 _ATTEMPTS = 10
 TTL_FIELD = "expires_at"
 
 
-def _doc_id(record_id: str) -> str:
-    """Firestore ids cannot contain "/" (CIMD client ids are URLs): percent-encode, reversibly."""
-    return quote(record_id, safe="")
+def _doc_id(collection: str, record_id: str) -> str:
+    """Fixed-length document id derived from the record id.
+
+    Record ids can come from untrusted input (OAuth client ids are client-chosen URLs) and
+    Firestore rejects ids like ``.``, ``__x__``, with ``/`` or over 1500 bytes. The real id is
+    kept in the ``_id`` field.
+    """
+    return hashlib.sha256(f"{collection}\x00{record_id}".encode()).hexdigest()
+
+
+def _out(snap: Any) -> tuple[str, Doc]:
+    doc: Doc = snap.to_dict()
+    return str(doc.pop(ID_KEY)), doc
 
 
 class FirestoreBackend:
@@ -54,24 +65,24 @@ class FirestoreBackend:
         return self._client.collection(self._prefix + collection)
 
     async def get(self, collection: str, id: str) -> Doc | None:
-        snap = await self._col(collection).document(_doc_id(id)).get()
-        return snap.to_dict() if snap.exists else None
+        snap = await self._col(collection).document(_doc_id(collection, id)).get()
+        return _out(snap)[1] if snap.exists else None
 
     async def commit(self, ops: Sequence[Op]) -> None:
         if not ops:
             return
-        refs = [self._col(op.collection).document(_doc_id(op.id)) for op in ops]
+        refs = [self._col(op.collection).document(_doc_id(op.collection, op.id)) for op in ops]
 
         @firestore.async_transactional
         async def run(tx: Any) -> None:
             for op, ref in zip(ops, refs, strict=True):
                 snap = await ref.get(transaction=tx)
-                check_op(op, snap.to_dict() if snap.exists else None)
+                check_op(op, _out(snap)[1] if snap.exists else None)
             for op, ref in zip(ops, refs, strict=True):
                 if op.kind == "delete":
                     tx.delete(ref)
                 else:
-                    tx.set(ref, op.doc or {})
+                    tx.set(ref, {**(op.doc or {}), ID_KEY: op.id})
 
         try:
             await run(self._client.transaction(max_attempts=_ATTEMPTS))
@@ -82,11 +93,11 @@ class FirestoreBackend:
 
     async def find(self, collection: str, field: str, value: str) -> list[tuple[str, Doc]]:
         query = self._col(collection).where(filter=FieldFilter(field, "==", value))
-        return [(unquote(s.id), s.to_dict()) async for s in query.stream()]
+        return [_out(s) async for s in query.stream()]
 
     async def scan(self, collection: str) -> AsyncIterator[tuple[str, Doc]]:
         async for s in self._col(collection).stream():
-            yield unquote(s.id), s.to_dict()
+            yield _out(s)
 
     async def close(self) -> None:
         self._client.close()
