@@ -181,6 +181,14 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       question; a rejected, expired or unanswered approval leaves it in Drafts (by design,
       nothing is lost) - consider a cleanup hint in the result for drafts older than the TTL.
 
+- [ ] (review of 3f) A draft with a `text/html` alternative part sends HTML that neither the
+      prompt nor the approval page shows (only the plain part is previewed); also the preview cut
+      at 300000 characters is not announced. Refuse or flag such drafts in remote mode.
+- [ ] (review of 3f) `execute` stores the composed draft before the fallback, so repeated
+      identical asks leave duplicate drafts; `approved` but unconsumed approvals (crash between
+      the two store writes) cannot be retried; the rate limit scans the whole activity feed twice
+      per send.
+
 ### POP3
 - [ ] No download links for POP3 attachments in the *local* loopback listener (it reads
       IMAP sections); the portal viewer handles POP3 by reading the whole message under

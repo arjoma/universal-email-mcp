@@ -23,6 +23,7 @@
         {% if a.state == "pending" %}<strong>{{ _("Waiting for you") }}</strong> <span class="hint">({{ _("until") }} {{ a.expires }})</span>
         {% elif a.state == "expired" %}{{ _("Expired") }}
         {% elif a.state == "rejected" %}{{ _("Rejected") }}
+        {% elif a.state == "approved" %}{{ _("Approved") }}
         {% else %}{{ _("Application disconnected") }}{% endif %}
       </td>
       <td><a class="button{% if a.state == 'pending' %} primary{% endif %}" href="/portal/approvals/{{ a.id }}">{% if a.state == "pending" %}{{ _("Review") }}{% else %}{{ _("Details") }}{% endif %}</a></td>
