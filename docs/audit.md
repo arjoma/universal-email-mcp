@@ -138,8 +138,13 @@ Example filter from a pseudonym:
 * **Safe to paste.** The log is untrusted too: anyone who can write to it can forge lines. Every
   value taken from it is cut to 48 characters, ANSI/OSC escape sequences are removed and control
   or format characters (including bidi overrides) are replaced by `?` before anything is
-  printed, in text and in `--json`. Lines over 64 KiB are skipped, a counter keeps at most 500
+  printed, in text and in `--json`. Lines over 64 KiB are skipped (a JSON array is read as one document of up to 48 MiB), a counter keeps at most 500
   distinct keys (the rest is `(other)`), and wrong types in any field are ignored.
+* Events without a `ts` (and entry `timestamp`) are left out when `--since`/`--until` is used.
+  A file literally named `summary` or `pseudonym` must be written `./summary`. Pseudonyms can only
+  be recomputed with the real `PSEUDONYM_KEY` (a memory-backend dev server uses a random one). The
+  `pseudonym` command also covers `identity`, `approval` and `ip`, which have no filter option:
+  paste the result into a Logs Explorer filter.
 * An audit line is a JSON object with `event` like `area.name` and `message` equal to `event`.
 * **BigQuery** is out of scope for the command. For long-term analysis create a log sink to
   BigQuery (`gcloud logging sinks create audit-bq bigquery.googleapis.com/projects/P/datasets/D

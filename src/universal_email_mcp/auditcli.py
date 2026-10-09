@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
 import json
 import math
 import os
@@ -20,7 +21,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, BinaryIO
+from typing import Any, cast
 
 from universal_email_mcp import audit
 from universal_email_mcp.errors import ConfigError
@@ -29,7 +30,7 @@ from universal_email_mcp.operator import MIN_PSEUDONYM_KEY_BYTES, read_key_mater
 
 MAX_LINE = 64 * 1024
 """Longer lines are skipped (audit lines are a few hundred bytes)."""
-MAX_DOCUMENT = 256 * 1024 * 1024
+MAX_DOCUMENT = 48 * 1024 * 1024
 """Largest JSON array document (``gcloud logging read --format=json``) that is read."""
 MAX_VALUE = 48
 MAX_KEYS = 500
@@ -82,10 +83,12 @@ _TEXT_FIELDS = (
 def clean(value: object, cap: int = MAX_VALUE) -> str:
     """``value`` as text that is safe to print: ANSI escapes removed, control, format
     and unassigned characters replaced by ``?``, at most ``cap`` characters."""
-    text = _ANSI.sub("", value if isinstance(value, str) else str(value))
+    text = value if isinstance(value, str) else str(value)
+    text = _ANSI.sub("", text[: cap * 8])
     out: list[str] = []
     for ch in text[: cap * 4]:
-        out.append("?" if unicodedata.category(ch)[0] == "C" else ch)
+        cat = unicodedata.category(ch)[0]
+        out.append("?" if cat == "C" or (cat == "Z" and ch != " ") else ch)
     text = "".join(out)
     return text if len(text) <= cap else text[: cap - 1] + "…"
 
@@ -168,7 +171,7 @@ def parse_entry(obj: object) -> Rec | None:
     return Rec(clean(name, 64), ts, fields)
 
 
-def _lines(stream: BinaryIO, stats: Stats) -> Iterator[bytes]:
+def _lines(stream: io.BufferedReader, stats: Stats) -> Iterator[bytes]:
     while True:
         raw = stream.readline(MAX_LINE + 1)
         if not raw:
@@ -192,22 +195,22 @@ def _loads(raw: bytes) -> object:
 _BAD = object()
 
 
-def read_records(stream: BinaryIO, stats: Stats) -> Iterator[Rec]:
+def read_records(stream: io.BufferedReader, stats: Stats) -> Iterator[Rec]:
     """Records of one input: a JSON array of Cloud Logging entries, or JSON lines."""
-    first: bytes | None = None
-    for raw in _lines(stream, stats):
-        if raw.strip():
-            first = raw
+    while True:  # skip leading blanks; a JSON array is read as one document
+        head = stream.peek(1)[:1]
+        if not head:
+            return
+        if head not in (b" ", b"\t", b"\r", b"\n"):
             break
-    if first is None:
-        return
-    if first.lstrip().startswith(b"["):
+        stream.read(1)
+    if head == b"[":
         rest = stream.read(MAX_DOCUMENT + 1)
         stats.lines += 1 + rest.count(b"\n")
         if len(rest) > MAX_DOCUMENT:
             stats.too_long += 1
             return
-        doc = _loads(first + rest)
+        doc = _loads(rest)
         if not isinstance(doc, list):
             stats.malformed += 1
             return
@@ -218,7 +221,7 @@ def read_records(stream: BinaryIO, stats: Stats) -> Iterator[Rec]:
             else:
                 yield rec
         return
-    for raw in _chain(first, _lines(stream, stats)):
+    for raw in _lines(stream, stats):
         if not raw.strip():
             continue
         stats.lines += 1
@@ -231,11 +234,6 @@ def read_records(stream: BinaryIO, stats: Stats) -> Iterator[Rec]:
             stats.not_audit += 1
         else:
             yield rec
-
-
-def _chain(first: bytes, rest: Iterator[bytes]) -> Iterator[bytes]:
-    yield first
-    yield from rest
 
 
 # ------------------------------------------------------------------------ filters
@@ -373,7 +371,7 @@ class Summary:
             per = self.events.setdefault(OTHER, Counter())
         else:
             per = self.events.setdefault(rec.event, Counter())
-        per[outcome] += 1
+        _bump(per, outcome)
         if rec.get("user"):
             _bump(self.users, rec.get("user"))
         if rec.event == "tool.call":
@@ -438,7 +436,7 @@ def _iso(ts: float | None) -> str | None:
         return None
 
 
-def summarize(streams: Iterable[BinaryIO], flt: Filter) -> tuple[Summary, Stats]:
+def summarize(streams: Iterable[io.BufferedReader], flt: Filter) -> tuple[Summary, Stats]:
     summary, stats = Summary(), Stats()
     for stream in streams:
         for rec in read_records(stream, stats):
@@ -554,19 +552,20 @@ def build_parser(sub: Any) -> None:
     add_arguments(p)
 
 
-def _open_inputs(files: list[str]) -> Iterator[BinaryIO]:
+def _open_inputs(files: list[str]) -> Iterator[io.BufferedReader]:
     if not files or files == ["-"]:
-        yield sys.stdin.buffer
+        yield cast(io.BufferedReader, sys.stdin.buffer)
         return
     for name in files:
         if name == "-":
-            yield sys.stdin.buffer
+            yield cast(io.BufferedReader, sys.stdin.buffer)
             continue
         try:
-            with open(name, "rb") as f:
-                yield f
+            f = open(name, "rb")
         except OSError as e:
             raise ConfigError(f"cannot read {clean(name, 120)}: {e.strerror}") from None
+        with f:
+            yield f
 
 
 def run(args: argparse.Namespace) -> int:
@@ -600,7 +599,10 @@ def run(args: argparse.Namespace) -> int:
         events=tuple(args.event),
         where=tuple(where),
     )
-    summary, stats = summarize(_open_inputs(words), flt)
+    try:
+        summary, stats = summarize(_open_inputs(words), flt)
+    except OSError as e:
+        raise ConfigError(f"read error: {e.strerror}") from None
     data = summary.to_dict(stats)
     if args.json:
         print(json.dumps(data, ensure_ascii=True, indent=2))
