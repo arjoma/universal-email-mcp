@@ -87,17 +87,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer displaces it from the conversation. Messages that share a Message-ID
   are all kept unless they are identical copies in one account (same size,
   sender, subject, Date, In-Reply-To and References); up to five per id are
-  shown (the message asked about, else the earliest arrival, first), older
-  matches are read too (both ends
-  of each folder's matches, INBOX and Sent always searched), and when the limit
-  cuts, later claimants go first. Shared ids are marked (`⚠ same Message-ID`,
-  `shared_message_id`) with a note, also when a claimant is not shown; only that
-  first claimant's In-Reply-To/References are followed. Conversation tables
-  show the arrival time instead of the Date header.
+  shown (the message asked about, else the earliest arrival, first). The search
+  reads a fixed number of headers, shared fairly between the folders it searches
+  (both ends of each folder's matches), and each round searches only new ids.
+  Only messages linked through the message asked about and each Message-ID's
+  first claimant (in any account) stay in the conversation — decided after the
+  search, so a forgery cannot keep conversations it pulled in. When the limit
+  cuts, later claimants go first, then the oldest messages, but the message
+  asked about and what it replies to stay. Shared ids are marked
+  (`⚠ same Message-ID`, `shared_message_id`) with short notes, also when a
+  claimant is not shown. Conversation tables show the arrival time instead of
+  the Date header.
 - `get_message` shows every inline text part in order (Apple Mail text–image–text,
   hidden extra parts), each after a `──── part N (…) ────` line that mail text
   cannot imitate at a line start, HTML parts converted, report parts
-  (`message/delivery-status`, also base64 / quoted-printable) as text; body source
+  (`message/delivery-status` and similar, read from the original bytes with
+  base64 / quoted-printable undone) as text; body source
   `mixed` when plain and HTML parts are combined. Text parts beyond the limits
   (100 parts, the HTML size budget) are listed as attachments, the attachment list
   is capped at 100, and notes say what was left out.

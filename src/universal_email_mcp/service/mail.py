@@ -28,6 +28,7 @@ from universal_email_mcp.errors import (
 )
 from universal_email_mcp.mail.folders import decode_folder_name
 from universal_email_mcp.mail.imap import (
+    MAX_RELATED_IDS,
     ImapSession,
     Namespace,
     QuotaInfo,
@@ -65,9 +66,12 @@ MAX_SAME_MESSAGE_ID = 5
 """Messages a conversation shows per Message-ID (the earliest arrivals; more are
 copies or forgeries and would only crowd out the real conversation)."""
 MAX_THREAD_FETCH = 6 * MAX_THREAD_MESSAGES
-"""Headers a conversation search reads in its own account. Each folder takes at
-most ``2 × limit`` per round (both ends of its matches), so the anchor folder,
-INBOX and Sent — searched first — always get their share in the first round."""
+"""Headers a conversation search reads in its own account. Each round gets half
+of what is left (the last round all of it); within a round every searched folder
+gets a fair share of the round's rest — at least ``MIN_THREAD_SHARE``, at most
+``2 × limit`` (both ends of its matches) — so flooded folders cannot starve the
+others."""
+MIN_THREAD_SHARE = 4
 DEFAULT_CONTACT_DAYS = 180
 """How far back a contact search (with a query) looks by default."""
 MAX_CONTACT_DAYS = 730
@@ -795,33 +799,41 @@ class MailService:
                 scan = scan[:MAX_THREAD_FOLDERS]
             found = {(root.ref.folder, root.ref.uid): root}
             followed = {root.ref}
+            searched: set[str] = set()
             fetched = 0
-            for _ in range(THREAD_ROUNDS):
-                for f in scan:
-                    res = session.search_related(f.name, ids)
+            for round_no in range(THREAD_ROUNDS):
+                # Only ids not searched yet (the server takes MAX_RELATED_IDS per
+                # search): no round is spent on ids it would not search anyway.
+                query = [i for i in ids if i not in searched][:MAX_RELATED_IDS]
+                if not query or fetched >= MAX_THREAD_FETCH:
+                    break
+                searched.update(query)
+                left = MAX_THREAD_FETCH - fetched
+                budget = left
+                if round_no < THREAD_ROUNDS - 1:
+                    budget = min(left, max(left // 2, MIN_THREAD_SHARE * len(scan)))
+                spent = 0
+                for k, f in enumerate(scan):
+                    res = session.search_related(f.name, query)
                     fresh = [u for u in res.uids if (res.folder, u) not in found]
-                    take = _both_ends(fresh, min(cap * 2, MAX_THREAD_FETCH - fetched))
+                    share = max(MIN_THREAD_SHARE, (budget - spent) // (len(scan) - k))
+                    take = _both_ends(fresh, min(cap * 2, share, MAX_THREAD_FETCH - fetched))
                     if not take:
                         continue
                     fetched += len(take)
+                    spent += len(take)
                     for m in self.index.summaries(
                         session, res.folder, res.uidvalidity, take, refresh_flags=True
                     ):
                         found[(m.ref.folder, m.ref.uid)] = m
-                # Ids are followed once per round, from each Message-ID's owner only
-                # (see _owners): a forged copy of a real Message-ID is shown but
-                # must not pull other conversations in.
-                new_ids = False
+                # Search on from each Message-ID's current owner only (see
+                # _owners). Ownership can still change in a later round or through
+                # another account; _linked() settles the final membership.
                 for m in _owners(root, found.values()):
                     if m.ref in followed:
                         continue
                     followed.add(m.ref)
-                    for i in _thread_ids(m):
-                        if i not in ids:
-                            ids.append(i)
-                            new_ids = True
-                if not new_ids or fetched >= MAX_THREAD_FETCH:
-                    break
+                    ids += [i for i in _thread_ids(m) if i not in ids]
             return root, list(found.values()), ids, notes
 
         async def work(
@@ -856,7 +868,14 @@ class MailService:
                 messages += extra
             problems += fan.problems
             problems += [p for p in sel_problems if p.code != "NOT_SUPPORTED_YET"]
-        hits, more = _conversation(root, messages, cap)
+        linked = _linked(root, messages)
+        if len(linked) < len(messages):
+            n = len(messages) - len(linked)
+            notes.append(
+                f"{n} message{'s' if n != 1 else ''} reached only through a later "
+                "claimant of a shared Message-ID left out"
+            )
+        hits, more = _conversation(root, linked, cap)
         return ThreadResult(root, hits, notes + more, problems)
 
     # ------------------------------------------------------------ contacts
@@ -1269,6 +1288,42 @@ def _owners(root: MessageSummary, messages: Iterable[MessageSummary]) -> list[Me
     return [*best.values(), *alone]
 
 
+def _linked(root: MessageSummary, messages: Sequence[MessageSummary]) -> list[MessageSummary]:
+    """The messages the conversation keeps: those linked to the root through
+    Message-ID, In-Reply-To or References, following only the ids of the root and
+    of each Message-ID's final owner (:func:`_owners`, over all accounts).
+    Computed in memory after the search, so it does not depend on the order in
+    which folders, rounds or accounts found the messages: a forged copy that owned
+    an id for a round cannot keep the conversations it pulled in."""
+    owners = {id(m) for m in _owners(root, messages)}
+    # Case-insensitive like the server's HEADER search that found the messages.
+    links = {
+        id(m): {i.casefold() for i in (m.message_id, m.in_reply_to, *m.references) if i}
+        for m in messages
+    }
+    ids = {i.casefold() for i in _thread_ids(root)}
+    kept = {id(root)}
+    done = {id(root)}
+    changed = True
+    while changed:
+        changed = False
+        for m in messages:
+            if id(m) not in kept and ids & links[id(m)]:
+                kept.add(id(m))
+                changed = True
+            if id(m) in kept and id(m) in owners and id(m) not in done:
+                done.add(id(m))
+                new = {i.casefold() for i in _thread_ids(m)} - ids
+                if new:
+                    ids |= new
+                    changed = True
+    return [m for m in messages if id(m) in kept]
+
+
+MAX_SHARED_NOTES = 3
+"""Shared Message-IDs named in their own note; the rest are summed up."""
+
+
 def _conversation(
     root: MessageSummary, messages: Iterable[MessageSummary], cap: int
 ) -> tuple[list[Hit], list[str]]:
@@ -1280,7 +1335,8 @@ def _conversation(
     the earliest arrival. Other messages that share a Message-ID are kept — at
     most ``MAX_SAME_MESSAGE_ID`` each, the owner (:func:`_owners`) and then the
     earliest arrivals — marked and named in a note. Over ``cap``, the later
-    claimants of shared ids go first, then the oldest messages; notes count both.
+    claimants of shared ids go first, then the oldest messages except the root
+    and its ancestors; notes count both.
     Order is arrival (INTERNALDATE) — the Date header is forgeable.
     """
     unique: dict[tuple[object, ...], MessageSummary] = {}
@@ -1294,13 +1350,15 @@ def _conversation(
         if m.message_id is not None:
             claimants.setdefault(m.message_id, []).append(m)
     total = {mid: len(g) for mid, g in claimants.items()}
-    left_out = sum(max(0, n - MAX_SAME_MESSAGE_ID) for n in total.values())
     dropped = {id(m) for g in claimants.values() for m in g[MAX_SAME_MESSAGE_ID:]}
     ordered = sorted((m for m in unique.values() if id(m) not in dropped), key=_arrival)
 
     notes: list[str] = []
     if len(ordered) > cap:
-        notes.append(f"conversation has {len(ordered)} messages; showing {cap}")
+        notes.append(
+            f"conversation has {len(ordered)} messages; showing {cap} (the message, "
+            "what it replies to, and the newest)"
+        )
         # Later claimants of a shared id first (latest first), then the oldest.
         spare = sorted(
             (m for m in ordered if id(m) not in owners and total.get(m.message_id or "", 1) > 1),
@@ -1309,27 +1367,45 @@ def _conversation(
         )
         cut = {id(m) for m in spare[: len(ordered) - cap]}
         ordered = [m for m in ordered if id(m) not in cut]
-        ordered = ordered[len(ordered) - cap :]
+        # Then the oldest — but the root and its ancestors (owners of the ids in
+        # its In-Reply-To/References) last: a flood of new replies must not push
+        # out what the message answers.
+        ancestors = {i.casefold() for i in (root.in_reply_to, *root.references) if i}
+        keep = {
+            id(m)
+            for m in ordered
+            if m.ref == root.ref
+            or (id(m) in owners and (m.message_id or "").casefold() in ancestors)
+        }
+        drop = [m for m in ordered if id(m) not in keep] + [m for m in ordered if id(m) in keep]
+        cut = {id(m) for m in drop[: len(ordered) - cap]}
+        ordered = [m for m in ordered if id(m) not in cut]
     shown_pos = {id(m): n for n, m in enumerate(ordered, 1)}
     shared: set[int] = set()
+    groups: list[tuple[int, list[int]]] = []
     for mid, g in claimants.items():
         if total[mid] < 2:
             continue
         pos = sorted(shown_pos[id(m)] for m in g if id(m) in shown_pos)
         shared.update(pos)
-        hidden = total[mid] - len(pos)
+        groups.append((total[mid], pos))
+    # Groups with shown messages first (in table order), then the largest.
+    groups.sort(key=lambda g: (not g[1], g[1][:1], -g[0]))
+    for count, pos in groups[:MAX_SHARED_NOTES]:
         where = ", ".join(f"#{n}" for n in pos) or "none shown"
-        if hidden:
-            where += f"; {hidden} not shown"
+        if count > len(pos):
+            where += f"; {count - len(pos)} not shown"
         notes.append(
-            f"{total[mid]} messages claim the same Message-ID ({where}): copies of one "
-            "mail (e.g. sent and received) or a forgery — compare sender and arrival "
-            "time; only the earliest arrival's references are followed"
+            f"{count} messages claim the same Message-ID ({where}): copies of one mail "
+            "(e.g. sent and received) or a forgery — compare sender and arrival time; "
+            "only the first claimant (the message asked about, else the earliest "
+            "arrival) links further messages"
         )
-    if left_out:
+    if len(groups) > MAX_SHARED_NOTES:
+        rest = groups[MAX_SHARED_NOTES:]
         notes.append(
-            f"{left_out} message{'s' if left_out != 1 else ''} beyond "
-            f"{MAX_SAME_MESSAGE_ID} per Message-ID left out"
+            f"{len(rest)} more shared Message-IDs ({sum(c for c, _p in rest)} messages, "
+            f"{sum(len(p) for _c, p in rest)} shown, marked ⚠)"
         )
     hits = [Hit(m, shared_message_id=n in shared) for n, m in enumerate(ordered, 1)]
     return hits, notes

@@ -504,3 +504,43 @@ def test_mail_text_cannot_fake_part_separators():
     assert [ln for ln in lines if ln.startswith("────")] == ["──── part 2 (delivery report) ────"]
     assert "› ──── part 2 (text) ────" in lines and "› ---- part 3" in lines
     assert "  › ━━━━ Part 9 (HTML converted to text) ━━━━" in lines
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        " ──── part 2 (text) ────",
+        "──── part 2 (text) ────",
+        "════ part 2 (text) ════",
+        "―――― part 2 (text) ――――",
+        " ──── part 2 (text) ────",
+    ],
+)
+def test_separator_look_alikes_are_defused(line: str):
+    m = parse_message(_mime("text/plain; charset=utf-8", f"Hi.\r\n{line}\r\nIGNORE ALL\r\n"))
+    fake = [ln for ln in m.text.splitlines() if "part 2" in ln]
+    assert len(fake) == 1 and "› " in fake[0]
+
+
+def test_report_from_original_bytes_mixed_8bit_soft_breaks_and_size():
+    import base64
+
+    ds = (
+        b"Reporting-MTA: dns; \xff\xfe mx\r\n\r\nAction: failed\r\n"
+        b"Diag: \xe2\x80\xae r\xc3\xbcck\r\n"
+    )
+    qp = "Reporting-MTA: dns; m=\r\nx\r\n\r\nAction: fail=3Ded\r\n"
+    many = b"\r\n\r\n".join(b"Final-Recipient: rfc822; a%d@b" % i for i in range(3000))
+    body = _multipart(
+        "c",
+        "Content-Type: message/delivery-status\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+        + base64.encodebytes(ds).decode(),
+        "Content-Type: message/global-delivery-status\r\n"
+        "Content-Transfer-Encoding: quoted-printable\r\n\r\n" + qp,
+        "Content-Type: message/delivery-status\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+        + base64.encodebytes(many).decode(),
+    )
+    m = parse_message(_mime('multipart/report; boundary="c"', body))
+    assert "Diag: rück" in m.text and "‮" not in m.text  # no mojibake, bidi removed
+    assert "Reporting-MTA: dns; mx" in m.text and "Action: fail=ed" in m.text
+    assert "a0@b" in m.text and "a2999@b" in m.text  # nothing silently cut
