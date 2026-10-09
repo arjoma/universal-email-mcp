@@ -16,6 +16,7 @@ only compared here.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
@@ -153,12 +154,19 @@ def resolve(
     *,
     selectable_only: bool = False,
     prefer_groups: bool = False,
+    exact: bool = False,
     where: str = "",
 ) -> tuple[Node, str | None]:
     """The folder ``name`` refers to: exact (wire name, display name, path), then
     case-insensitive, then a role (``sent``, ``archive`` …), then hierarchy-aware
     fuzzy matching (``clients/hubr``, ``Kunden``). Returns the node and a note when
     it was matched approximately.
+
+    ``exact`` (anything that writes: move destination, parent of a new folder): no
+    approximate matching. Accepted are the steps above plus a normalised match
+    (case, umlaut spelling, NFC) of the full path or a unique path suffix such as
+    the folder's own name; a typo only yields an :class:`AmbiguousFolder` with the
+    close candidates, so the caller has to confirm the exact name.
 
     ``selectable_only``: only folders that can hold mail (message tools).
     ``prefer_groups`` (``list_folders(parent=…)``): an approximate match without
@@ -179,8 +187,28 @@ def resolve(
     for n in nodes:
         if n.role is not None and n.role == folded:
             return n, None
+    if exact:
+        found = _normalised_matches(nodes, wanted)
+        if len(found) == 1:
+            node = found[0]
+            return node, f"folder {name!r} → {node.full_name!r}"
+        if found:
+            choices = [n.full_name for n in found[:8]]
+            raise AmbiguousFolder(
+                f"{name!r} matches several folders{where}: " + "; ".join(choices),
+                choices,
+                hint="Repeat the call with the full path of one of them.",
+            )
     matches = fuzzy.match_paths(wanted, [n.path for n in nodes], [n.role for n in nodes])
     picked = fuzzy.pick(matches)
+    if exact and matches:
+        near = list(dict.fromkeys(nodes[m.index].full_name for m in matches))[:5]
+        raise AmbiguousFolder(
+            f"no folder is named {name!r}{where}; did you mean: " + "; ".join(near),
+            near,
+            hint="Nothing was changed. Ask the user which folder is meant and repeat the "
+            "call with its exact path.",
+        )
     if picked is None:
         q = parse(wanted[:MAX_QUERY_CHARS])
         near = similar_names(nodes, q) if q else []
@@ -210,6 +238,25 @@ def resolve(
                 f"({node.full_name!r} has no subfolders).",
             )
     return node, f"folder {name!r} → {node.full_name!r} (approximate match)"
+
+
+def _level_forms(level: str) -> frozenset[str]:
+    return frozenset(fuzzy.variants(unicodedata.normalize("NFC", level)))
+
+
+def _normalised_matches(nodes: Sequence[Node], wanted: str) -> list[Node]:
+    """Folders whose last levels equal ``wanted`` (a path of one or more levels)
+    after case, umlaut-spelling and NFC normalisation."""
+    levels = [_level_forms(p) for p in wanted.strip("/").split("/") if p.strip()]
+    if not levels or any(not f for f in levels):
+        return []
+    k = len(levels)
+    return [
+        n
+        for n in nodes
+        if len(n.path) >= k
+        and all(forms & _level_forms(p) for forms, p in zip(levels, n.path[-k:], strict=True))
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +310,12 @@ def personal_prefix(ns: Namespace | None) -> str:
 
 
 def resolve_folder(
-    session: ImapSession, name: str, personal_prefix: str = "", *, refresh: bool = False
+    session: ImapSession,
+    name: str,
+    personal_prefix: str = "",
+    *,
+    refresh: bool = False,
+    exact: bool = False,
 ) -> tuple[FolderInfo, str | None]:
     """A folder argument of the message tools (see :func:`resolve`):
     selectable folders only. Returns the folder and a note when it was matched
@@ -271,7 +323,11 @@ def resolve_folder(
     act on a stale list)."""
     roots = build(session.list_folders(refresh=refresh), personal_prefix)
     node, note = resolve(
-        roots, name, selectable_only=True, where=f" in account {session.account_name!r}"
+        roots,
+        name,
+        selectable_only=True,
+        exact=exact,
+        where=f" in account {session.account_name!r}",
     )
     assert node.info is not None  # selectable nodes are real folders
     return node.info, note

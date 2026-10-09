@@ -331,7 +331,9 @@ class Organizer:
             raise InvalidArgument("no destination folder given", hint="Pass 'to'.")
 
         def dest_for(session: ImapSession, ctx: _Ctx) -> None:
-            info, note = folder_list.resolve_folder(session, to, ctx.prefix, refresh=True)
+            info, note = folder_list.resolve_folder(
+                session, to, ctx.prefix, refresh=True, exact=True
+            )
             if info.role == "trash":
                 raise InvalidArgument(
                     "the destination is the Trash folder",
@@ -442,7 +444,9 @@ class Organizer:
         base: tuple[str, ...] = ()
         if parent:
             roots = folder_list.build(folders, prefix)
-            node, note = folder_list.resolve(roots, parent, where=f" in account {acc.name!r}")
+            node, note = folder_list.resolve(
+                roots, parent, exact=True, where=f" in account {acc.name!r}"
+            )
             if note:
                 notes.append(note)
             base = node.path
