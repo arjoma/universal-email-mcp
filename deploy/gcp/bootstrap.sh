@@ -106,17 +106,24 @@ ensure_secret() { # name, generator-function
   fi
   if [[ "$DRY_RUN" == 1 ]]; then
     printf '[dry-run] generate a value and add it as the first version of %s\n' "$name"
-  elif [[ -z "$(gcloud secrets versions list "$name" --project "$PROJECT_ID" --limit 1 \
-    --format 'value(name)' 2>/dev/null)" ]]; then
-    "$gen" | gcloud secrets versions add "$name" --project "$PROJECT_ID" --data-file=- \
-      --quiet >/dev/null
-    echo "    created the first version of ${name}"
   else
-    echo "    ${name} already has a version; left untouched"
+    # A failing list aborts the script (set -e): never treat an error as "no version".
+    local existing value
+    existing="$(gcloud secrets versions list "$name" --project "$PROJECT_ID" --limit 1 \
+      --format 'value(name)')"
+    if [[ -n "$existing" ]]; then
+      echo "    ${name} already has a version; left untouched"
+    else
+      value="$("$gen")"
+      [[ -n "$value" ]] || { echo "key generation failed" >&2; exit 1; }
+      printf '%s' "$value" | gcloud secrets versions add "$name" --project "$PROJECT_ID" \
+        --data-file=- --quiet >/dev/null
+      echo "    created the first version of ${name}"
+    fi
   fi
 }
 gen_store_keys() { printf 'k1=%s' "$(openssl rand -base64 32)"; }
-gen_pseudonym_key() { printf '%s' "$(openssl rand -base64 48)"; }
+gen_pseudonym_key() { openssl rand -base64 48 | tr -d '\n'; }
 ensure_secret "$STORE_KEYS_SECRET" gen_store_keys
 ensure_secret "$PSEUDONYM_KEY_SECRET" gen_pseudonym_key
 
@@ -130,6 +137,8 @@ for s in "$STORE_KEYS_SECRET" "$PSEUDONYM_KEY_SECRET"; do
 done
 
 say "IAM: build service account (${build_email})"
+# run.admin (not developer): services replace with the invoker-iam-disabled annotation
+# needs run.services.setIamPolicy. Tighten with a condition once the service exists.
 g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
   --role roles/run.admin --condition=None
 g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
@@ -141,9 +150,5 @@ g artifacts repositories add-iam-policy-binding "$REPO" --location "$REGION" \
 g storage buckets add-iam-policy-binding "gs://${source_bucket}" \
   --member "serviceAccount:${build_email}" --role roles/storage.objectViewer
 
-say "Done. Next: build and deploy (docs/deploy-gcp.md, step 4)."
-cat <<EOF
-    gcloud builds submit --config deploy/gcp/cloudbuild.yaml --region ${REGION} \\
-      --gcs-source-staging-dir gs://${source_bucket}/source --project ${PROJECT_ID} \\
-      --substitutions '^;^_REGION=${REGION};_REPO=${REPO};_RUNTIME_SA=${RUNTIME_SA};_BUILD_SA=${BUILD_SA};...' .
-EOF
+say "Done. Next: build and deploy (docs/deploy-gcp.md, section 2)."
+echo "    Staging bucket for gcloud builds submit: gs://${source_bucket}/source"
