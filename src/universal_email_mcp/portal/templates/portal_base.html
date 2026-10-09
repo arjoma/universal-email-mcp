@@ -8,6 +8,7 @@
   <a href="/portal/identities"{% if section == "identities" %} aria-current="page"{% endif %}>{{ _("Sender identities") }}</a>
   <a href="/portal/clients"{% if section == "clients" %} aria-current="page"{% endif %}>{{ _("Connected applications") }}</a>
   <a href="/portal/approvals"{% if section == "approvals" %} aria-current="page"{% endif %}>{{ _("Pending approvals") }}</a>
+  <a href="/portal/activity"{% if section == "activity" %} aria-current="page"{% endif %}>{{ _("Activity") }}</a>
   <form method="post" action="/portal/signout" class="nav-form">
     {{ m.csrf() }}
     <button type="submit" class="link">{{ _("Sign out") }}</button>
