@@ -26,8 +26,8 @@ An unauthenticated `/mcp` request answers `401` with
 `WWW-Authenticate: Bearer realm=..., resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"`,
 from which MCP clients discover everything else.
 
-Send-only grants include `mail.read`. Granting send does not yet ask for the password again
-(design section 6 wants that; see `TODO.md`).
+Send-only grants include `mail.read`. Granting `send` asks for the password again unless it
+was typed within `UEM_REAUTH_WINDOW` (the consent page then shows a password step).
 
 The MCP Python SDK's server-side OAuth provider was not used: it assumes registered
 clients (no Client ID Metadata Documents) and ties the authorization UI to its provider
@@ -67,7 +67,7 @@ interface. The SDK's *client* is what the end-to-end tests drive.
    with `state` and `iss`). `redirect_uri` at `/token` is optional but must match if sent.
 2. No browser session: the **sign-in page**. Address and password are verified by an IMAP
    login against the server `LOGIN_DOMAINS` assigns to the address's domain (never a server
-   the user names). The password is used once and not stored. The user record is keyed by the
+   the user names). The password is checked against that server; on the **first** sign-in it is also stored, sealed, as the credential of the sign-in mailbox account (the portal's "Main"; see [portal.md](portal.md)). The user record is keyed by the
    pseudonym `HMAC(PSEUDONYM_KEY, normalised address)`. A browser session (cookie) lives for
    `UEM_PORTAL_IDLE_TIMEOUT` idle / `UEM_PORTAL_SESSION_MAX` absolute.
 3. The **consent page** shows the client name, its metadata URL (CIMD) or "self-registered,
@@ -75,8 +75,9 @@ interface. The SDK's *client* is what the end-to-end tests drive.
    per mailbox `read` / `organize` / `delete` / `drafts`, and `send` over sender identities.
    Only reading is pre-ticked; reading is added whenever anything else is allowed; only what
    the client asked for (and the operator's policy offers) can be ticked; at least one
-   permission is required. Until accounts and identities are managed in the portal (3d), the
-   sign-in mailbox is offered as the pseudo account/identity `primary`.
+   permission is required. The accounts and identities are the user's own, managed in the
+   [portal](portal.md): an account offers only the permissions the user gave it, and only
+   identities with "sending allowed" are offered for `send`.
 4. Allow: a grant and a **single-use code** (60 s) bound to client, redirect URI, PKCE
    challenge, resource and user; redirect `?code&state&iss`. Deny: `error=access_denied`.
 5. `/token` redeems the code. Client, `redirect_uri` and PKCE verifier must match; any
@@ -110,8 +111,12 @@ expires on its own).
   form posts). Cookies are `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax`, session
   cookies (on a plain-`http` loopback `PUBLIC_URL` - development - the prefix and `Secure`
   are dropped). CSRF: double-submit token plus refusal of `Sec-Fetch-Site: cross-site`;
-  Host and Origin are checked for the whole app; there is no CORS.
-* Rate limits (in memory, per instance): sign-in 5 failures per address and 20 attempts per
+  Host and Origin are checked for the whole app. **CORS** is on for the cookie-less endpoints only
+  (`/.well-known/*`, `/register`, `/token`, `/revoke`, `/mcp`; `Access-Control-Allow-Origin: *`, never
+  credentials, `Authorization` and `Mcp-Protocol-Version` allowed) so browser-based clients such as
+  the MCP Inspector work; `/authorize` and the portal send none and refuse foreign origins.
+* Rate limits (in memory, per instance): portal connection tests 10 per user and 30 per IP per
+  10 minutes and 5 per target mailbox per 15 minutes; sign-in 5 failures per address and 20 attempts per
   IP per 15 minutes; client-document fetches 30 per IP per minute; registrations as above;
   token and revoke requests 300 per IP per minute. Behind a proxy set
   `UEM_TRUSTED_PROXY_HOPS`.

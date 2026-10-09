@@ -222,9 +222,12 @@ protocol 2026-07-28 and the legacy transport) with `/health` and `/ready`.
 (authorization code + PKCE S256, refresh-token rotation, revocation, Client ID Metadata
 Documents with Dynamic Client Registration as fallback). Users sign in with their mailbox
 login, see a consent page and grant the connecting AI client what it may do; `/mcp` needs
-the resulting access token. **Preview:** the per-user mail tools come with a later work
-package, so for now `/mcp` offers only `account_info` (who is connected, what was
-granted). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
+the resulting access token. A **self-service portal** at `/portal` lets each user add
+their mail accounts (IMAP or POP3, connection tested before it is saved), set permissions,
+manage sender identities, see the connected AI clients and disconnect or reduce them
+([`docs/portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md)).
+**Preview:** the per-user mail tools come with a later work package, so for now `/mcp`
+offers only `account_info` (who is connected, what was granted). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
 all variables: [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md).
 
 ```bash

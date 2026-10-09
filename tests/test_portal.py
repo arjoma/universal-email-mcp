@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -61,7 +62,7 @@ def alice(app):
         yield b.signed_in()
 
 
-def add_account(b: Browser, **over: str):
+def add_account(b: Browser, **over: Any):
     data = {
         "name": "Work",
         "protocol": "imap",

@@ -37,7 +37,7 @@ out on your own machine, and nothing else.
 
 | Variable | Meaning |
 |---|---|
-| `MAIL_SERVERS` | Servers users may add: preset names or host names, comma separated (`united-domains,mail.example.com`). Empty = free entry with SSRF guards. |
+| `MAIL_SERVERS` | Servers users may add in the portal: preset names or host names, comma separated (`united-domains,mail.example.com`). One entry = fixed, several = a list to choose from, **empty = free entry**: users type a host name (public addresses only, ports 993/995/465/587, verified TLS - see [portal.md](portal.md)). To forbid free entry, list at least one server. |
 | `LOGIN_DOMAINS` | `domain=server,...` - e-mail domains that may sign in (OAuth mode: **required**) and the server each uses for the login check. A bare `domain` uses the single `MAIL_SERVERS` entry. |
 | `UEM_ALLOW_PRIVATE_NETWORKS` | `false` by default in remote mode (mail servers on private/loopback addresses are refused). In dev mode the TOML `[settings]` value is the default. |
 
@@ -61,6 +61,8 @@ out on your own machine, and nothing else.
 | `UEM_REFRESH_TOKEN_TTL` | `2592000` (30 days) | Refresh token, sliding (each refresh extends it). `0` = never expires on its own - weaker, a leaked token then lives until revoked. |
 | `UEM_SESSION_MAX_AGE` | `7776000` (90 days) | Absolute lifetime of a connected client, however often it refreshes. `0` = unlimited. |
 | `UEM_PORTAL_IDLE_TIMEOUT` / `UEM_PORTAL_SESSION_MAX` | `1800` / `43200` | Browser sign-in session: idle timeout and absolute maximum, seconds. |
+| `UEM_REAUTH_WINDOW` | `300` | Seconds after typing the password again during which sensitive portal actions and granting `send` need no new entry (see [portal.md](portal.md)). Signing in counts. |
+| `UEM_MAX_ACCOUNTS_PER_USER` / `UEM_MAX_IDENTITIES_PER_USER` | `10` / `10` | How many mail accounts and sender identities one user may have. |
 | `UEM_DCR` | `true` | Offer `/register` (Dynamic Client Registration) as fallback to Client ID Metadata Documents. |
 | `UEM_DCR_REDIRECT_HOSTS` | any | Comma separated hosts a dynamically registered `https` redirect URI may use (loopback is always allowed). |
 | `UEM_TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front (Cloud Run: `1`). Decides which `X-Forwarded-For` entry is the client address for rate limits; `0` uses the socket peer. Set it wrong and rate limits count the proxy, or can be dodged by a forged header. |
@@ -89,13 +91,17 @@ overrides the TOML value.
 |---|---|
 | `/mcp` | MCP over Streamable HTTP, **stateless**: clients of protocol 2026-07-28 get the sessionless transport, older clients (<= 2025-11-25) the legacy transport without sessions (no back-channel, so no in-chat confirmation for them). OAuth mode: needs an access token issued for this resource; otherwise 401 with `WWW-Authenticate: Bearer resource_metadata="..."`. Dev mode: `Authorization: Bearer <UEM_DEV_TOKEN>`. |
 | `/.well-known/oauth-*`, `/authorize`, `/token`, `/revoke`, `/register`, `/portal/assets/*` | OAuth mode: the authorization server, see [oauth.md](oauth.md). |
+| `/portal`, `/portal/*` | OAuth mode: the user portal (accounts, identities, connected applications), see [portal.md](portal.md). |
 | `/health` | Liveness: `200 {"status":"ok"}`, no dependencies. |
 | `/ready` | Readiness: `200` when all checks pass, else `503`; the body lists check names and booleans only. The loaded config and, in OAuth mode, the store. |
 
 Every response carries `X-Request-Id`; the same id is on the JSON log lines of
 that request. Non-MCP responses get `nosniff`, `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer`, a restrictive CSP and `Cache-Control: no-store`.
-No CORS headers are ever sent. Errors are generic JSON; stack traces only go to the
+CORS is off in dev mode. In OAuth mode only the cookie-less endpoints (`/.well-known/*`,
+`/register`, `/token`, `/revoke`, `/mcp`) answer preflights and send
+`Access-Control-Allow-Origin: *` (never credentials) so browser-based MCP clients can connect;
+the portal and `/authorize` never send CORS headers and keep the strict `Origin` check. Errors are generic JSON; stack traces only go to the
 log.
 
 ## Container
