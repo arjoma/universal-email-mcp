@@ -302,6 +302,7 @@ class PolicyOut(_Model):
     max_accounts_per_call: int
     account_timeout: float
     max_headers_scanned: int
+    max_batch_messages: int = Field(description="Most messages one mark/move/delete call changes.")
 
 
 class AccountInfoOut(_Model):
@@ -341,3 +342,41 @@ class ContactList(_Model):
     similar: list[str] = Field(description="Close names/addresses when nothing matched.")
     notes: list[str]
     problems: list[Problem]
+
+
+class WriteItem(_Model):
+    """What happened to one message of a mark/move/delete call."""
+
+    id: str = Field(description="The id as given.")
+    status: Literal["ok", "unchanged", "failed"]
+    account: str
+    folder: str = Field(description="Source folder (decoded display name).")
+    subject: str
+    sender: str
+    unread: bool | None = Field(description="Mark: unread afterwards (null: not applicable).")
+    flagged: bool | None = Field(description="Mark: flagged afterwards (null: not applicable).")
+    destination: str = Field(description="Move/delete: target folder (decoded display name).")
+    new_id: str | None = Field(
+        description="Move/delete: the message's NEW id (the old one is void); null if unknown."
+    )
+    code: str = Field(description="Error code when failed.")
+    message: str = Field(description="Why it failed or was left unchanged.")
+    hint: str
+
+
+class WriteResult(_Model):
+    action: Literal["mark", "move", "delete"]
+    results: list[WriteItem] = Field(description="One entry per message, in the order given.")
+    succeeded: int
+    unchanged: int
+    failed: int
+    notes: list[str]
+
+
+class CreateFolderOut(_Model):
+    account: str
+    path: str = Field(description="The folder, '/'-separated (decoded).")
+    created: list[str] = Field(description="Folders that were created (empty if it existed).")
+    existing: list[str] = Field(description="Levels of the path that already existed.")
+    subscribed: bool
+    notes: list[str]

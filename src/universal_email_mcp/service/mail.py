@@ -33,7 +33,6 @@ from universal_email_mcp.mail.imap import (
     MAX_RELATED_IDS,
     AttachmentData,
     ImapSession,
-    Namespace,
     QuotaInfo,
     SearchCriteria,
     SearchResult,
@@ -53,6 +52,7 @@ from universal_email_mcp.models import (
 from universal_email_mcp.service import folder_list, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourcePos, query_hash
 from universal_email_mcp.service.index import HeaderIndex
+from universal_email_mcp.service.organize import Organizer
 from universal_email_mcp.service.paging import (
     MAX_CURSOR_RETRIES,
     STOPPED_RETRYING,
@@ -294,26 +294,6 @@ def _hit_key(h: Hit) -> Key:
     return (-round(h.score or 0.0), -_sort_key(h.summary), r.account, r.folder, r.uid)
 
 
-def _personal_prefix(ns: Namespace | None) -> str:
-    if ns and ns.personal:
-        return ns.personal[0][0]
-    return ""
-
-
-def resolve_folder(
-    session: ImapSession, name: str, personal_prefix: str = ""
-) -> tuple[FolderInfo, str | None]:
-    """A folder argument of the message tools (see :func:`folder_list.resolve`):
-    selectable folders only. Returns the folder and a note when it was matched
-    approximately."""
-    roots = folder_list.build(session.list_folders(), personal_prefix)
-    node, note = folder_list.resolve(
-        roots, name, selectable_only=True, where=f" in account {session.account_name!r}"
-    )
-    assert node.info is not None  # selectable nodes are real folders
-    return node.info, note
-
-
 def _when(s: MessageSummary, now: datetime) -> datetime | None:
     """Arrival time for ordering and recency: INTERNALDATE (set by the server on
     delivery — but chosen by the client on APPEND, e.g. imports or copies from
@@ -347,6 +327,8 @@ class MailService:
         self._viewer_base = viewer_base
         self._download_links = download_links
         self._prefixes: dict[str, str] = {}
+        self.organize = Organizer(config, self.router, self.index, self._prefix)
+        """Mark, move, delete and create folders (the write side)."""
         self.sent_to = SentToIndex()
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
 
@@ -373,7 +355,7 @@ class MailService:
     def _prefix(self, session: ImapSession) -> str:
         acc = session.account_name
         if acc not in self._prefixes:
-            self._prefixes[acc] = _personal_prefix(session.namespace())
+            self._prefixes[acc] = folder_list.personal_prefix(session.namespace())
         return self._prefixes[acc]
 
     def _folders_for(
@@ -381,7 +363,7 @@ class MailService:
     ) -> list[FolderInfo]:
         out: list[FolderInfo] = []
         for n in names or ["inbox"]:
-            f, note = resolve_folder(session, n, self._prefix(session))
+            f, note = folder_list.resolve_folder(session, n, self._prefix(session))
             if note:
                 notes.append(f"{session.account_name}: {note}")
             if f.name not in {x.name for x in out}:

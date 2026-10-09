@@ -215,6 +215,7 @@ def test_identity_default_is_first_when_unset():
         ({"policy": {"send": "sometimes"}}, "send = 'sometimes'"),
         ({"limits": {"max_results": 0}}, "positive"),
         ({"limits": {"max_results": 1.5}}, "whole number"),
+        ({"limits": {"max_batch_messages": 0}}, "positive"),
         ({"settings": {"allow_private_networks": "yes"}}, "true or false"),
     ],
 )
@@ -278,3 +279,9 @@ def test_resolve_password_keyring():
     assert calls == [(KEYRING_SERVICE, "work-key")]
     with pytest.raises(CredentialMissing, match="keyring"):
         resolve_password(_acc(), keyring_get=lambda s, k: None)
+
+
+def test_batch_limit_default_and_override():
+    assert parse_config({"accounts": []}).limits.max_batch_messages == 50
+    cfg = parse_config({"accounts": [], "limits": {"max_batch_messages": 7}})
+    assert cfg.limits.max_batch_messages == 7

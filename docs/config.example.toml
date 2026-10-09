@@ -27,12 +27,15 @@ max_attachment_bytes = 2097152        # largest attachment get_attachment return
 max_accounts_per_call = 10
 account_timeout = 30                  # seconds per account in a fan-out
 max_headers_scanned = 2000            # headers per account for fuzzy search / contacts
+max_batch_messages = 50               # messages per mark / move / delete call
 
 # ---------------------------------------------------------------- accounts
 # kind: "imap" (default) or "pop3". server: a preset name (united-domains) or a
 # host name (then 993/995/465 with implicit TLS). [accounts.imap|pop3|smtp]
 # tables override single endpoints: host, port, tls = "tls" | "starttls".
-# permissions: read, organize (mark/move), delete (move to Trash), drafts.
+# permissions: read, organize (mark_messages, move_messages, create_folder),
+# delete (delete_messages: move to Trash, never permanent), drafts.
+# A tool that no account allows (or read_only = true) is not offered at all.
 
 [[accounts]]
 name = "Work"

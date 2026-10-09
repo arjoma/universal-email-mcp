@@ -66,6 +66,29 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] WP 2d look-alike check must handle "the user really wrote to a typo
       address" (`sent_to=true` for `oliver.grnat@`).
 
+## WP 2a (organize) leftovers
+- [ ] Permanent deletion (empty Trash, delete from Trash/Junk) is deliberately not
+      offered; if ever added it needs its own tool, permission and confirmation.
+- [ ] `mark_messages` sets only `\Seen` and `\Flagged`; `\Answered` is for the
+      reply/send work (2c/2d), custom keywords are not planned.
+- [ ] Folder management beyond `create_folder` (rename, move, delete, unsubscribe).
+- [ ] Moving between accounts is not supported (an id belongs to one account; the
+      destination is resolved per account). Copy-to-other-account would need APPEND.
+- [ ] Other users'/shared namespaces are refused for every write; the Dovecot test
+      image has none, so `is_foreign` is tested with injected prefixes only.
+- [ ] COPY fallback: if the copy worked but removing the original failed, the message
+      is in both folders (reported per message, the `\Deleted` flag is rolled back
+      on a best-effort basis). A connection lost mid-batch leaves the outcome of the
+      running group unknown (hint: search again before retrying).
+- [ ] The sent-to index is not invalidated when mail leaves Sent (moving a sent mail
+      away does not forget that the user wrote to the recipient - intended, but
+      deleting the Sent copy does not make the check stricter either).
+- [ ] No `UNSELECT`/`CLOSE` after a write: the session stays selected on the last
+      folder until the next EXAMINE/SELECT (harmless, but a pending `\Deleted` set
+      by another client is never expunged by us).
+- [ ] Sandbox corpus: add hostile *folder* names (injection text, bidi, very long)
+      so `create_folder`/`move_messages` can be tried by hand against them.
+
 ## M1 review leftovers
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
       `SINCE`/`BEFORE` compare the server's INTERNALDATE day (server time zone) —
