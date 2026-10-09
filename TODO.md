@@ -181,9 +181,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       question; a rejected, expired or unanswered approval leaves it in Drafts (by design,
       nothing is lost) - consider a cleanup hint in the result for drafts older than the TTL.
 
-- [ ] `render.defang_body` is quadratic on very long unbroken runs (32 000 characters of `x` take
-      4 s); the confirmation now defangs only the shown part, but `get_message` bodies and other
-      callers still pass whole text through it.
 - [ ] (review of 3f) `execute` stores the composed draft before the fallback, so repeated
       identical asks leave duplicate drafts; `approved` but unconsumed approvals (crash between
       the two store writes) cannot be retried; the rate limit scans the whole activity feed twice

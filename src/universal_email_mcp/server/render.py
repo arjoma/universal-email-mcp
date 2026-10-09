@@ -20,11 +20,16 @@ DEFAULT_CELL_CHARS = 80
 
 # URL-like tokens: anything with ``scheme://`` (no word boundary needed: ``_https://``
 # and ``1https://`` autolink too), ``www.`` hosts, and bare host/path forms.
+#
+# Performance: untrusted text can be hundreds of thousands of characters of one unbroken run,
+# so every pattern may start only at the *beginning* of a run of the characters it consumes
+# (look-behinds below); a failed attempt then costs O(run), never O(run^2). A scheme that is
+# glued to digits (``1https://``) still matches: it starts at the run's beginning.
 _URL = re.compile(
-    r"(?i)(?:[a-z][a-z0-9+.\-]*://|www\.)[^\s|<>]*"
-    r"|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/[^\s|<>]*"
+    r"(?i)(?<![a-z0-9+.\-])[0-9+.\-]*[a-z][a-z0-9+.\-]*://[^\s|<>]*"
+    r"|www\.[^\s|<>]*"
+    r"|(?<![a-z0-9-])(?<![a-z0-9-]\.)(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/[^\s|<>]*"
 )
-_SCHEME = re.compile(r"(?i)([a-z][a-z0-9+.\-]*)://")
 # ``mailto:x``, ``xmpp:x``, ``javascript:x`` … (a word glued to a colon and more text)
 _WWW = re.compile(r"(?i)www\.")
 # Bare domains (``evil.com``, no scheme/``www.``/path): GFM leaves them alone, but
@@ -36,7 +41,9 @@ _TLDS = (
     "fi|pl|cz|sk|hu|ro|bg|gr|pt|ie|ru|ua|tr|us|ca|au|nz|cn|jp|kr|in|br|mx|ar|za|ng|ke|ir|il|"
     "tk|ml|ga|cf|gq|ws|su|cc|tv|sh|to|ai|pw|vip|icu|buzz|rest|cyou|zip|mov|tel|asia|pro|name|win|bid"
 )
-_BARE_DOMAIN = re.compile(rf"(?i)(?<![a-z0-9_\-])(?:[a-z0-9-]+\.)+(?:{_TLDS})(?![a-z0-9_\-])")
+_BARE_DOMAIN = re.compile(
+    rf"(?i)(?<![a-z0-9\-])(?<![a-z0-9\-]\.)(?:[a-z0-9-]+\.)+(?:{_TLDS})(?![a-z0-9_\-])"
+)
 # ``word:host.tld`` after the scheme prefix was broken up: the host's dots too.
 _SCHEME_REST = re.compile(r"(?i)(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*):(?=[^\s:/\[\d])([^\s|<>]*)")
 # Markdown characters that start links/images/emphasis/code/HTML/entities.
@@ -61,13 +68,36 @@ _MD_SPECIAL = str.maketrans(
 )
 
 
+_SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+
+
 def _defang_url(url: str) -> str:
-    # hxxps[:]//example[.]com — readable, never clickable or fetchable.
-    m = _SCHEME.search(url)
-    if m:
-        scheme = re.sub(r"(?i)^http", "hxxp", m.group(1))
-        url = f"{url[: m.start()]}{scheme}[:]//{url[m.end() :]}"
+    # hxxps[:]//example[.]com - readable, never clickable or fetchable. The scheme is the
+    # run of scheme characters before ``://`` from its first letter on (found by walking
+    # back, not by a pattern: ``([a-z][a-z0-9+.-]*)://`` is quadratic on long runs).
+    pos = url.find("://")
+    while pos >= 0:
+        start = pos
+        while start > 0 and url[start - 1] in _SCHEME_CHARS:
+            start -= 1
+        while start < pos and not (url[start].isascii() and url[start].isalpha()):
+            start += 1
+        if start < pos:
+            scheme = re.sub(r"(?i)^http", "hxxp", url[start:pos])
+            url = f"{url[:start]}{scheme}[:]//{url[pos + 3 :]}"
+            break
+        pos = url.find("://", pos + 3)
     return url.replace(".", "[.]")
+
+
+def _defang_match(m: re.Match[str]) -> str:
+    # The pattern starts at the beginning of a run of scheme characters; what precedes the
+    # first letter (``..``, ``1``) is not part of the URL and stays as it is.
+    url = m.group(0)
+    lead = len(url) - len(url.lstrip("0123456789+.-")) if url[:1] in "0123456789+.-" else 0
+    if lead and "://" not in url[:lead] and url[lead : lead + 4].lower() != "www.":
+        return url[:lead] + _defang_url(url[lead:])
+    return _defang_url(url)
 
 
 def defang(text: str, *, keep_address_domains: bool = False) -> str:
@@ -83,7 +113,7 @@ def defang(text: str, *, keep_address_domains: bool = False) -> str:
     ``keep_address_domains``: the domain right after an ``@`` keeps its dots (the
     ``＠`` already blocks the e-mail autolink) so addresses stay copyable.
     """
-    text = _URL.sub(lambda m: _defang_url(m.group(0)), text)
+    text = _URL.sub(_defang_match, text)
     text = text.replace("://", "[:]//")
     text = _WWW.sub(lambda m: m.group(0)[:3] + "[.]", text)
     text = _BARE_DOMAIN.sub(
@@ -122,11 +152,17 @@ def escape_cell(
 
 # --------------------------------------------------------------------------- bodies
 
-_MD_IMAGE = re.compile(r"!\[([^\]\n]*)\]\s*(?:\([^)\n]*\)|\[[^\]\n]*\])")
-_MD_LINK = re.compile(r"\[([^\]\n]*)\]\(\s*<?([^)\s>]*)>?(?:\s+[\"'(][^)\n]*)?\)")
-_MD_REF_DEF = re.compile(r"(?m)^( {0,3})\[([^\]\n]+)\]:")
+# Bounded repeats (long link text or targets stay unconverted, but their ``](`` is broken up
+# by the caller, so nothing can link): an unbounded ``[^\]\n]*`` is quadratic on ``[[[[...``.
+_MD_IMAGE = re.compile(
+    r"!\[([^\[\]\n]{0,500})\]\s{0,20}(?:\([^)\[\n]{0,2000}\)|\[[^\[\]\n]{0,500}\])"
+)
+_MD_LINK = re.compile(
+    r"\[([^\[\]\n]{0,500})\]\(\s{0,20}<?([^)\s>\[]{0,2000})>?(?:\s{1,20}[\"'(][^)\n]{0,500})?\)"
+)
+_MD_REF_DEF = re.compile(r"(?m)^( {0,3})\[([^\[\]\n]{1,500})\]:")
 _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
-_HTML_IMG = re.compile(r"(?is)<img\b[^>]*>")
+_HTML_IMG = re.compile(r"(?is)<img\b[^>]{0,2000}>")
 _HTML_ALT = re.compile(r"""(?is)\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""")
 
 
