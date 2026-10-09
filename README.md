@@ -73,6 +73,19 @@ Results come as Markdown tables (mail text escaped, links defanged) plus
 structured JSON; message bodies are fenced as untrusted content, so the assistant
 can tell mail from instructions.
 
+## Development
+
+To try the server without a real mailbox, start the sandbox: a throw-away local
+Dovecot (podman or docker) with a few weeks of realistic German/English mail and
+hostile samples (prompt injection, crafted headers, broken encodings):
+
+```bash
+uv run scripts/dev_mailbox.py up      # prints the probe and `claude mcp add` commands
+uv run scripts/dev_mailbox.py down
+```
+
+Contributor guidelines and checks: [AGENTS.md](https://github.com/arjoma/universal-email-mcp/blob/main/AGENTS.md).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](https://github.com/arjoma/universal-email-mcp/blob/main/LICENSE) and [NOTICE](https://github.com/arjoma/universal-email-mcp/blob/main/NOTICE).

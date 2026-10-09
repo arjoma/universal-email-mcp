@@ -93,8 +93,8 @@ Code must treat it that way everywhere:
 ## Checks (same as CI)
 
 ```bash
-uv run ruff check src tests
-uv run ruff format --check src tests
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
 uv run basedpyright
 uv run pytest -q
 ```
@@ -122,8 +122,17 @@ claude mcp add email -- uv run --directory "$PWD" --env-file .env universal-emai
 
 Prefer the keyring over `password_env` in `.env`: coding agents working in the
 repository can read `.env`. Start with `permissions = ["read"]`; write
-operations are tried on a throw-away Dovecot first (roadmap step 0b), not on a
-real mailbox.
+operations are tried on the sandbox first, not on a real mailbox.
+
+**Sandbox mailbox** — `uv run scripts/dev_mailbox.py up|status|reset|down` runs
+the integration-test Dovecot image as container `uem-sandbox` on 127.0.0.1:10993
+(TLS) / 10143 (STARTTLS), seeds two accounts (`Sandbox`, `Sandbox-Private`) with
+realistic and hostile mail plus a large folder tree, and writes the gitignored
+`sandbox.local.toml` and `.env.sandbox` (throw-away password). It prints the
+`probe` and `claude mcp add email-sandbox …` commands. Mail is on a tmpfs: a
+stopped container comes back freshly seeded. Corpus and config live in
+`tests/sandbox.py`, container helpers in `tests/dovecot.py` (shared with the
+integration tests); hostile mails carry `X-UEM-Sandbox: hostile <kind>`.
 
 ## Releases
 

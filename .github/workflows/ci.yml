@@ -28,6 +28,8 @@ jobs:
         image: dovecot/dovecot:2.4.5@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553
         env:
           USER_PASSWORD: uem-test-password
+        # Mail on tmpfs: Dovecot fsyncs every write, which makes seeding ~100x slower on disk.
+        options: --tmpfs /srv/vmail:rw,mode=1777
         ports:
           - 31993:31993
           - 31143:31143
@@ -41,8 +43,8 @@ jobs:
 
       - name: Lint
         run: |
-          uv run --locked ruff check src tests
-          uv run --locked ruff format --check src tests
+          uv run --locked ruff check src tests scripts
+          uv run --locked ruff format --check src tests scripts
 
       - name: Type check
         run: uv run --locked basedpyright
