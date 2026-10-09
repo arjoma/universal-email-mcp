@@ -21,7 +21,7 @@ from mcp.shared.auth import (
 
 from tests.http_util import mcp_client, running
 from tests.https_server import Reply, doc_server, resolver
-from tests.oauth_util import account_id_of, hidden_fields, operator
+from tests.oauth_util import account_id_of, hidden_fields, location_of, operator
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import Endpoint, ServerProfile, TlsSettings
 from universal_email_mcp.oauth.app import build_oauth_app
@@ -89,9 +89,9 @@ class Browser:
                     "grant": [f"{account_id_of(consent.text)}:mail.read"],
                 },
             )
-            assert r.status_code == 303
-            q = {k: v[0] for k, v in parse_qs(urlsplit(r.headers["location"]).query).items()}
-            assert r.headers["location"].startswith(REDIRECT)
+            location = location_of(r)  # a 200 page with a meta refresh, as Chromium needs
+            q = {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
+            assert location.startswith(REDIRECT)
             self.result = AuthorizationCodeResult(
                 code=q.get("code", ""), state=q.get("state"), iss=q.get("iss")
             )
