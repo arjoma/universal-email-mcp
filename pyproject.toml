@@ -64,7 +64,9 @@ dev = [
     "markdown-it-py[linkify]>=4.2.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pyyaml>=6.0.3",
     "ruff>=0.16.9",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.pytest.ini_options]

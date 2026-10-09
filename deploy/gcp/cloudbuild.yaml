@@ -1,0 +1,82 @@
+# Cloud Build: build the image (with the Firestore client), push it to Artifact
+# Registry and deploy it to Cloud Run. Generic: everything instance-specific comes in as
+# substitutions; keep your values in a private deployment repository (docs/deploy-gcp.md).
+#
+#   gcloud builds submit --config deploy/gcp/cloudbuild.yaml --region REGION \
+#     --substitutions '^;^_REGION=REGION;_PUBLIC_URL=https://mail.example.org;_LOGIN_DOMAINS=example.org=imap.example.org' .
+#
+# (The "^;^" prefix switches the list delimiter so values may contain commas, e.g. a
+# _MAIL_SERVERS list. A build trigger takes them one by one in its configuration.)
+#
+# No secret appears here. The service reads its keys from Secret Manager (see
+# service.yaml); this build only needs the secret *names* to exist (bootstrap.sh).
+# Run it as the dedicated build service account bootstrap.sh creates (_BUILD_SA).
+
+substitutions:
+  _REGION: europe-west1
+  _SERVICE: universal-email-mcp
+  _REPO: universal-email-mcp           # Artifact Registry repository (Docker format)
+  _IMAGE: universal-email-mcp
+  _RUNTIME_SA: uem-runtime             # name of the service account the service runs as
+  _BUILD_SA: uem-build                 # name of the service account this build runs as
+  _EXTRAS: gcp
+  _PUBLIC_URL: ""                      # e.g. https://mail.example.org (required)
+  _CONTENT_ORIGIN: ""                  # e.g. https://mail-content.example.org (recommended)
+  _LOGIN_DOMAINS: ""                   # e.g. example.org=imap.example.org (required)
+  _MAIL_SERVERS: ""
+  _FIRESTORE_PREFIX: ""
+  _INGRESS: all                        # or internal-and-cloud-load-balancing
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "3"
+  _TRUSTED_PROXY_HOPS: "1"
+  _NETWORK: ""
+  _SUBNET: ""
+
+serviceAccount: projects/${PROJECT_ID}/serviceAccounts/${_BUILD_SA}@${PROJECT_ID}.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY          # required when a custom service account is used
+  env:
+    - DOCKER_BUILDKIT=1                # the Dockerfile uses BuildKit cache mounts
+
+steps:
+  - id: build-push
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}"
+        docker build \
+          --build-arg EXTRAS="${_EXTRAS}" \
+          --build-arg REVISION="${COMMIT_SHA}" \
+          --tag "$${image}:${BUILD_ID}" .
+        docker push "$${image}:${BUILD_ID}"
+        # Deploy by digest: what was built is what runs, whatever happens to the tag.
+        docker inspect --format '{{index .RepoDigests 0}}' "$${image}:${BUILD_ID}" \
+          > /workspace/image.txt
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env:
+      - SERVICE=${_SERVICE}
+      - RUNTIME_SA=${_RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com
+      - PROJECT_ID=${PROJECT_ID}
+      - PUBLIC_URL=${_PUBLIC_URL}
+      - CONTENT_ORIGIN=${_CONTENT_ORIGIN}
+      - LOGIN_DOMAINS=${_LOGIN_DOMAINS}
+      - MAIL_SERVERS=${_MAIL_SERVERS}
+      - FIRESTORE_PREFIX=${_FIRESTORE_PREFIX}
+      - INGRESS=${_INGRESS}
+      - MIN_INSTANCES=${_MIN_INSTANCES}
+      - MAX_INSTANCES=${_MAX_INSTANCES}
+      - TRUSTED_PROXY_HOPS=${_TRUSTED_PROXY_HOPS}
+      - NETWORK=${_NETWORK}
+      - SUBNET=${_SUBNET}
+    args:
+      - -ceu
+      - |
+        IMAGE="$$(cat /workspace/image.txt)" deploy/gcp/render.sh /workspace/service.rendered.yaml
+        gcloud run services replace /workspace/service.rendered.yaml \
+          --project "${PROJECT_ID}" --region "${_REGION}"

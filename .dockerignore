@@ -20,3 +20,4 @@ config.local.toml
 sandbox.local.toml
 *.pem
 *.key
+deploy

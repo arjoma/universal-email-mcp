@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deployment on Google Cloud (work package 3i; `docs/deploy-gcp.md`): `deploy/gcp/` with an
+  idempotent `bootstrap.sh` (APIs, least-privilege service accounts, Artifact Registry,
+  Firestore with PITR, delete protection and TTL policies, generated secrets that are never
+  printed), `cloudbuild.yaml` (build with the `gcp` extra, push, deploy by digest) and a Cloud
+  Run `service.yaml` template (secrets from Secret Manager, probes, gen2, no IAM gate for the
+  public OAuth server). The guide covers domains and load balancer, static egress, key
+  rotation, backups, logging, alerting, rollback, cost and a security checklist.
+- CI builds the production image, smoke-tests it (`scripts/smoke_container.sh`: `/health`,
+  `/ready`, `/mcp` refused without a token, Host check, non-root user) and scans it with
+  Trivy; the container image base is now pinned by digest and carries OCI labels.
+
 - Message viewer in the portal (work package 3g; `docs/portal.md`): every message in a tool
   result of remote mode links to `PUBLIC_URL/m/<id>` (attachments `/m/<id>/a/<part>`, source
   `/m/<id>/eml`; no tokens in the links - the portal session authorises, a signed-out visitor

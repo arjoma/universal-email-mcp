@@ -20,7 +20,7 @@ Planned highlights:
   recipients (new or look-alike addresses) before anything is sent; no permanent
   deletion.
 - **Operable** — encrypted credentials, pseudonymous audit logging, admin policy;
-  reference deployment on Google Cloud Run.
+  reference deployment on Google Cloud Run ([`docs/deploy-gcp.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/deploy-gcp.md)).
 
 ## Try the probe
 
