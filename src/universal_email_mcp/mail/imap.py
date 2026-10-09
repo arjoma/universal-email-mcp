@@ -99,8 +99,21 @@ MAX_RELATED_IDS = 30
 _ATTACHMENT_TYPES = (b"multipart/", b"application/", b"image/", b"audio/", b"video/", b"message/")
 """Content-Type prefixes of the ``has_attachment`` server pre-filter."""
 
-_HEADER_FIELDS = "BODY.PEEK[HEADER.FIELDS (" + " ".join(h.upper() for h in SUMMARY_HEADERS) + ")]"
-_RECIPIENT_FIELDS = "BODY.PEEK[HEADER.FIELDS (TO CC)]"
+MAX_HEADER_FETCH = 64 * 1024
+"""Most bytes of the header fields read per message in a listing (partial fetch): a
+mailbox cannot make one page of summaries arbitrarily large."""
+MAX_LITERAL_BYTES = 32 * 1024 * 1024
+"""Largest single ``{n}`` literal accepted from a server (bodies are read in chunks of at
+most a few MiB; a bigger announcement is hostile or broken)."""
+MAX_UNTAGGED_BYTES = 64 * 1024 * 1024
+"""Most untagged response data (literals and lines) kept for one command."""
+
+_HEADER_FIELDS = (
+    "BODY.PEEK[HEADER.FIELDS ("
+    + " ".join(h.upper() for h in SUMMARY_HEADERS)
+    + f")]<0.{MAX_HEADER_FETCH}>"
+)
+_RECIPIENT_FIELDS = f"BODY.PEEK[HEADER.FIELDS (TO CC)]<0.{MAX_HEADER_FETCH}>"
 _SUMMARY_ITEMS = ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE", "BODYSTRUCTURE", _HEADER_FIELDS]
 _SUMMARY_ITEMS_NO_BS = [i for i in _SUMMARY_ITEMS if i != "BODYSTRUCTURE"]
 
@@ -322,14 +335,72 @@ class LoginInfo:
 
 
 class _GuardedIMAP4(IMAP4WithTimeout):
-    """imaplib.IMAP4 that takes its socket from our SSRF-safe connector."""
+    """imaplib.IMAP4 that takes its socket from our SSRF-safe connector and refuses to
+    buffer what a hostile server announces: a literal above ``max_literal`` and more than
+    ``max_untagged`` bytes of untagged data for one command end the connection with a
+    :class:`ProtocolError` (imaplib itself accumulates both without limit, already in the
+    greeting before any login)."""
 
-    def __init__(self, host: str, port: int, connector: Callable[[], socket.socket]) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        connector: Callable[[], socket.socket],
+        *,
+        max_literal: int = MAX_LITERAL_BYTES,
+        max_untagged: int = MAX_UNTAGGED_BYTES,
+    ) -> None:
         self._uem_connector = connector
+        self._uem_max_literal = max_literal
+        self._uem_max_untagged = max_untagged
+        self._uem_untagged = 0
         super().__init__(host, port, None)
 
     def _create_socket(self, timeout: float | None = None) -> socket.socket:  # noqa: ARG002
         return self._uem_connector()
+
+    def _uem_refuse(self, what: str) -> ProtocolError:
+        """Cut the connection (its stream is out of sync now) and build the error."""
+        try:
+            self.shutdown()
+        except Exception:  # noqa: BLE001 - already broken
+            pass
+        return ProtocolError(f"the server sent too much data ({what}); connection closed")
+
+    def _new_tag(self) -> bytes:
+        # Every command (imaplib's and imapclient's raw ones) starts here: its budget is
+        # fresh and nothing a previous command left in the response table counts or stays.
+        self._uem_untagged = 0
+        self.untagged_responses.clear()
+        return cast(Any, super())._new_tag()
+
+    def starttls(self, ssl_context: ssl.SSLContext | None = None) -> Any:
+        """imaplib's STARTTLS, with a check at the moment of the upgrade: Python >= 3.14
+        keeps its own read buffer across the switch, so bytes the server (or a man in
+        the middle) sent *before* TLS would be parsed as post-TLS responses."""
+        real = ssl_context or ssl.create_default_context()
+        guarded = self
+
+        class _Upgrade:
+            def wrap_socket(self, sock: socket.socket, **kw: Any) -> ssl.SSLSocket:
+                pending = getattr(guarded, "_readbuf", None)
+                if isinstance(pending, list) and any(pending):
+                    raise TlsError("the server sent data in the clear after STARTTLS")
+                return real.wrap_socket(sock, **kw)
+
+        return super().starttls(cast(ssl.SSLContext, _Upgrade()))
+
+    def read(self, size: int) -> bytes:
+        if size > self._uem_max_literal:
+            raise self._uem_refuse(f"a literal of {size} bytes")
+        return super().read(size)
+
+    def _append_untagged(self, typ: str, dat: Any) -> None:
+        part = dat if isinstance(dat, tuple) else (dat,)
+        self._uem_untagged += sum(len(x) for x in cast(tuple[bytes | None, ...], part) if x)
+        if self._uem_untagged > self._uem_max_untagged:
+            raise self._uem_refuse("a response")
+        cast(Any, super())._append_untagged(typ, dat)
 
 
 class _GuardedIMAPClient(IMAPClient):
@@ -342,8 +413,11 @@ class _GuardedIMAPClient(IMAPClient):
         ssl_context: ssl.SSLContext,
         connector: Callable[[], socket.socket],
         timeout: SocketTimeout,
+        max_literal: int = MAX_LITERAL_BYTES,
+        max_untagged: int = MAX_UNTAGGED_BYTES,
     ) -> None:
         self._uem_connector = connector
+        self._uem_limits = (max_literal, max_untagged)
         super().__init__(
             host,
             port,
@@ -356,7 +430,14 @@ class _GuardedIMAPClient(IMAPClient):
         self.normalise_times = False  # keep timezone-aware datetimes
 
     def _create_IMAP4(self) -> IMAP4WithTimeout:  # noqa: N802 - imapclient hook name
-        return _GuardedIMAP4(self.host, self.port, self._uem_connector)
+        max_literal, max_untagged = self._uem_limits
+        return _GuardedIMAP4(
+            self.host,
+            self.port,
+            self._uem_connector,
+            max_literal=max_literal,
+            max_untagged=max_untagged,
+        )
 
 
 def _s(value: object) -> str:
@@ -544,6 +625,8 @@ class ImapSession:
         tls: TlsSettings | None = None,
         folder_roles: Mapping[FolderRole, str] | None = None,
         resolver: Resolver | None = None,
+        max_literal: int = MAX_LITERAL_BYTES,
+        max_untagged: int = MAX_UNTAGGED_BYTES,
     ) -> ImapSession:
         """Connect, (STARTTLS,) authenticate. Raises a :class:`MailError` subclass:
         ``ServerUnreachable``, ``TlsError``, ``AddressNotAllowed``, ``AuthFailed``,
@@ -568,6 +651,8 @@ class ImapSession:
                 ssl_context=ctx,
                 connector=connector,
                 timeout=SocketTimeout(net.connect_timeout, net.read_timeout),
+                max_literal=max_literal,
+                max_untagged=max_untagged,
             )
         except MailError:
             raise
