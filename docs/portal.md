@@ -27,7 +27,7 @@ the provider, ticked or not. A user who removes "Main" does not get it back by s
 the OAuth consent page says no mail account is connected yet and links to the portal; a grant
 can only name existing accounts, so the user denies or adds an account first. (Before the portal, the consent page offered
 a pseudo account `primary`; grants that still reference it are rewritten to "Main" at the
-owner's next sign-in, keeping the permissions that had been granted.)
+owner's next sign-in that creates "Main", i.e. when the box is ticked; until then they are inert.)
 
 ## Mail accounts
 
