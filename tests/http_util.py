@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx2
 import uvicorn
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -51,9 +52,24 @@ async def running(app: Any, sock: socket.socket | None = None) -> AsyncIterator[
         sock.close()
 
 
-def mcp_client(url: str, token: str | None, *, mode: str = "auto", auth: Any = None) -> Client:
+def mcp_client(
+    url: str,
+    token: str | None,
+    *,
+    mode: str = "auto",
+    auth: Any = None,
+    elicitation_callback: Any = None,
+    transport: Any = None,
+) -> Client:
+    """An MCP client on the streamable HTTP transport. ``transport`` is an optional httpx2
+    transport (a spy or a tamperer between the SDK client and the server)."""
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    transport = streamable_http_client(
-        url, http_client=create_mcp_http_client(headers=headers, auth=auth)
+    if transport is None:
+        http = create_mcp_http_client(headers=headers, auth=auth)
+    else:
+        http = httpx2.AsyncClient(transport=transport, headers=headers, auth=auth, timeout=60)
+    return Client(
+        streamable_http_client(url, http_client=http),  # pyright: ignore[reportArgumentType]
+        mode=mode,  # pyright: ignore[reportArgumentType]
+        elicitation_callback=elicitation_callback,
     )
-    return Client(transport, mode=mode)  # pyright: ignore[reportArgumentType]

@@ -1,0 +1,88 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Approve this message?") }}{% endblock %}
+{% block heading %}{{ _("Approve this message?") }}{% endblock %}
+{% block body %}
+<p class="hint">{{ _("Requested by") }} <strong>{% if approval.client %}{{ approval.client }}{% else %}{{ _("an application") }}{% endif %}</strong>, {{ approval.created }}.</p>
+{% if approval.state == "expired" %}
+<p class="note" role="alert">{{ _("This request has expired. Nothing was sent. The message is still in your Drafts folder; ask the application to send it again if you want it to go out.") }}</p>
+{% elif approval.state == "rejected" %}
+<p class="note" role="status">{{ _("You rejected this message. Nothing was sent. It is still in your Drafts folder.") }}</p>
+{% elif approval.state == "void" %}
+<p class="note" role="alert">{{ _("The application was disconnected, so this request is void. Nothing was sent.") }}</p>
+{% elif problem == "changed" %}
+<p class="error" role="alert">{{ _("The draft has changed since it was submitted, so it cannot be approved. Nothing was sent. Ask the application to create the message again.") }}</p>
+{% elif problem == "gone" %}
+<p class="error" role="alert">{{ _("The draft no longer exists (sent, moved or deleted). Nothing was sent.") }}</p>
+{% elif problem == "policy_draft" %}
+<p class="error" role="alert">{{ _("This service is set to keep messages as drafts, so it cannot be sent from here.") }}</p>
+{% elif problem %}
+<p class="error" role="alert">{{ _("The message could not be read from your mailbox right now. Nothing was sent. Please try again later.") }}</p>
+{% endif %}
+{% if view %}
+<section class="client" aria-label="{{ _('The message') }}">
+  <dl>
+    <dt>{{ _("From") }}</dt><dd>{{ view.sender }} <span class="hint">({{ _("identity") }} {{ view.identity }})</span></dd>
+    <dt>{{ _("To") }}</dt>
+    <dd>
+      <ul class="plain">
+        {% for r in view.recipients %}
+        <li>{{ r.label }}: {{ r.address }} <span class="badge{% if r.flagged %} danger{% endif %}">{{ r.tag }}</span>
+          {% for n in r.notes %}<br><span class="error">! {{ n }}</span>{% endfor %}</li>
+        {% endfor %}
+      </ul>
+      {% if view.has_bcc %}<span class="hint">{{ _("Bcc recipients are hidden from the others.") }}</span>{% endif %}
+    </dd>
+    <dt>{{ _("Subject") }}</dt><dd>{% if view.subject %}{{ view.subject }}{% else %}<em>{{ _("(none)") }}</em>{% endif %}</dd>
+    {% if view.attachments %}
+    <dt>{{ _("Attachments") }}</dt>
+    <dd>
+      <ul class="plain">{% for a in view.attachments %}<li>{{ a }}</li>{% endfor %}</ul>
+      {% if view.more_attachments %}<span class="error">{% trans count=view.more_attachments %}and {{ count }} more attachment that is NOT listed{% pluralize %}and {{ count }} more attachments that are NOT listed{% endtrans %}</span>{% endif %}
+    </dd>
+    {% endif %}
+    {% if view.reasons %}
+    <dt>{{ _("Why you are asked") }}</dt><dd>{% for r in view.reasons %}{{ r }}{% if not loop.last %}; {% endif %}{% endfor %}</dd>
+    {% endif %}
+  </dl>
+  <h2>{{ _("Text") }}</h2>
+  {% if view.text %}
+  <pre class="mailtext">{% for line in view.text %}{{ line }}
+{% endfor %}</pre>
+  {% if view.text_note %}<p class="error">{{ view.text_note }}</p>{% endif %}
+  {% elif view.has_text %}<p class="note">{{ _("(empty)") }}</p>
+  {% else %}<p class="note">{{ _("(no plain text)") }}</p>{% endif %}
+  {% if view.quoted %}
+  <details>
+    <summary>{% trans count=view.quoted|length %}Quoted text: {{ count }} line (not part of what the application wrote; expand to read){% pluralize %}Quoted text: {{ count }} lines (not part of what the application wrote; expand to read){% endtrans %}</summary>
+    <pre class="mailtext">{% for line in view.quoted %}{{ line }}
+{% endfor %}</pre>
+    {% if view.quoted_note %}<p class="error">{{ view.quoted_note }}</p>{% endif %}
+  </details>
+  {% endif %}
+  {% for w in view.warnings %}<p class="hint">{{ w }}</p>{% endfor %}
+</section>
+{% if approval.state == "pending" and not problem %}
+<p class="hint">{{ _("Sending cannot be taken back. This request is valid until") }} {{ approval.expires }}. {{ _("Approving needs your password again if you have not typed it in the last minutes.") }}</p>
+<form method="post" action="/portal/approvals/{{ approval.id }}">
+  {{ m.csrf() }}
+  <div class="buttons">
+    <button type="submit" name="action" value="approve" class="primary">{{ _("Send this message") }}</button>
+    <button type="submit" name="action" value="reject" class="danger">{{ _("Reject") }}</button>
+    <a class="button" href="/portal/approvals">{{ _("Back") }}</a>
+  </div>
+</form>
+{% else %}
+<p><a class="button" href="/portal/approvals">{{ _("Back") }}</a></p>
+{% endif %}
+{% elif approval.state == "pending" %}
+<form method="post" action="/portal/approvals/{{ approval.id }}">
+  {{ m.csrf() }}
+  <div class="buttons">
+    <button type="submit" name="action" value="reject" class="danger">{{ _("Reject") }}</button>
+    <a class="button" href="/portal/approvals">{{ _("Back") }}</a>
+  </div>
+</form>
+{% else %}
+<p><a class="button" href="/portal/approvals">{{ _("Back") }}</a></p>
+{% endif %}
+{% endblock %}
