@@ -87,6 +87,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="no token; bind to loopback only (temporary, local development)",
     )
+    from universal_email_mcp import auditcli
+
+    auditcli.build_parser(sub)
     return p
 
 
@@ -186,6 +189,12 @@ def _cmd_local(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit(args: argparse.Namespace) -> int:
+    from universal_email_mcp import auditcli
+
+    return auditcli.run(args)
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from universal_email_mcp.operator import load_operator_config
     from universal_email_mcp.server.serve import run_serve
@@ -224,7 +233,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.getLogger("imapclient").setLevel(logging.WARNING)
     audit.setup()  # audit events (send attempts: counts only) always go to stderr
 
-    handlers: dict[str, Any] = {"probe": _cmd_probe, "local": _cmd_local, "serve": _cmd_serve}
+    handlers: dict[str, Any] = {
+        "probe": _cmd_probe,
+        "local": _cmd_local,
+        "serve": _cmd_serve,
+        "audit": _cmd_audit,
+    }
     if args.command is None:
         parser.print_help(sys.stderr)
         return 2

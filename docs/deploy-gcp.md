@@ -396,6 +396,26 @@ Suggested thresholds: failed sign-ins > 20 / 5 min (a guessing run; the per-addr
 rate limits keep it small), **token replay > 0** (always worth a look), send failures > 3 / 10 min,
 rate-limit hits > 50 / 5 min, 5xx > 5 / 5 min. A metric counts from the moment it is created.
 
+### Looking at the log: the `audit` command
+
+Pipe a Cloud Logging export into `universal-email-mcp audit` (reference and options:
+[audit.md](audit.md#the-audit-command)). It runs on the operator's machine, reads only the
+export, and needs the pseudonym key only to turn an address into the pseudonym it should look
+for (read it from Secret Manager into a file or the environment, never into a command line):
+
+```bash
+SVC='resource.type="cloud_run_revision" AND resource.labels.service_name="SERVICE"'
+gcloud logging read "$SVC AND jsonPayload.event:*" --freshness=7d --limit=100000 --format=json \
+  > audit-export.json
+
+universal-email-mcp audit --since 7d audit-export.json               # what happened
+PSEUDONYM_KEY="$(gcloud secrets versions access latest --secret=uem-pseudonym-key)" \
+  universal-email-mcp audit --user alice@example.org audit-export.json   # what did Alice do
+universal-email-mcp audit pseudonym user alice@example.org             # for Logs Explorer filters
+```
+
+(The `PSEUDONYM_KEY=...` prefix puts the key into that one process's environment only.)
+
 ## 11. Upgrade and rollback
 
 Each deploy creates an immutable **revision** and by default sends 100 % of traffic to it

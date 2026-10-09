@@ -320,7 +320,7 @@ def _seconds(env: Mapping[str, str], var: str, default: timedelta, *, zero_ok: b
     return timedelta(seconds=value)
 
 
-def _read_key_material(env: Mapping[str, str], var: str) -> bytes | None:
+def read_key_material(env: Mapping[str, str], var: str) -> bytes | None:
     """A base64 secret from ``VAR`` or the file named by ``VAR_FILE``."""
     inline, path = _text(env, var), _text(env, var + "_FILE")
     if inline and path:
@@ -360,7 +360,7 @@ def _store(env: Mapping[str, str]) -> tuple[StoreSettings, bytes]:
             "or STORE_KEYS_FILE is required with the firestore backend",
             hint='Generate a key: python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"',
         )
-    pseudo = _read_key_material(env, "PSEUDONYM_KEY")
+    pseudo = read_key_material(env, "PSEUDONYM_KEY")
     if pseudo is None:
         if backend != "memory":
             raise _fail(

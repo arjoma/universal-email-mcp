@@ -90,5 +90,59 @@ production anyway). The audit state is process-global: one app per process.
 ## Operations
 
 Log-based metrics and alert examples: [deploy-gcp.md](deploy-gcp.md), section 10.
-An `universal-email-mcp audit` command that summarises Cloud Logging per pseudonymous user is
-planned for 0.1.0 (see `TODO.md`).
+Summaries and per-user questions: the `audit` command below.
+
+## The `audit` command
+
+`universal-email-mcp audit` summarises audit lines from files or stdin. It needs no server, no
+store and no network; it reads what the log already holds. Input can be raw audit lines
+(`{"event":...}`, one per line) or Cloud Logging exports: the JSON array of
+`gcloud logging read --format=json` (entries with `jsonPayload`; the entry `timestamp` is used
+when a line has no `ts`) or newline-delimited entries. Lines that are not audit events (access
+log, diagnostics) and lines that are not JSON are skipped and counted, never fatal.
+
+```bash
+# summary of the last day (per event and outcome, per tool with error rate and duration
+# buckets, sends, failed sign-ins per network pseudonym, rate-limit hits, time range)
+gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.event:*' \
+  --freshness=1d --format=json | universal-email-mcp audit --since 24h
+
+# what did one user do? the pseudonym is recomputed from PSEUDONYM_KEY
+export PSEUDONYM_KEY_FILE=/secure/pseudonym-key        # or: audit --key-file FILE
+universal-email-mcp audit --user alice@example.org --since 7d export.json
+universal-email-mcp audit --client "https://client.example/meta.json" --event 'send.*' export.json
+universal-email-mcp audit --account ACCOUNT_ID --grant GRANT_ID --json export.json
+
+# local mode (per-install key audit.key; there are no users): --local
+universal-email-mcp local 2> audit.log    # or whatever captures stderr
+universal-email-mcp audit --local --account Work audit.log
+
+# the pseudonym of a value, to build Logs Explorer or log-based metric filters
+universal-email-mcp audit pseudonym user alice@example.org      # u_3f9a1c2e7b4d
+universal-email-mcp audit pseudonym ip 203.0.113.7               # n_... (the /24 network)
+```
+
+Example filter from a pseudonym:
+`resource.type="cloud_run_revision" AND jsonPayload.user="u_3f9a1c2e7b4d" AND jsonPayload.event="tool.call"`.
+
+* Options: `--since` / `--until` (ISO time, a date, or relative `90m` `24h` `7d`; `--until` is
+  exclusive), `--event` (name or pattern such as `send.*`, repeatable), `--user ADDRESS`,
+  `--client`, `--account`, `--grant` (raw ids; hashed with the matching prefix), `--json`.
+  Kinds for `pseudonym`: `user client account grant identity approval ip`. Options go after
+  `audit` (and after `summary`, which is the optional default action).
+* **The key** is read from `PSEUDONYM_KEY` / `PSEUDONYM_KEY_FILE` (the operator variables, base64,
+  at least 32 bytes), from `--key-file FILE`, or with `--local` from the per-install
+  `audit.key`. It is never accepted as an argument value (it would show in the process list),
+  never printed, and only needed for the filters and `pseudonym`. Without a key the summary still
+  works on the pseudonyms as they are.
+* **Safe to paste.** The log is untrusted too: anyone who can write to it can forge lines. Every
+  value taken from it is cut to 48 characters, ANSI/OSC escape sequences are removed and control
+  or format characters (including bidi overrides) are replaced by `?` before anything is
+  printed, in text and in `--json`. Lines over 64 KiB are skipped, a counter keeps at most 500
+  distinct keys (the rest is `(other)`), and wrong types in any field are ignored.
+* An audit line is a JSON object with `event` like `area.name` and `message` equal to `event`.
+* **BigQuery** is out of scope for the command. For long-term analysis create a log sink to
+  BigQuery (`gcloud logging sinks create audit-bq bigquery.googleapis.com/projects/P/datasets/D
+  --log-filter='jsonPayload.event:*'`), query it with SQL, and export rows as JSON lines
+  (select the `json_payload` column, one object per line, `bq query --format=json`) and feed
+  them to this command if you want the same summary.

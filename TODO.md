@@ -408,9 +408,9 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       environment is already restricted to `v*` tags.
 
 ### WP 3h (audit log and activity feed)
-- [ ] `universal-email-mcp audit` CLI (M4): summarise Cloud Logging per pseudonymous user
-      (`--user alice@...` recomputes the pseudonym from `PSEUDONYM_KEY`), counts per tool, failed
-      sign-ins; optional BigQuery sink.
+- [ ] `audit` CLI leftovers: no BigQuery sink (documented export route only); no gzip input; a pretty-printed
+      single JSON object over several lines counts as malformed (arrays and NDJSON work); `--user`
+      cannot find users logged with a different `PSEUDONYM_KEY` (key rotation is not possible anyway).
 - [ ] Not in the user's feed yet: failed sign-ins (a record per arbitrary address would be a
       write-amplification hole; needs "only for existing users"), refresh-token reuse and
       authorization-code replay (the event has no user; look the grant up), rate-limit hits.
