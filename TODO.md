@@ -148,8 +148,9 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] `SendOut.attachments` reports no content types (file names and sizes only).
 
 ### POP3
-- [ ] No download links for POP3 attachments (the loopback/portal download reads
-      IMAP sections): a link would need RETR + parse under the size cap per request.
+- [ ] No download links for POP3 attachments in the *local* loopback listener (it reads
+      IMAP sections); the portal viewer handles POP3 by reading the whole message under
+      `limits.max_message_bytes`. A local link would need the same RETR + parse.
 - [ ] POP3 header cache lives in process memory only; a persistent cache (remote mode,
       store) would avoid re-reading `TOP` for the newest N after every restart.
 - [ ] POP3 `APOP` and SASL mechanisms other than `PLAIN` are not implemented (TLS is
@@ -306,8 +307,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Measure how Claude Code, Claude Desktop and claude.ai handle embedded blob
       resources and image content (part of the client matrix) and tune the default
       `limits.max_attachment_bytes` (now 2 MiB).
-- [ ] Portal download endpoint (3g): the same streaming (`service/downloads.py`:
-      `open_part` / `iter_part`) behind a portal session instead of a per-run token.
 - [ ] Downloads of 8bit/binary parts with NUL bytes or bare LF: plain `BODY[n]`
       fetches may normalise them (Dovecot turns NUL into 0x80, LF into CRLF); the IMAP
       `BINARY` extension (`BINARY.PEEK[n]`) would deliver them exactly.
@@ -340,8 +339,16 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] JMAP backend.
 - [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
 - [ ] Label management: rename / move / delete folders later (list and create exist).
-- [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
-      raw headers, `.eml` and attachment downloads in the authenticated portal.
+- [ ] Message viewer follow-ups (3g shipped the core): "all attachments as ZIP" (needs a
+      streaming zip writer over `iter_part`); `Content-Length` for base64/QP downloads
+      (responses are chunked); message text beyond `limits.max_body_chars` (the page says to
+      take the `.eml`); a per-user rate limit for viewer requests (only the parallel-call cap
+      applies); a decoded (RFC 2047) toggle for the raw header view.
+- [ ] Viewer account names: the viewer context names accounts in creation order while a
+      grant's context uses the grant's order; they only differ for names the pool rewrites
+      (invalid characters -> "Account N", duplicate names -> "(2)"). Message ids of such
+      accounts may not resolve in the viewer; store the account id in the id (or enforce the
+      same naming in the portal) when it matters.
 
 ### Repository
 - [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,

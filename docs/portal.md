@@ -76,6 +76,82 @@ nothing secret is carried along (a half-filled form is lost, never a password).
 Wrong passwords count against the same limits as sign-in (5 failures per address and 15
 minutes).
 
+## Message viewer
+
+Every message in a tool result of remote mode carries a link into the portal,
+`PUBLIC_URL/m/<message id>`, and every attachment and the `.eml` have one too
+(`/m/<id>/a/<part>`, `/m/<id>/eml`). The user clicks it in the chat and sees the mail in the
+browser without opening a mail client. The links contain **no token**: opening one needs a
+portal session (a signed-out visitor is sent to sign-in and comes back to the message), and
+the message must belong to one of the **signed-in user's own accounts** that grants `read`.
+
+| Page | Content |
+|---|---|
+| `/m/<id>` | from / to / cc / reply-to / date / account, the text body, the attachment list with a download link each. `?view=html` shows the formatted (HTML) version in a sandbox (below). |
+| `/m/<id>/thread` | the conversation, oldest first, each message expandable (text of up to 25 messages; more are linked). |
+| `/m/<id>/headers` | every header line as the server delivers it, with the authentication results (`Authentication-Results`, `Received-SPF`, ...) first. |
+| `/m/<id>/eml` | the raw RFC 822 message as a download. |
+| `/m/<id>/a/<part>` | one attachment, streamed from the mail server. |
+
+**Ownership.** The id names an account by the name its owner gave it. It is resolved inside a
+per-user context that holds only that user's accounts (from the store, by user id) with the
+`read` permission, so another user's id, a removed account, a forged id with a guessed account
+name and an unreadable account all end in the same "cannot be shown" page (404) as a message
+that was deleted - ids cannot be probed. A forged id that happens to name an account the user
+also has can only ever reach the user's own mail.
+
+**Nothing is marked as read.** The folder is opened read-only and bodies are fetched with
+`BODY.PEEK`.
+
+**HTML mail in a sandbox.** Mail HTML is attacker-controlled. It is shown only in an `iframe`
+with `sandbox="allow-popups allow-popups-to-escape-sandbox"` (no scripts, no same-origin) whose
+document comes from a separate route with its own CSP:
+
+* `default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none';
+  form-action 'none'; frame-ancestors <the portal>; sandbox ...` - no script, frame, font,
+  media, connection or form source at all.
+* The HTML is cleaned with an allow-list sanitizer (`nh3`, the Python binding of the Rust
+  `ammonia` library): only formatting, table and image tags; no `script`, `style`, `link`,
+  `meta`, `base`, `form`, `iframe`, `object`, `svg`; no event handlers, `class` or `id`;
+  relative URLs and every scheme except `http`, `https`, `mailto` and `tel` on links are
+  dropped. `<style>` blocks are not kept; `style` attributes pass an own filter (about 70
+  presentation properties, values without `url()`, escapes, comments or any function except
+  colours and `calc`), so there is no CSS exfiltration even without the CSP. Input nested
+  deeper than 400 levels is refused (the sanitizer is quadratic in the depth); the page then
+  shows the text version.
+* **Images**: `cid:` references become `data:` URIs of the message's own raster images (PNG,
+  JPEG, GIF, WebP; never SVG; 2 MiB each, 8 MiB in all). Remote (`https:`) images are **not
+  loaded**: the page says how many there are and offers "Load remote images", an explicit click
+  that reloads this one view with `img-src data: https:`. The next view blocks them again.
+  `http:` images are never loaded.
+* **Links** open in a new tab with `rel="noopener noreferrer"`; below the frame the page lists
+  the link targets, defanged (`hxxps[:]//...`) so they cannot be clicked there.
+
+With **`CONTENT_ORIGIN`** (recommended) the document is served from another host name instead:
+the iframe points to `CONTENT_ORIGIN/c/<token>`, where the token is a signed, ten minute address
+(user, message, image choice) because that origin never sees the portal cookie. Even a sandbox
+escape then lacks the portal's origin. Without it the document is served from the portal's own
+origin at `/m/<id>/html` (still sandboxed by the frame attribute and by the response's own
+`sandbox` CSP). See [operator-env.md](operator-env.md).
+
+**Downloads.** Attachments and the `.eml` are served with `Content-Disposition: attachment`
+(the file name is cleaned to ASCII plus an RFC 5987 form; no line break or quote can get
+into a header), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
+default-src 'none'; frame-ancestors 'none'`, `Cache-Control: no-store`, and a content type
+from the passive allow-list (`application/pdf`, archives, office documents, audio/video);
+everything else - HTML, SVG, XML, scripts, any text type - is sent as
+`application/octet-stream`. They use the same building blocks as the local download listener:
+the part is looked up in the **server's** `BODYSTRUCTURE`, then read chunk by chunk (256 KiB per
+request, transfer encoding undone incrementally), never buffered whole; the size limit is
+`UEM_MAX_DOWNLOAD_BYTES` (default 100 MiB). Base64 and quoted-printable parts have no known
+decoded length in advance, so those responses are chunked. POP3 has no server-side parts: there
+the message is read as a whole (up to `UEM_MAX_MESSAGE_BYTES`).
+
+Audit events: `viewer.open` (kind message or thread, whether HTML was shown, attachment count,
+size bucket), `viewer.raw` (headers; `.eml` with size bucket) and `attachment.download`
+(size bucket, content-type family, whether the stream completed) - pseudonymous user, no names,
+subjects or content.
+
 ## Language
 
 Templates contain no literal text; everything goes through the translation layer
@@ -88,7 +164,9 @@ appears in the footer (it sets the `uem_lang` cookie). Order: cookie, `Accept-La
 
 * CSP `default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self';
   frame-ancestors 'none'` - no scripts at all; `no-store`; `__Host-` `Secure` `HttpOnly`
-  `SameSite=Lax` cookies (dropped only for a plain-http loopback `PUBLIC_URL`).
+  `SameSite=Lax` cookies (dropped only for a plain-http loopback `PUBLIC_URL`). The viewer's
+  pages additionally allow one frame (`frame-src 'self'` or the content origin); everything
+  else stays script-free.
 * Every `POST` carries a CSRF token (double submit) and is refused when the browser says
   `Sec-Fetch-Site: cross-site`. Reads never change anything. `Host` and `Origin` are checked
   for the whole app; the portal and `/authorize` answer no preflight and send no CORS headers.

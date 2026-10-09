@@ -228,7 +228,10 @@ manage sender identities, see the connected AI clients and disconnect or reduce 
 ([`docs/portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md)).
 `/mcp` serves each user's own accounts from the store with exactly the tools the client's
 grant allows (read, organize, delete, drafts); sending from remote mode follows with a later
-work package. How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
+work package. Messages in tool results link to a **message viewer** in the portal
+(`PUBLIC_URL/m/<id>`: text, HTML in a sandbox with no remote content unless clicked, conversation,
+raw headers, `.eml`, attachment downloads streamed from the mail server; the portal session
+authorises, no tokens in the links). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
 all variables: [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md).
 
 ```bash
