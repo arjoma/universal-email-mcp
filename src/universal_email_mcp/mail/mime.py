@@ -28,20 +28,21 @@ from universal_email_mcp.models import Address, Attachment, TextSlice
 
 # --------------------------------------------------------------------------- text hygiene
 
-# Zero-width, bidi overrides/isolates, invisible separators, tag characters, BOM …
 # Zero-width, bidi overrides/isolates, invisible separators and fillers (Hangul),
 # variation selectors (incl. the supplement U+E0100–E01EF, which can smuggle one
 # byte per character), tag characters, BOM, interlinear annotations, shorthand and
 # musical format controls. U+2028/2029 are handled as line breaks.
+# Raw strings: the regex engine reads the escapes, the source holds no literal
+# control or astral characters.
 _INVISIBLE = re.compile(
-    "[\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f"
-    "\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0"
-    "\ufff9-\ufffb\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
-    "\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
+    r"[\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f"
+    r"\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0"
+    r"\ufff9-\ufffb\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+    r"\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
 )
-_LINE_SEP = re.compile("[\u2028\u2029\x85]")
-_CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
-_CONTROL_ALL = re.compile("[\x00-\x1f\x7f-\x9f]")
+_LINE_SEP = re.compile(r"[\u2028\u2029\x85]")
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+_CONTROL_ALL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def sanitize_text(text: str) -> str:

@@ -223,3 +223,50 @@ def test_deeply_nested_mime_degrades_to_unparseable():
     m = parse_message(raw)
     assert m.text_source == "unparseable" and m.text == "" and m.attachments == ()
     assert m.headers.subject == "deep"
+
+
+def _ranges(*spans: tuple[int, int]) -> set[int]:
+    return {c for lo, hi in spans for c in range(lo, hi + 1)}
+
+
+ALL_CODE_POINTS = "".join(map(chr, range(0x110000)))
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (
+            "_INVISIBLE",
+            _ranges(
+                (0xAD, 0xAD),
+                (0x34F, 0x34F),
+                (0x61C, 0x61C),
+                (0x115F, 0x1160),
+                (0x17B4, 0x17B5),
+                (0x180B, 0x180F),
+                (0x200B, 0x200F),
+                (0x202A, 0x202E),
+                (0x2060, 0x2064),
+                (0x2066, 0x206F),
+                (0x3164, 0x3164),
+                (0xFE00, 0xFE0F),
+                (0xFEFF, 0xFEFF),
+                (0xFFA0, 0xFFA0),
+                (0xFFF9, 0xFFFB),
+                (0x1BCA0, 0x1BCA3),
+                (0x1D173, 0x1D17A),
+                (0xE0000, 0xE007F),
+                (0xE0100, 0xE01EF),
+            ),
+        ),
+        ("_LINE_SEP", {0x85, 0x2028, 0x2029}),
+        ("_CONTROL", _ranges((0x00, 0x08), (0x0B, 0x0C), (0x0E, 0x1F), (0x7F, 0x9F))),
+        ("_CONTROL_ALL", _ranges((0x00, 0x1F), (0x7F, 0x9F))),
+    ],
+)
+def test_hygiene_classes_match_exactly_the_intended_code_points(name: str, expected: set[int]):
+    """Pins the character classes over all of Unicode (they are written as escapes)."""
+    import universal_email_mcp.mail.mime as mime
+
+    pattern = getattr(mime, name)
+    assert {ord(c) for c in pattern.findall(ALL_CODE_POINTS)} == expected
