@@ -23,9 +23,14 @@ log = logging.getLogger(__name__)
 async def serve_stdio(config: Config) -> None:
     router = AccountRouter(config)
     downloads = LocalDownloads(router, config.downloads) if config.downloads.enabled else None
-    if downloads is not None and not await downloads.start():
-        downloads = None
-    service = MailService(config, router=router, download_links=downloads)
+    status = "off (disabled in the config)"
+    if downloads is not None:
+        started = await downloads.start()
+        status = downloads.status()
+        if not started:
+            log.warning("attachment download links are %s", status)
+            downloads = None
+    service = MailService(config, router=router, download_links=downloads, download_status=status)
     server = build_server(service)
     log.info("serving %d account(s) over stdio", len(config.accounts))
     try:

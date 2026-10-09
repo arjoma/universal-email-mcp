@@ -286,6 +286,7 @@ def test_batch_limit_default_and_override():
     cfg = parse_config({"accounts": [], "limits": {"max_batch_messages": 7}})
     assert cfg.limits.max_batch_messages == 7
 
+
 def test_downloads_defaults_and_overrides():
     from universal_email_mcp.config import Downloads, parse_config
 

@@ -355,6 +355,9 @@ class Links:
     def attachment_url(self, ref: MessageRef, section: str) -> str | None:
         return f"https://mail.example.test/dl/{ref.encode()}/{section}?t=abc"
 
+    def message_url(self, ref: MessageRef) -> str | None:
+        return None
+
 
 async def test_download_link_provider(box: Box):
     async with connect(box.config(max_attachment_bytes=100_000), download_links=Links()) as c:

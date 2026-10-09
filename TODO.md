@@ -8,8 +8,6 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       `limits.max_attachment_bytes` (now 2 MiB).
 - [ ] Portal download endpoint (3g): the same streaming (`service/downloads.py`:
       `open_part` / `iter_part`) behind a portal session instead of a per-run token.
-- [ ] `.eml` download of the whole message (`BODY.PEEK[]`, a `/m/<token>` route) in
-      local mode; needs a section-less variant of `locate_part` / `read_part_chunk`.
 - [ ] Downloads of 8bit/binary parts with NUL bytes or bare LF: plain `BODY[n]`
       fetches may normalise them (Dovecot turns NUL into 0x80, LF into CRLF); the IMAP
       `BINARY` extension (`BINARY.PEEK[n]`) would deliver them exactly.

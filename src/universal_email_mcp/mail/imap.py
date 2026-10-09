@@ -1254,7 +1254,7 @@ class ImapSession:
         of the selected folder (``BODY.PEEK``: never sets ``\\Seen``). Call
         :meth:`locate_part` first and pass its ``section``; ranged so a streaming
         download can read in chunks."""
-        if not SECTION_RE.match(section) or offset < 0 or length < 1:
+        if not (section == "" or SECTION_RE.match(section)) or offset < 0 or length < 1:
             raise AttachmentNotFound("invalid part range")
         item = f"BODY.PEEK[{section}]<{offset}.{length}>"
         got = self._fetch_raw([ref.uid], ["UID", item]).get(ref.uid)
@@ -1265,10 +1265,20 @@ class ImapSession:
                 return value
         return b""
 
+    def locate_message(self, ref: MessageRef) -> int:
+        """Size in octets of the whole message (for the ``.eml`` download); read it
+        with ``read_part_chunk(ref, "", ...)``."""
+        wire, _current = self._open_message(ref)
+        got = self._fetch_raw([ref.uid], ["UID", "RFC822.SIZE"]).get(ref.uid)
+        if got is None:
+            raise MessageNotFound(f"message {ref.uid} not found in {decode_folder_name(wire)!r}")
+        return int(got.get(b"RFC822.SIZE") or 0)
+
     def read_part_chunk(self, ref: MessageRef, section: str, offset: int, length: int) -> bytes:
         """One self-contained chunk of a streamed download: re-selects the folder
         (another call may have used the session since the last chunk), re-checks
-        account and UIDVALIDITY, then :meth:`read_part_range`. A message that is gone
+        account and UIDVALIDITY, then :meth:`read_part_range` (``section=""`` = the whole
+        message). A message that is gone
         raises :class:`MessageNotFound`."""
         self._open_message(ref)
         return self.read_part_range(ref, section, offset, length)

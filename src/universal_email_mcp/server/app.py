@@ -530,6 +530,7 @@ def build_server(service: MailService) -> MCPServer:
             account_timeout=lim.account_timeout,
             max_headers_scanned=lim.max_headers_scanned,
             max_batch_messages=lim.max_batch_messages,
+            download_links=service.download_status,
         )
         data = AccountInfoOut(
             accounts=out_accounts, identities=idents, policy=policy, problems=_problems(problems)
@@ -570,6 +571,7 @@ def build_server(service: MailService) -> MCPServer:
             policy.tools,
             f"max {lim.max_results} results/call",
             f"{lim.account_timeout:g} s per account",
+            f"download links: {service.download_status}",
             *_problem_notes(problems),
         ]
         parts.append(render.footer(foot))
@@ -906,6 +908,7 @@ def build_server(service: MailService) -> MCPServer:
                 AttachmentOut.of(a, service.attachment_url(s.ref, a.part_id))
                 for a in msg.attachments
             ],
+            eml_url=service.message_url(s.ref),
             source_truncated=msg.source_truncated,
             notes=list(msg.body_notes),
         )
@@ -939,6 +942,8 @@ def build_server(service: MailService) -> MCPServer:
         ]
         if item.viewer_url:
             fields.append(["Link", render.server_link("open in viewer", item.viewer_url)])
+        if data.eml_url:
+            fields.append([".eml", render.server_link("download .eml", data.eml_url)])
         parts = [markdown_table(["Field", "Value"], fields)]
         if msg.attachments:
             links = [service.attachment_url(s.ref, a.part_id) for a in msg.attachments]
