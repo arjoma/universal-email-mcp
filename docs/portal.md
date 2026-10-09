@@ -240,10 +240,32 @@ signed-in user's entries. The text is translatable like every other page. Detail
 ## Language
 
 Templates contain no literal text; everything goes through the translation layer
-(`portal/i18n.py`). English ships. A language is a JSON catalog in `portal/locales/<code>.json`
-mapping English text to translation; as soon as there is more than one language a switch
-appears in the footer (it sets the `uem_lang` cookie). Order: cookie, `Accept-Language`,
-`UEM_DEFAULT_LANGUAGE`, English.
+(`portal/i18n.py`). **English and German ship.** A language is a JSON catalog in
+`portal/locales/<code>.json` mapping the English text (the message id) to its translation;
+with more than one language a switch appears in the footer (it sets the `uem_lang` cookie).
+Order: cookie, `Accept-Language` (`de-AT` finds `de`), `UEM_DEFAULT_LANGUAGE`, English.
+The operator sets the default for visitors without a preference, for example
+`UEM_DEFAULT_LANGUAGE=de`; the user's own choice always wins.
+
+* **German** addresses the user formally ("Sie"). Terms: mail account = *E-Mail-Konto*
+  (the provider-side mailbox = *Postfach*), connected application = *verbundene Anwendung*,
+  approval = *Freigabe*, sender identity = *Absenderidentität*, permissions = *Berechtigungen*,
+  draft = *Entwurf*, sign in = *anmelden*.
+* **Times** are written `2026-10-09 14:30 UTC` in English and `09.10.2026 14:30 UTC` in German:
+  the format string is itself a message id (`%Y-%m-%d %H:%M UTC`).
+* **Sentences built by the service layer** (the recipient notes and warnings on the approval
+  page, the notes under a message) are shared with the English tool output for the AI client,
+  so they are translated by pattern in `portal/dynamic.py` (`DYNAMIC_MESSAGES`, with
+  `%(name)s` holes) via the `|tr` filter. A text no pattern fits stays English. Tool results,
+  server instructions, logs and error codes are never translated.
+* **Add a language** `xx`: create `portal/locales/xx.json` (copy the ids from
+  `extract_messages()`; keep the `%(name)s` placeholders and HTML tags exactly), add its
+  name to `LANGUAGE_NAMES` if missing, and write a test like `tests/test_portal_i18n_de.py`.
+  English plural pairs are two ids (`%(n)s day` / `%(n)s days`); the catalog picks the
+  first for exactly 1, the second otherwise.
+* **Keep it complete:** `tests/test_portal_i18n_de.py::test_german_catalog_is_complete` fails with
+  the list of missing (or stale) ids whenever a template or `DYNAMIC_MESSAGES` changes without
+  `de.json`; further tests check placeholders, formality and that every page renders in German.
 
 ## Security notes
 

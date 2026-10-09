@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- German translation of the whole end-user UI (portal, sign-in, consent, message viewer,
+  approvals): formal "Sie", chosen by cookie, `Accept-Language` (`de-AT` works) or the
+  operator's `UEM_DEFAULT_LANGUAGE`; the language switch now appears in the footer. Times
+  follow the language (`09.10.2026 14:30 UTC`); notes the service layer builds (recipient
+  warnings on the approval page, viewer notes) are translated by pattern. A completeness test
+  lists missing German ids after any UI change (`docs/portal.md#language`).
+
 ### Changed
 
 - Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a

@@ -47,8 +47,7 @@ DYNAMIC_MESSAGES: tuple[str, ...] = (
     "... %(n)s more characters of the HTML version NOT shown",
     "... %(n)s more characters of this part NOT shown",
     "... %(n)s more text part(s) NOT shown",
-    "HTML version (differs from the text above - recipients with an HTML mail client "
-    "read this):",
+    "HTML version (differs from the text above - recipients with an HTML mail client read this):",
     "HTML version (the message has no plain text part - recipients read this):",
     "Additional text part %(n)s (%(kind)s):",
     "! The HTML version loads %(n)s remote image(s): they can tell the sender when and where "
