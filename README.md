@@ -258,6 +258,11 @@ uv run universal-email-mcp serve --config config.local.toml --host 127.0.0.1 --p
 claude mcp add --transport http email http://localhost:8080/mcp --header "Authorization: Bearer $UEM_DEV_TOKEN"
 ```
 
+**Reading the audit log**: `universal-email-mcp audit` summarises audit lines (files, stdin or a
+`gcloud logging read --format=json` export): per tool, failed sign-ins, sends, one user or client
+(`--user alice@example.org` recomputes the pseudonym from `PSEUDONYM_KEY`). See
+[`docs/audit.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/audit.md).
+
 ## Remote mode: stored data
 
 Remote mode keeps users, accounts, sessions and tokens in a store (memory or Firestore,

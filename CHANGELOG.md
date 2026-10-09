@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recent password entry, the typed address and the CSRF token; revokes every grant and token
   first, then removes all records of the user and closes their pooled mail connections).
   Audit events `portal.export` and `portal.delete_all`.
+- `universal-email-mcp audit`: summarises audit lines from files or stdin (raw lines, Cloud Logging
+  JSON arrays or NDJSON) per event, tool (error rate, duration buckets), send outcome, failed
+  sign-in network and rate-limit scope; filters `--user ADDRESS` (pseudonym recomputed from
+  `PSEUDONYM_KEY`, `--key-file` or `--local`), `--client`, `--account`, `--grant`, `--event`,
+  `--since`/`--until`, `--json`; `audit pseudonym KIND VALUE` prints a pseudonym for log filters.
+  Values from the log are sanitised before printing; the key is never printed or taken as an
+  argument value.
 - Own-activity feed and the portal page **Activity** (`/portal/activity`): the user's recent
   events in plain words - sign-in, connecting and disconnecting applications, account and
   identity changes, what applications did (a `tool.call` audit event per MCP tool call in OAuth

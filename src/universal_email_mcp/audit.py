@@ -368,9 +368,24 @@ def duration_bucket(seconds: float) -> str:
     return ">=30s"
 
 
-def _pseudo(prefix: str, raw: str) -> str:
-    mac = hmac.new(_state.key, f"uem-audit-v1\0{prefix}\0{raw}".encode(), hashlib.sha256)
+def pseudonym(prefix: str, raw: str, key: bytes | None = None) -> str:
+    """The logged pseudonym of ``raw`` in namespace ``prefix`` (``c``, ``a``, ``g``, ``i``,
+    ``p``, ``n``); ``key`` defaults to the configured one. Used by the ``audit`` CLI."""
+    mac = hmac.new(
+        _state.key if key is None else key,
+        f"uem-audit-v1\0{prefix}\0{raw}".encode(),
+        hashlib.sha256,
+    )
     return f"{prefix}_{mac.hexdigest()[:12]}"
+
+
+def _pseudo(prefix: str, raw: str) -> str:
+    return pseudonym(prefix, raw)
+
+
+def network_of(raw: str) -> str | None:
+    """The network (IPv4 /24, IPv6 /48) whose pseudonym is logged for ``raw``."""
+    return _network(raw)
 
 
 def _network(raw: str) -> str | None:
