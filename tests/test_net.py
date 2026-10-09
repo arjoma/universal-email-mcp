@@ -49,6 +49,7 @@ BLOCKED = [
     "64:ff9b::a00:1",  # NAT64 → 10.0.0.1
     "2002:a00:1::1",  # 6to4 → 10.0.0.1
     "2001:db8::1",  # documentation
+    "fec0::1",  # deprecated site-local
 ]
 PUBLIC = ["8.8.8.8", "1.1.1.1", "185.199.108.153", "2a00:1450:4001:80b::200e", "64:ff9b::808:808"]
 
@@ -255,3 +256,16 @@ def test_tls_context_defaults():
     assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
     off = tls_context(verify=False)
     assert off.verify_mode == ssl.CERT_NONE and not off.check_hostname
+
+
+def test_portal_free_entry_policy_is_public_only_even_if_operator_allows_private():
+    from unittest.mock import MagicMock
+
+    from universal_email_mcp.portal.service import PortalService
+
+    ps = PortalService(
+        oauth=MagicMock(), mail_servers=(), tester=MagicMock(), net=NetPolicy(allow_private=True)
+    )
+    assert ps.net.allow_private
+    assert not ps.custom_net.allow_private
+    assert ps.custom_net.allowed_ports is not None

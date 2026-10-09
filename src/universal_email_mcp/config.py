@@ -154,9 +154,11 @@ class Config:
                 return ident
         return None
 
-    def net_policy(self) -> NetPolicy:
+    def net_policy(self, account: Account | None = None) -> NetPolicy:
+        """Connection rules; an account whose host a user typed in is public-only."""
         return NetPolicy(
-            allow_private=self.settings.allow_private_networks,
+            allow_private=self.settings.allow_private_networks
+            and not (account is not None and account.public_only),
             connect_timeout=self.settings.connect_timeout,
             read_timeout=self.settings.read_timeout,
         )

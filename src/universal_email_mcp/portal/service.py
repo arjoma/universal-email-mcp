@@ -40,7 +40,9 @@ class PortalService:
 
     @property
     def custom_net(self) -> NetPolicy:
-        return replace(self.net, allowed_ports=CUSTOM_PORTS)
+        """Free entry: a host a user typed in is public-only, whatever the operator allows
+        for the servers they listed (``UEM_ALLOW_PRIVATE_NETWORKS``)."""
+        return replace(self.net, allow_private=False, allowed_ports=CUSTOM_PORTS)
 
     def known_profiles(self) -> tuple[ServerProfile, ...]:
         """Server profiles an account's ``preset`` can refer to."""

@@ -121,6 +121,20 @@ def test_config_uses_only_own_granted_records_and_hides_passwords():
     assert cfg.accounts[0].credential.secret == "pw-Work-SECRET"
 
 
+def test_free_entry_accounts_are_public_only_even_when_private_networks_are_allowed():
+    free = record("alice", "Free", perms=("read",))
+    listed = record("alice", "Listed", perms=("read",), preset="united-domains")
+    op = operator()
+    op = replace(op, settings=replace(op.settings, allow_private_networks=True))
+    cfg, _ = build_user_config(
+        op, principal("alice", {free.id: "read", listed.id: "read"}), [free, listed], []
+    )
+    assert cfg.account("Free").public_only
+    assert not cfg.account("Listed").public_only
+    assert not cfg.net_policy(cfg.account("Free")).allow_private
+    assert cfg.net_policy(cfg.account("Listed")).allow_private
+
+
 def test_identities_follow_grant_and_drafts_accounts():
     acc = record("alice", "Work", perms=("read", "drafts"))
     ro = record("alice", "Ro", perms=("read",))

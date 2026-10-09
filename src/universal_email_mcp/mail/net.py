@@ -17,11 +17,15 @@ container is legitimate there); remote mode keeps the default ``False``.
 
 from __future__ import annotations
 
+import contextvars
 import ipaddress
+import os
 import socket
 import ssl
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from types import TracebackType
 
 from universal_email_mcp.errors import AddressNotAllowed, ServerUnreachable, TlsError
 
@@ -42,6 +46,11 @@ class NetPolicy:
     """``None`` = any port; remote free entry uses ``{993, 995, 465, 587}``."""
     connect_timeout: float = 15.0
     read_timeout: float = 60.0
+    total_timeout: float = 120.0
+    """Absolute budget of one connect (TLS, STARTTLS, login) or one one-shot operation
+    (portal test, sign-in check, SMTP submit): a :class:`Deadline` shuts the sockets
+    down when it runs out, however slowly a hostile server trickles bytes (every
+    single read would stay inside ``read_timeout``)."""
 
 
 def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
@@ -73,6 +82,8 @@ def is_public_address(ip: IPAddress) -> bool:
     if ip.is_link_local or ip.is_private or not ip.is_global:
         return False
     if isinstance(ip, ipaddress.IPv6Address):
+        if ip.is_site_local:  # fec0::/10 (deprecated; not covered by is_private)
+            return False
         inner = _embedded_ipv4(ip)
         if inner is not None and not is_public_address(inner):
             return False
@@ -125,6 +136,107 @@ def resolve_checked(
     return addrs
 
 
+_current_deadline: contextvars.ContextVar[Deadline | None] = contextvars.ContextVar(
+    "uem_net_deadline", default=None
+)
+
+
+class Deadline:
+    """Absolute deadline for the blocking mail I/O of one thread.
+
+    ``with Deadline(seconds):`` in a worker thread; every socket that
+    :func:`open_connection` opens inside the block is registered, and a watchdog timer
+    shuts them all down when the time is up (also while a TLS handshake or a slow
+    read is blocked - per-read socket timeouts alone never fire against a server
+    that trickles a byte at a time). The blocked call then fails with an ordinary
+    ``OSError``/EOF, the thread is free again, and :attr:`expired` tells why.
+
+    Sockets are tracked through a ``dup`` of their descriptor, so the registration
+    survives ``wrap_socket`` (which detaches the plain socket object) and STARTTLS,
+    and a descriptor number reused elsewhere can never be hit by mistake.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        self._seconds = seconds
+        self._lock = threading.Lock()
+        self._socks: list[socket.socket] = []
+        self._timer: threading.Timer | None = None
+        self._token: contextvars.Token[Deadline | None] | None = None
+        self.expired = False
+        self._done = False
+
+    def __enter__(self) -> Deadline:
+        self._token = _current_deadline.set(self)
+        timer = threading.Timer(self._seconds, self.expire)
+        timer.daemon = True
+        self._timer = timer
+        timer.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.cancel()
+        if self._token is not None:
+            _current_deadline.reset(self._token)
+            self._token = None
+
+    def watch(self, sock: socket.socket) -> None:
+        """Track ``sock`` (it is shut down on expiry)."""
+        try:
+            twin = socket.socket(fileno=os.dup(sock.fileno()))
+        except (OSError, ValueError):
+            return
+        with self._lock:
+            if self._done:
+                twin.close()
+                return
+            self._socks.append(twin)
+            expired = self.expired
+        if expired:
+            _shutdown_quietly(twin)
+
+    def expire(self) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self.expired = True
+            socks = list(self._socks)
+        for s in socks:
+            _shutdown_quietly(s)
+
+    def cancel(self) -> None:
+        """Stop the watchdog and release the tracking duplicates (the real sockets stay)."""
+        with self._lock:
+            self._done = True
+            socks, self._socks = self._socks, []
+            timer = self._timer
+        if timer is not None:
+            timer.cancel()
+        for s in socks:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def _shutdown_quietly(sock: socket.socket) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
+def _watch(sock: socket.socket) -> Deadline | None:
+    deadline = _current_deadline.get()
+    if deadline is not None:
+        deadline.watch(sock)
+    return deadline
+
+
 def open_connection(
     host: str, port: int, policy: NetPolicy, resolver: Resolver | None = None
 ) -> socket.socket:
@@ -138,6 +250,9 @@ def open_connection(
         family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
         try:
+            deadline = _watch(sock)
+            if deadline is not None and deadline.expired:
+                raise TimeoutError("deadline exceeded")
             sock.settimeout(policy.connect_timeout)
             sock.connect((str(ip), port))
             sock.settimeout(policy.read_timeout)
