@@ -100,6 +100,7 @@ FIELDS: dict[str, str] = {
     "dur": "tok",
     "error": "tok",
     "recipients": "counts",
+    "deleted": "counts",
     "accounts": "int",
     "grants": "int",
     "identities": "int",
@@ -172,6 +173,8 @@ EVENTS: dict[str, Spec] = {
     "portal.identity_test": _s("identity", severity="outcome", feed=True),
     "portal.grant_edit": _s("grant", "scope", feed=True),
     "portal.grant_revoke": _s("grant", feed=True),
+    "portal.export": _s("accounts", "identities", "grants", feed=True),
+    "portal.delete_all": _s("deleted"),  # no feed: the user's feed is deleted with them
     # --- tool calls (OAuth mode)
     "tool.call": _s(
         "tool",

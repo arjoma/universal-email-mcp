@@ -23,7 +23,8 @@ class Record:
     KIND: ClassVar[str]
     SEALED: ClassVar[tuple[str, ...]] = ()
     EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ()
-    """Fields left out of ``export_user`` (credentials, token digests)."""
+    """Fields left out of ``export_user`` (credentials, token digests). ``id`` is exported
+    unless listed: it must be listed whenever the id is a digest of a bearer secret."""
 
     id: str
     version: int = 0
@@ -45,6 +46,7 @@ class User(Record):
 
     KIND: ClassVar[str] = "users"
     SEALED: ClassVar[tuple[str, ...]] = ("primary_address", "settings")
+    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("id",)
 
     primary_address: str = field(repr=False)
     settings: dict[str, Any] = field(default_factory=dict[str, Any], repr=False)
@@ -255,7 +257,7 @@ class PendingApproval(Record):
 
     KIND: ClassVar[str] = "approvals"
     SEALED: ClassVar[tuple[str, ...]] = ("draft_ref",)
-    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("draft_ref",)
+    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("draft_ref", "content_hash")
 
     user_id: str
     grant_id: str
@@ -303,3 +305,16 @@ ALL_RECORDS: tuple[type[Record], ...] = (
 )
 USER_OWNED: tuple[type[Record], ...] = tuple(r for r in ALL_RECORDS if r not in (User, OAuthClient))
 """Record types carrying a ``user_id`` field."""
+
+DELETE_ORDER: tuple[type[Record], ...] = (
+    Grant,  # first: access and refresh tokens stop working at once (their grant is gone)
+    Token,
+    AuthCode,
+    PendingApproval,  # also the send markers
+    PortalSession,
+    MailAccount,
+    Identity,
+    ActivityEntry,
+)
+"""The order in which ``Store.delete_user`` removes the user's records (the user record
+itself goes last). Must list exactly :data:`USER_OWNED`; a test enforces it."""

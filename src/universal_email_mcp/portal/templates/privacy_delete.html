@@ -1,0 +1,24 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Delete all my data") }}{% endblock %}
+{% block heading %}{{ _("Delete all my data?") }}{% endblock %}
+{% block body %}
+<p>{{ _("The following is removed for good, and all connected applications stop working at once:") }}</p>
+<ul>
+  <li>{{ _("your mail accounts, with their stored logins") }}</li>
+  <li>{{ _("your sender identities") }}</li>
+  <li>{{ _("your connected applications and their access keys") }}</li>
+  <li>{{ _("your activity, pending approvals and sign-in sessions") }}</li>
+  <li>{{ _("your user record") }}</li>
+</ul>
+<p>{{ _("Your mail at your provider is not touched. You can download your data first.") }}</p>
+{% if error == "confirm" %}<p class="error" role="alert">{{ _("The address does not match, so nothing was deleted.") }}</p>{% endif %}
+<form method="post" action="/portal/privacy/delete">
+  {{ m.csrf() }}
+  <label for="confirm">{% trans address=address %}To confirm, type your sign-in address ({{ address }}).{% endtrans %}</label>
+  <input id="confirm" name="confirm" type="text" autocomplete="off" required maxlength="320">
+  <div class="buttons">
+    <button type="submit" class="danger">{{ _("Delete everything") }}</button>
+    <a class="button" href="/portal/privacy">{{ _("Cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

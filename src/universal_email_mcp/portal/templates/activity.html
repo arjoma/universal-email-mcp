@@ -33,6 +33,7 @@
         {%- elif e.event == "portal.identity_edit" %}{{ _("You changed a sender identity.") }}
         {%- elif e.event == "portal.identity_remove" %}{{ _("You removed a sender identity.") }}
         {%- elif e.event == "portal.identity_test" %}{{ _("You tested a sender identity.") }}
+        {%- elif e.event == "portal.export" %}{{ _("You exported your data.") }}
         {%- elif e.event == "tool.call" %}
           {%- if e.tool == "find_messages" %}{% trans client=client, count=e.calls %}{{ client }} searched your mail once.{% pluralize count %}{{ client }} searched your mail {{ count }} times.{% endtrans %}
           {%- elif e.tool == "get_message" %}{% trans client=client, count=e.calls %}{{ client }} read a message once.{% pluralize count %}{{ client }} read messages {{ count }} times.{% endtrans %}

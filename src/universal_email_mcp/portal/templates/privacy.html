@@ -1,0 +1,76 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Privacy") }}{% endblock %}
+{% block heading %}{{ _("Privacy") }}{% endblock %}
+{% block body %}
+<p>{{ _("This service keeps only what it needs to work for you. It never stores the content of your mail: no subjects, message texts, correspondents' addresses, folder names or attachment names.") }}</p>
+
+<h2>{{ _("What is stored about you") }}</h2>
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("Kind of data") }}</th>
+      <th scope="col">{{ _("What it holds") }}</th>
+      <th scope="col">{{ _("How many") }}</th>
+      <th scope="col">{{ _("How long it is kept") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>{{ _("Your user record") }}</td>
+      <td>{{ _("Your sign-in address and the date you joined.") }}</td>
+      <td>1</td>
+      <td>{{ _("Until you delete your data.") }}</td>
+    </tr>
+    <tr>
+      <td><a href="/portal/accounts">{{ _("Mail accounts") }}</a></td>
+      <td>{{ _("Server settings, your login name and your password (encrypted).") }}</td>
+      <td>{{ counts.accounts }}</td>
+      <td>{{ _("Until you remove the account.") }}</td>
+    </tr>
+    <tr>
+      <td><a href="/portal/identities">{{ _("Sender identities") }}</a></td>
+      <td>{{ _("Addresses, display name, signature and the sending login (encrypted).") }}</td>
+      <td>{{ counts.identities }}</td>
+      <td>{{ _("Until you remove the identity.") }}</td>
+    </tr>
+    <tr>
+      <td><a href="/portal/clients">{{ _("Connected applications") }}</a></td>
+      <td>{{ _("What each application may do, and the digests of its access keys.") }}</td>
+      <td>{{ counts.grants }}</td>
+      <td>{% trans access=m.duration(retention.access), refresh=m.duration(retention.refresh), absolute=m.duration(retention.absolute) %}Access keys: {{ access }}. A connection ends {{ refresh }} after its last use, and at the latest after {{ absolute }}, unless you disconnect it earlier.{% endtrans %}</td>
+    </tr>
+    <tr>
+      <td><a href="/portal/activity">{{ _("Activity") }}</a></td>
+      <td>{{ _("Which application used which tool on which account, and when. Counts and names only.") }}</td>
+      <td>{{ counts.activity }}</td>
+      <td>{{ m.duration(retention.activity) }}</td>
+    </tr>
+    <tr>
+      <td><a href="/portal/approvals">{{ _("Pending approvals") }}</a></td>
+      <td>{{ _("A reference to a draft that waits for your decision.") }}</td>
+      <td>{{ counts.approvals }}</td>
+      <td>{{ m.duration(retention.approval) }}</td>
+    </tr>
+    <tr>
+      <td>{{ _("Sign-in sessions") }}</td>
+      <td>{{ _("The digest of your browser's session key.") }}</td>
+      <td>-</td>
+      <td>{% trans maximum=m.duration(retention.session_max), idle=m.duration(retention.session_idle) %}At most {{ maximum }}, and {{ idle }} after your last click.{% endtrans %}</td>
+    </tr>
+  </tbody>
+</table>
+<p class="hint">{{ _("Your mail stays at your mail provider. This service only reads it when you or a connected application ask for it, and does not keep it.") }}</p>
+
+<h2>{{ _("Download your data") }}</h2>
+<p>{{ _("You get one file (JSON) with everything above in readable form. Passwords and access keys are never included.") }}</p>
+<form method="post" action="/portal/privacy/export">
+  {{ m.csrf() }}
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Download my data") }}</button>
+  </div>
+</form>
+
+<h2>{{ _("Delete everything") }}</h2>
+<p>{{ _("This permanently removes your mail accounts, sender identities, connections, activity and your user record from this service, and signs you out. Your mail at your provider is not touched. It cannot be undone.") }}</p>
+<p><a class="button danger" href="/portal/privacy/delete">{{ _("Delete all my data") }}</a></p>
+{% endblock %}

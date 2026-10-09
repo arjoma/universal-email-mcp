@@ -35,6 +35,7 @@ from universal_email_mcp.portal import ops
 from universal_email_mcp.portal.activity import ActivityPages
 from universal_email_mcp.portal.approvals import ApprovalPages
 from universal_email_mcp.portal.i18n import LANG_COOKIE, language_name
+from universal_email_mcp.portal.privacy import PrivacyPages
 from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.portal.web import client_ip, security_headers
 from universal_email_mcp.presets import normalize_hostname, profile_for_host
@@ -1242,6 +1243,7 @@ def portal_group(ps: PortalService) -> RouteGroup:
     ep = PortalEndpoints(ps)
     approvals = ApprovalPages(ep)
     activity = ActivityPages(ep)
+    privacy = PrivacyPages(ep)
     get, post = ["GET"], ["POST"]
     routes = [
         Route("/portal", ep.home, methods=get),
@@ -1275,6 +1277,10 @@ def portal_group(ps: PortalService) -> RouteGroup:
         Route("/portal/clients/{grant_id}", ep.client_save, methods=post),
         Route("/portal/clients/{grant_id}/revoke", ep.client_revoke, methods=post),
         Route("/portal/activity", activity.index, methods=get),
+        Route("/portal/privacy", privacy.index, methods=get),
+        Route("/portal/privacy/export", privacy.export, methods=post),
+        Route("/portal/privacy/delete", privacy.delete_get, methods=get),
+        Route("/portal/privacy/delete", privacy.delete_post, methods=post),
         Route("/portal/approvals", approvals.index, methods=get),
         Route("/portal/approvals/{approval_id}", approvals.detail, methods=get),
         Route("/portal/approvals/{approval_id}", approvals.decide, methods=post),
