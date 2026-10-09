@@ -485,6 +485,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a message before.
 - The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
   both transfer decoders run in a worker thread instead of on the event loop.
+- Deleting a user (portal "delete all my data") no longer races a tool call in flight: activity entries, approvals, send claims, grants, authorization codes and sign-in sessions are only written while the user exists (checked before and after the write), so nothing is left behind for a deleted user.
+
 - `rotate_keys` and the GDPR export no longer abort on one damaged record: it is skipped and counted (a warning without ids or content is logged), the export lists it as `{"unreadable": true}`. New command `universal-email-mcp admin rotate-keys [--dry-run]` (same environment as `serve`; prints counts only; exit status 3 if records were unreadable) replaces the one-off script in the deployment guide.
 
 - Audit: the `send.*` events now carry the account id (and the sender identity id) like every other event instead of the SMTP account name, so the log and the activity feed agree; the Activity page no longer guesses between ids and names. The name of a removed account is kept in a dedicated feed `label` (never in the log). A tool call with both successes and failures is audited as `partial` (severity WARNING) instead of `ok` and shown on the Activity page ("partly succeeded", also in German).

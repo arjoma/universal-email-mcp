@@ -38,6 +38,7 @@ from universal_email_mcp.store.store import (
     SessionPolicy,
     Store,
     TokenReuse,
+    UserGone,
 )
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "Grant",
     "Identity",
     "InvalidToken",
+    "UserGone",
     "IssuedTokens",
     "KeyRing",
     "MailAccount",
