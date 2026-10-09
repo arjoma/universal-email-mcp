@@ -50,6 +50,16 @@ def variants(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+@lru_cache(maxsize=65536)
+def fold_variants(text: str) -> tuple[str, ...]:
+    """Like :func:`variants` (casefolded, ä→ae and ä→a), but punctuation, spaces and
+    wildcard characters are kept — for pattern matching (:mod:`.query`). The second
+    spelling is lower-cased instead of casefolded, so ``ß`` stays one character."""
+    text = unicodedata.normalize("NFC", text)
+    translit = _strip_accents(text.casefold().translate(_TRANSLIT))
+    return tuple(dict.fromkeys((translit, _strip_accents(text.lower()))))
+
+
 def normalize(text: str) -> str:
     """Canonical form (transliterated variant) for keys and comparisons."""
     return variants(text)[0]
@@ -226,24 +236,29 @@ def match_folders(
     *,
     personal_prefix: str = "",
     threshold: float = DEFAULT_THRESHOLD,
+    include_groups: bool = False,
 ) -> list[FolderMatch]:
     """Rank selectable folders against a (possibly hierarchical) query.
 
     ``"clients/hubr"`` matches group and leaf separately (``Clients`` / ``Huber``);
     a single word is matched against the leaf, and weakly against the full path.
     Common English/German group names (clients/Kunden, projects/Projekte …) are
-    treated as synonyms.
+    treated as synonyms. ``include_groups`` also ranks non-selectable folders
+    (groups that only hold subfolders).
     """
     q_parts = _split_query(query)
     out: list[FolderMatch] = []
     for f in folders:
-        if not f.selectable:
+        if not f.selectable and not include_groups:
             continue
         path = folder_path(f, personal_prefix)
         if len(q_parts) == 1:
             # "huber gmbh" should still find the leaf "Huber": also score the leaf
             # against the query (slightly discounted).
-            leaf = max(score(q_parts[0], path[-1]), 0.9 * score(path[-1], q_parts[0]))
+            leaf = max(
+                max(score(v, path[-1]) for v in _alias_variants(q_parts[0])),
+                0.9 * score(path[-1], q_parts[0]),
+            )
             whole = score(q_parts[0], " ".join(path)) - 5.0
             s = max(leaf, whole)
             if f.role is not None and normalize(q_parts[0]) == f.role:
