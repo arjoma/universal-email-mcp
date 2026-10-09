@@ -35,6 +35,16 @@
       {% if view.has_bcc %}<span class="hint">{{ _("Bcc recipients are hidden from the others.") }}</span>{% endif %}
     </dd>
     <dt>{{ _("Subject") }}</dt><dd>{% if view.subject %}{{ view.subject }}{% else %}<em>{{ _("(none)") }}</em>{% endif %}</dd>
+    {% if view.origin %}
+    <dt>{{ _("Original") }}</dt>
+    <dd>
+      {% if view.origin.kind == "forward" %}{% trans sender=view.origin.sender, date=view.origin.date, subject=view.origin.subject %}Forwarded message from {{ sender }} ({{ date }}), subject "{{ subject }}". Its text is sent to the recipients.{% endtrans %}
+      {% else %}{% trans sender=view.origin.sender, date=view.origin.date, subject=view.origin.subject %}Reply to the message from {{ sender }} ({{ date }}), subject "{{ subject }}".{% endtrans %}{% endif %}
+      {% if not view.origin.subject_ok %}<br><span class="error">{% if view.origin.kind == "forward" %}{% trans original=view.origin.subject, subject=view.subject %}The subject is not "Fwd:" followed by the subject of the original. The original is "{{ original }}"; the recipients will see "{{ subject }}".{% endtrans %}{% else %}{% trans original=view.origin.subject, subject=view.subject %}The subject is not "Re:" followed by the subject of the original. The original is "{{ original }}"; the recipients will see "{{ subject }}".{% endtrans %}{% endif %}</span>{% endif %}
+    </dd>
+    {% elif view.forward_in_text %}
+    <dt>{{ _("Original") }}</dt><dd><span class="hint">{{ _("The text below contains a forwarded message, as the text itself says. The application did not check where it comes from.") }}</span></dd>
+    {% endif %}
     {% if view.attachments %}
     <dt>{{ _("Attachments") }}</dt>
     <dd>
@@ -69,7 +79,7 @@
   {% if view.images_warning %}<p class="error">{{ view.images_warning|tr }}</p>{% endif %}
   {% if view.quoted %}
   <details>
-    <summary>{% trans count=view.quoted|length %}Quoted text: {{ count }} line (not part of what the application wrote; expand to read){% pluralize %}Quoted text: {{ count }} lines (not part of what the application wrote; expand to read){% endtrans %}</summary>
+    <summary>{% trans count=view.quoted|length %}Quoted original, checked against the message in your mailbox: {{ count }} line (expand to read){% pluralize %}Quoted original, checked against the message in your mailbox: {{ count }} lines (expand to read){% endtrans %}</summary>
     <pre class="mailtext">{% for line in view.quoted %}{{ line }}
 {% endfor %}</pre>
     {% if view.quoted_note %}<p class="error">{{ view.quoted_note|tr }}</p>{% endif %}

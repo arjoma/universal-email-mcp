@@ -307,7 +307,9 @@ def test_confirmation_shows_the_whole_new_text_and_announces_cuts():
     assert "> line 80 " in text and "line 81 " not in text  # 80 lines
     n_cut = len(body) - len("\n".join(lines[:80]))
     assert f"{n_cut} more characters (120 lines) of the text NOT shown" in text
-    assert "[quoted original: 3 lines, not shown]" in text
+    # intended change (security review M2): the quote is no longer an anonymous count
+    assert "Quoted text at the end (3 lines; not the user's own words), starts with:" in text
+    assert "> a" in text and "> c" in text
     # text after the old 15-line limit is visible
     short = confirmation_text(ident, out, [], [], text="\n".join(f"l{i}" for i in range(1, 41)))
     assert "> l40" in short and "NOT shown" not in short
@@ -407,18 +409,19 @@ def test_fingerprint_is_long_and_ignores_message_id_and_date():
     assert len(content_hash(a)) == 64 and len(fingerprint(a)) == 16
 
 
-def test_split_quoted_folds_only_a_clear_trailing_quote():
-    from universal_email_mcp.service.send import split_quoted
+def test_split_verified_quote_folds_only_the_servers_own_quote():
+    from universal_email_mcp.service.send import split_verified_quote
 
-    new, quoted = split_quoted("Gerne.\n\nAm Mo schrieb Anna:\n> Frage\n> mehr\n")
-    assert new == "Gerne." and quoted.startswith("Am Mo schrieb Anna:") and "> mehr" in quoted
-    # quote lines in the middle, text after them: nothing is folded, nothing is hidden
-    mixed = "Hallo\n> zitat\nund weiter unten mein Text"
-    assert split_quoted(mixed) == (mixed, "")
-    assert split_quoted("no quote at all") == ("no quote at all", "")
-    # a signature below the quote is text of the message, so it stays visible
-    sig = "Hi\n> q\n-- \nMax"
-    assert split_quoted(sig) == (sig, "")
+    block = "On 2026-10-01 10:00 UTC, Anna wrote:\n> Frage\n> mehr"
+    new, quoted = split_verified_quote(f"Gerne.\n\n{block}\n", block)
+    assert new == "Gerne." and quoted == block
+    # the same lines written by the model are not the verified quote: nothing is folded
+    forged = "Thanks.\n\nOn Mon, Bob wrote:\n> Alice 120000\n> IBAN AT12"
+    assert split_verified_quote(forged, block) == (forged, "")
+    assert split_verified_quote(forged, "") == (forged, "")
+    # text after the quote is text of the message
+    after = f"Hi\n\n{block}\n\nP.S. send the money"
+    assert split_verified_quote(after, block) == (after, "")
 
 
 def test_text_excerpt_cuts_loudly():
@@ -443,3 +446,184 @@ def test_flagged_means_new_or_lookalike():
 
     assert not is_flagged([c("internal"), c("known")])
     assert is_flagged([c("known"), c("new")]) and is_flagged([c("lookalike")])
+
+
+# security review M2 / M3 / L3: what the user sees before a message leaves -----------
+
+
+def _origin_draft(*, kind: str, subject: str, original_subject: str = "Q3 payroll (confidential)"):
+    from datetime import UTC, datetime
+
+    from universal_email_mcp.mail import compose
+    from universal_email_mcp.mail.compose import Original, Request
+    from universal_email_mcp.mail.outgoing import parse_outgoing
+    from universal_email_mcp.models import Address, Identity
+    from universal_email_mcp.service.recipients import classify
+
+    ident = Identity(
+        name="Me", addresses=("me@company.com",), send=True, smtp_account="smtp", store_account="W"
+    )
+    orig = Original(
+        message_id="<a@b.c>",
+        in_reply_to=None,
+        references=(),
+        subject=original_subject,
+        from_=(Address("HR", "hr@company.com"),),
+        reply_to=(),
+        to=(Address("Me", "me@company.com"),),
+        cc=(),
+        date=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        body="Salaries:\nAlice 120000\nBob 95000\nIBAN AT12 3456 ...",
+    )
+    req = Request(
+        sender=ident,
+        address="me@company.com",
+        kind=kind,  # pyright: ignore[reportArgumentType]
+        to=[Address("", "x@evil.example")],
+        subject=subject,
+        body="Sounds good, see you!",
+        original=orig,
+    )
+    d = compose.compose(req)
+    out = parse_outgoing(d.raw)
+    cl = classify(
+        [("to", a) for a in out.to],
+        own=["me@company.com"],
+        internal_domains=[],
+        known={},
+        history=[],
+    )
+    return ident, out, cl, d
+
+
+def test_forward_confirmation_names_the_forwarded_original_and_warns_on_subject():
+    from universal_email_mcp.service.send import confirmation_text
+
+    ident, out, cl, d = _origin_draft(kind="forward", subject="Re: lunch tomorrow")
+    text = confirmation_text(ident, out, cl, ["x"], text=d.body, quoted=d.quoted, origin=d.origin)
+    assert "FORWARDED MESSAGE from HR ‹hr＠company.com› (2026-10-01 09:00 UTC)" in text
+    assert 'subject "Q3 payroll \\(confidential\\)"' in text
+    assert "its text is sent to the recipients" in text
+    assert "Forwarded message (" in text and "Alice 120000" in text  # first lines of the original
+    assert "! The subject is not 'Fwd:' + the original's subject" in text
+    assert "lunch tomorrow" in text
+
+
+def test_reply_confirmation_with_matching_subject_has_no_subject_warning():
+    from universal_email_mcp.service.send import confirmation_text
+
+    ident, out, cl, d = _origin_draft(kind="reply", subject="Re: Q3 payroll (confidential)")
+    text = confirmation_text(ident, out, cl, ["x"], text=d.body, quoted=d.quoted, origin=d.origin)
+    assert "In reply to the message from HR" in text
+    assert "The subject is not" not in text
+    assert "Quoted original of the message replied to" in text
+
+
+def test_reply_subject_must_match_the_original():
+    from universal_email_mcp.mail.compose import subject_matches_original as ok
+
+    assert ok("Re: Offer", "Offer", "reply") and ok("AW: Re: offer", "Offer", "reply")
+    assert ok("Fwd: Offer", "Re: Offer", "forward")
+    assert not ok("Offer", "Offer", "reply")  # no prefix
+    assert not ok("Re: lunch", "Offer", "reply")
+    assert not ok("Re: Offer", "Offer", "forward")
+
+
+def test_confirmation_escapes_markdown_in_names_subjects_and_files():
+    import re as _re
+
+    from universal_email_mcp.mail.outgoing import parse_outgoing
+    from universal_email_mcp.models import Address, Identity
+    from universal_email_mcp.service.recipients import classify
+    from universal_email_mcp.service.send import confirmation_text
+
+    ident = Identity(
+        name="Me", addresses=("me@company.com",), send=True, smtp_account="smtp", store_account="W"
+    )
+    raw = (
+        b"From: me@company.com\r\nTo: =?utf-8?q?[CEO](https://evil.example)_ceo=EF=BC=A0company.com?= "
+        b"<x@evil.example>\r\nSubject: Re: ![logo](https://evil.example/t.png?u=victim)\r\n"
+        b"Message-ID: <m@x>\r\n\r\nhi\r\n"
+    )
+    out = parse_outgoing(raw)
+    cl = classify(
+        [("to", a) for a in out.to],
+        own=["me@company.com"],
+        internal_domains=[],
+        known={},
+        history=[],
+    )
+    text = confirmation_text(ident, out, cl, ["x"])
+    assert not _re.search(r"\]\(https?:", text) and "![" not in text
+    assert (
+        "ceo＠company" not in text.replace("(at)", "")
+        and "＠" not in text.split("To:")[1].split("<")[0]
+    )
+    assert "ceo\\(at\\)company" in text
+    assert Address("", "a@b.c")  # keep the import used
+
+
+def test_address_names_cannot_fake_an_address_with_fullwidth_at():
+    from universal_email_mcp.models import Address
+    from universal_email_mcp.service.send import address_text
+
+    for at in ("@", "\uff20", "\ufe6b"):
+        assert "(at)" in address_text(Address(f"CEO{at}company.com", "x@evil.example"))
+        assert (
+            at not in address_text(Address(f"CEO{at}company.com", "x@evil.example")).split("<")[0]
+        )
+
+
+def test_model_written_quote_lines_are_not_called_the_original():
+    from universal_email_mcp.service.send import confirmation_text, split_verified_quote
+
+    body = "Thanks, noted.\n\nOn Mon, Bob wrote:\n> Alice 120000\n> Bob 95000\n> IBAN AT12 3456"
+    ident, out, cl, _d = _origin_draft(kind="reply", subject="Re: Q3 payroll (confidential)")
+    # no origin: the prompt shows the whole text and never claims a verified original
+    text = confirmation_text(ident, out, cl, ["x"])
+    assert "Quoted original of the message replied to" not in text
+    new, quoted = split_verified_quote(body, "")
+    assert (new, quoted) == (body, "")
+
+
+def _prepared_like(kind: str, subject: str, *, verified: bool):
+    from types import SimpleNamespace
+
+    ident, out, cl, d = _origin_draft(kind=kind, subject=subject)
+    return SimpleNamespace(
+        out=out,
+        ident=ident,
+        classified=cl,
+        reasons=[],
+        warnings=[],
+        origin=d.origin if verified else None,
+        verified_quote=d.quoted if verified else "",
+    )
+
+
+def test_portal_view_folds_only_the_verified_quote_and_names_the_original():
+    from universal_email_mcp.portal.approvals import view_of
+
+    v = view_of(_prepared_like("reply", "Re: Q3 payroll (confidential)", verified=True))  # pyright: ignore[reportArgumentType]
+    assert v["origin"]["kind"] == "reply" and v["origin"]["sender"].startswith("HR")
+    assert v["origin"]["subject"] == "Q3 payroll (confidential)" and v["origin"]["subject_ok"]
+    assert any("Alice 120000" in ln for ln in v["quoted"])
+    assert not any("Alice 120000" in ln for ln in v["text"])
+
+
+def test_portal_view_never_folds_or_claims_an_unverified_quote():
+    from universal_email_mcp.portal.approvals import view_of
+
+    p = _prepared_like("reply", "Re: Q3 payroll (confidential)", verified=False)
+    v = view_of(p)  # pyright: ignore[reportArgumentType]
+    assert v["origin"] is None and v["quoted"] == []
+    assert any("Alice 120000" in ln for ln in v["text"])  # shown as ordinary text
+
+
+def test_portal_view_flags_a_forward_block_that_nothing_verified():
+    from universal_email_mcp.portal.approvals import view_of
+
+    v = view_of(_prepared_like("forward", "Fwd: Q3 payroll (confidential)", verified=False))  # pyright: ignore[reportArgumentType]
+    assert v["origin"] is None and v["forward_in_text"] is True
+    v = view_of(_prepared_like("forward", "Re: lunch", verified=True))  # pyright: ignore[reportArgumentType]
+    assert v["origin"]["kind"] == "forward" and not v["origin"]["subject_ok"]

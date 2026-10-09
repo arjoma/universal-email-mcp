@@ -294,3 +294,38 @@ def test_every_entry_point_survives_nasty_headers(header):
             _clean([parsed.text, parsed.headers.subject, h.subject, parsed.attachments, h.from_])
             for text in (parsed.text, parsed.headers.subject, h.subject):
                 assert not LONE.search(text)
+
+
+# L1 ------------------------------------------------------------------------
+
+
+def test_structured_listing_items_cap_header_fields():
+    from universal_email_mcp.models import Address, MessageSummary
+    from universal_email_mcp.server import schemas
+
+    ref = MessageRef("Work", "INBOX", 1, 7)
+    many = tuple(Address("N" * 5000, f"a{i}@example.org" + "x" * 500) for i in range(5000))
+    s = MessageSummary(
+        ref=ref,
+        date=None,
+        received=None,
+        from_=many,
+        to=many,
+        cc=many,
+        reply_to=many,
+        subject="S" * 100_000,
+        flags=(),
+        size=None,
+        has_attachments=False,
+        message_id=None,
+        in_reply_to=None,
+        references=(),
+    )
+    item = schemas.MessageItem.of(s)
+    assert len(item.subject) <= schemas.MAX_SUBJECT_CHARS
+    assert len(item.to) == len(item.cc) == schemas.MAX_LISTED_RECIPIENTS
+    assert len(item.from_) <= 10
+    assert item.recipients_omitted == 2 * (5000 - schemas.MAX_LISTED_RECIPIENTS)
+    assert len(item.to[0].name) <= schemas.MAX_NAME_CHARS
+    assert len(item.to[0].email) <= schemas.MAX_EMAIL_CHARS
+    assert len(item.model_dump_json()) < 30_000

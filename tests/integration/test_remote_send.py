@@ -602,7 +602,11 @@ async def test_a_reply_draft_shows_the_new_text_and_folds_the_quote(imap_server:
         aid, path = await pending(r, u, token, {"reply_to_id": mid, "body": "Gerne, anbei."})
         page = (await (await r.portal(u)).get(path)).text
         assert "Gerne, anbei." in page
-        assert "<details>" in page and "Quoted text" in page
+        # intended change (security review M3): the quote is folded only because the server
+        # verified it against the message in the mailbox, and the original is named
+        assert "<details>" in page and "Quoted original, checked against the message" in page
+        assert "Reply to the message from" in page and "Angebot" in page
+        assert "not part of what the application wrote" not in page
 
 
 async def test_reject_leaves_the_draft_and_sends_nothing(imap_server: ImapServer):

@@ -51,7 +51,7 @@ PRIVATE_USER = "lena.hofer@mail.example"
 USERS = {WORK: WORK_USER, PRIVATE: PRIVATE_USER}
 """IMAP user names of the developer sandbox (the tests use fresh ones)."""
 
-CORPUS_VERSION = "3"
+CORPUS_VERSION = "4"
 """Bump when the corpus, the seeding or SANDBOX_PASSWORD changes: ``up`` then
 recreates the container (its labels record the image and this version)."""
 SEEDED_FOLDER = ".uem-sandbox-seeded"
@@ -794,6 +794,15 @@ _HOSTILE_FILES: tuple[tuple[str, int, int], ...] = (
     ("sandbox/thread-self-reference.eml", 3, 4),
     ("sandbox/thread-cycle-a.eml", 3, 5),
     ("sandbox/thread-cycle-b.eml", 3, 6),
+    # Security review: UTF-7 that decodes to a lone surrogate (kills a JSON writer), codecs
+    # that cannot decode, a malformed MIME parameter, authentication headers forged below
+    # the first Received line, an extension pushed out of view by blanks, links without a scheme.
+    ("sandbox/surrogate-utf7.eml", 22, 4),
+    ("sandbox/charset-undefined.eml", 22, 5),
+    ("sandbox/bad-mime-param.eml", 23, 4),
+    ("sandbox/fake-auth-headers.eml", 23, 5),
+    ("sandbox/blank-filename.eml", 24, 4),
+    ("sandbox/protocol-relative-link.eml", 24, 5),
     # The hostile samples of the unit tests.
     ("bidi_injection.eml", 18, 5),
     ("html_only_hidden.eml", 19, 5),
@@ -901,6 +910,38 @@ def _hostile_mail(b: _Builder, large_attachment_bytes: int) -> None:
                 ctype='multipart/mixed; boundary="w"',
             ),
             wide + "--w--\r\n",
+        ),
+    )
+
+    # MIME bomb: far more delimiter lines than any message needs (refused before parsing).
+    b.hostile(
+        "mime-bomb",
+        b.ago(25, 2),
+        raw_mail(
+            attacker(
+                "From: Bomb <bomb@attacker.test>",
+                "Subject: Twelve thousand empty parts",
+                "Message-ID: <mimebomb-1@attacker.test>",
+                ctype='multipart/mixed; boundary="X"',
+            ),
+            "--X\r\n\r\n" * 12_000 + "--X--\r\n",
+        ),
+    )
+    # HTML nested deeper than the parser keeps: the text at the bottom must not vanish.
+    b.hostile(
+        "deep-html",
+        b.ago(25, 3),
+        raw_mail(
+            attacker(
+                "From: Deep <deep@attacker.test>",
+                "Subject: Nested 300 levels",
+                "Message-ID: <deephtml-1@attacker.test>",
+                ctype="text/html; charset=utf-8",
+            ),
+            "<p>Top.</p>"
+            + "<div>" * 300
+            + "Pay the invoice to the account in the attachment."
+            + "</div>" * 300,
         ),
     )
 

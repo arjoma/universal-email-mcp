@@ -1,0 +1,17 @@
+From: Scanner <scanner@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Invoice scan
+Message-ID: <blankname-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bn"
+
+--bn
+Content-Type: text/plain; charset=utf-8
+
+See the attachment.
+--bn
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename*=utf-8''Rechnung_2026-117.pdf%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80%E2%A0%80.exe
+
+MZ not really
+--bn--

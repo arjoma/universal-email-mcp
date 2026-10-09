@@ -36,6 +36,7 @@ import asyncio
 import hashlib
 import logging
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ from universal_email_mcp.errors import (
     TooLarge,
 )
 from universal_email_mcp.mail import smtp
+from universal_email_mcp.mail.compose import FORWARD_MARKER, OriginInfo, origin_info, quote_block
 from universal_email_mcp.mail.imap import ANSWERED_FLAGS, ImapSession
 from universal_email_mcp.mail.mime import sanitize_line, sanitize_text
 from universal_email_mcp.mail.outgoing import (
@@ -66,7 +68,13 @@ from universal_email_mcp.mail.outgoing import (
 )
 from universal_email_mcp.models import Account, Address, Identity, MessageRef
 from universal_email_mcp.server import render
-from universal_email_mcp.service.drafts import Built, Drafter, drafts_folder
+from universal_email_mcp.service.drafts import (
+    QUOTE_FETCH_CHARS,
+    Built,
+    Drafter,
+    drafts_folder,
+    original_of,
+)
 from universal_email_mcp.service.index import HeaderIndex
 from universal_email_mcp.service.recipients import (
     Classified,
@@ -226,13 +234,20 @@ def is_flagged(classified: Sequence[Classified]) -> bool:
 # ----------------------------------------------------------------- confirmation text
 
 
-def _name(a: Address) -> str:
-    # An "@" in a display name could pose as another address next to the real one.
-    return sanitize_line(a.name).replace("@", "(at)")[:60]
+_AT_SIGNS = str.maketrans({"@": "(at)", "\uff20": "(at)", "\ufe6b": "(at)"})
 
 
-def address_text(a: Address) -> str:
-    n = _name(a)
+def _name(a: Address, *, escape: bool = False) -> str:
+    # An "@" in a display name could pose as another address next to the real one -
+    # also in its fullwidth and small-form variants. ``escape``: the text goes to a
+    # client that may render Markdown (the elicitation prompt), so a name cannot form a
+    # link or image ("[CEO](https://evil)").
+    name = unicodedata.normalize("NFKC", sanitize_line(a.name)).translate(_AT_SIGNS)[:60]
+    return render.escape_cell(name, 60) if escape else name
+
+
+def address_text(a: Address, *, escape: bool = False) -> str:
+    n = _name(a, escape=escape)
     return f"{n} <{a.email}>" if n else a.email
 
 
@@ -254,29 +269,38 @@ def confirmation_text(
     note: str = "",
     text: str | None = None,
     quoted: str = "",
+    origin: OriginInfo | None = None,
 ) -> str:
     """The text the user sees before a message leaves. Everything that comes from
     the message is sanitised (no control or bidi characters, links defanged).
 
     ``text`` is the new text the message adds (for a composed message: before the
     quoted original, which is only summarised); without it the whole body is shown.
-    What is cut is announced with numbers, never silently."""
+    What is cut is announced with numbers, never silently. ``origin`` names the original
+    of a reply or forward (what the server knows, not what the text claims).
+
+    Free text from the message is escaped for Markdown as well (the client may render
+    the prompt): no link, image or look-alike address can be formed in it."""
     lines = ["Send this e-mail? It cannot be taken back.", ""]
-    lines.append(f"From: {address_text(out.sender)}  (identity {sanitize_line(ident.name)[:40]})")
+    lines.append(
+        f"From: {address_text(out.sender, escape=True)}  "
+        f"(identity {render.escape_cell(ident.name, 40)})"
+    )
     by_field: dict[str, list[Classified]] = {"to": [], "cc": [], "bcc": []}
     for c in classified:
         by_field[c.field].append(c)
     for fld, label in (("to", "To"), ("cc", "Cc"), ("bcc", "Bcc")):
         for c in by_field[fld]:
-            lines.append(f"{label}: {address_text(c.address)}  [{class_tag(c)}]")
+            lines.append(f"{label}: {address_text(c.address, escape=True)}  [{class_tag(c)}]")
     if by_field["bcc"]:
         lines.append("(Bcc recipients are hidden from the others.)")
-    lines.append(f"Subject: {sanitize_line(out.subject)[:200] or '(none)'}")
+    lines.append(f"Subject: {render.escape_cell(out.subject, 200) or '(none)'}")
+    lines += origin_lines(origin)
     if out.attachments:
         n_att = len(out.attachments)
         lines.append(f"Attachments ({n_att}):")
         lines += [
-            f"  {sanitize_line(n)[:80]} ({render.fmt_size(z)})"
+            f"  {render.escape_cell(n, 80, keep_end=16)} ({render.fmt_size(z)})"
             for n, z in out.attachments[:SHOW_ATTACHMENTS]
         ]
         if n_att > SHOW_ATTACHMENTS:
@@ -287,12 +311,14 @@ def confirmation_text(
         for n in c.notes
         if c.klass in ("lookalike", "new")
     ]
+    if origin is not None and not origin.subject_ok:
+        warnings.insert(0, "! " + subject_mismatch_text(out.subject, origin))
     if warnings:
         lines += ["", "Check this:", *warnings[:10]]
     if reasons:
         lines += ["", "Confirmation needed because " + "; ".join(reasons) + "."]
     if note:
-        lines.append(sanitize_line(note)[:200])
+        lines.append(render.escape_cell(note, 200))
     head = "\n".join(lines)
     if len(head) > MAX_HEAD_CHARS:
         head = (
@@ -309,8 +335,7 @@ def confirmation_text(
     if out.preview_cut:
         out_lines.append(preview_cut_note(out))
     if quoted.strip():
-        q_lines = len(quoted.strip().split("\n"))
-        out_lines.append(f"[quoted original: {q_lines} lines, not shown]")
+        out_lines += quote_summary(quoted, origin)
     if out.html_shown:
         html_lines, html_note = html_excerpt(out)
         out_lines += ["", html_heading(out)]
@@ -324,6 +349,64 @@ def confirmation_text(
     if out.remote_images:
         out_lines += ["", remote_images_warning(out)]
     return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + 2 * MAX_CONFIRM_CHARS]
+
+
+def subject_mismatch_text(subject: str, origin: OriginInfo, *, escape: bool = True) -> str:
+    """The warning for a reply/forward whose subject is not "Re:"/"Fwd:" + the original's.
+    ``escape``: Markdown-safe (elicitation prompt); off for the portal (HTML-escaped there)."""
+
+    def clip(text: str) -> str:
+        return render.escape_cell(text, 100) if escape else sanitize_line(text)[:100]
+
+    what = "Re:" if origin.kind == "reply" else "Fwd:"
+    return (
+        f"The subject is not '{what}' + the original's subject. The original is "
+        f'"{clip(origin.subject)}"; recipients will see "{clip(subject)}".'
+    )
+
+
+def origin_lines(origin: OriginInfo | None) -> list[str]:
+    """Who the original is (from the server's own record of the reply or forward)."""
+    if origin is None:
+        return []
+    who = (
+        f"{render.escape_cell(origin.sender, 120, address=True)} ({origin.date}), "
+        f'subject "{render.escape_cell(origin.subject, 100)}"'
+    )
+    if origin.kind == "forward":
+        return [f"FORWARDED MESSAGE from {who}: its text is sent to the recipients."]
+    return [f"In reply to the message from {who}."]
+
+
+QUOTE_PREVIEW_LINES = 3
+
+
+def quote_preview(quoted: str, kind: str | None) -> list[str]:
+    """The first lines of what the quoted original says (not the attribution line or the
+    forward header block), sanitised and defanged."""
+    lines = sanitize_text(quoted).strip().split("\n")
+    if kind == "forward":
+        body = lines[next((i + 1 for i, ln in enumerate(lines) if not ln.strip()), len(lines)) :]
+    else:  # a reply starts with the attribution line; unknown quotes are shown from the top
+        body = [ln[1:].lstrip() if ln.startswith(">") else ln for ln in lines]
+        body = body[1:] if kind == "reply" else body
+    first = [ln for ln in body if ln.strip()][:QUOTE_PREVIEW_LINES]
+    return [render.defang_body(ln[:160]) for ln in first]
+
+
+def quote_summary(quoted: str, origin: OriginInfo | None) -> list[str]:
+    """What the user is told about the quoted original that goes along: its size and
+    first lines. Only the server's own record (``origin``) may call it "the original"."""
+    n = len(quoted.strip().split("\n"))
+    forward = origin is not None and origin.kind == "forward"
+    if origin is None:
+        head = f"Quoted text at the end ({n} lines; not the user's own words), starts with:"
+    elif forward:
+        head = f"Forwarded message ({n} lines of the original are sent along), starts with:"
+    else:
+        head = f"Quoted original of the message replied to ({n} lines, shown only in part):"
+    kind = origin.kind if origin is not None else None
+    return [head, *(f"> {ln}" for ln in quote_preview(quoted, kind))]
 
 
 def preview_cut_note(out: Outgoing) -> str:
@@ -397,27 +480,23 @@ def text_excerpt(text: str) -> tuple[list[str], str]:
     return shown.split("\n"), note
 
 
-def split_quoted(text: str) -> tuple[str, str]:
-    """Split a stored reply draft into the new text and the quoted original behind it
-    (trailing ``>`` lines and their "... wrote:" line). Conservative: anything that is not
-    clearly a quote at the end stays in the new text, so nothing is hidden by a split."""
-    lines = text.split("\n")
-    last_plain = max(
-        (i for i, ln in enumerate(lines) if ln.strip() and not _quoted(ln)), default=-1
-    )
-    start = next((i for i in range(last_plain + 1, len(lines)) if _quoted(lines[i])), None)
-    if start is None:
-        return text, ""
-    j = start - 1
-    while j >= 0 and not lines[j].strip():
-        j -= 1
-    if j >= 0 and lines[j].rstrip().endswith(":") and start - j <= 2:
-        start = j
-    return "\n".join(lines[:start]).rstrip(), "\n".join(lines[start:])
+def split_verified_quote(preview: str, block: str) -> tuple[str, str]:
+    """Split ``preview`` into the text before and the quoted original at its end - but
+    only when the preview really ends with ``block``, the quote this server built from
+    the original it looked up. Anything else is not folded and never called a quote:
+    text the model wrote that merely looks like one (``On ... wrote:`` and ``>`` lines)
+    stays in the text the user reads."""
+    clean = sanitize_text(preview).rstrip()
+    verified = sanitize_text(block).rstrip()
+    if verified and clean.endswith(verified):
+        return clean[: -len(verified)].rstrip(), verified
+    return preview, ""
 
 
-def _quoted(line: str) -> bool:
-    return line.lstrip().startswith(">")
+def has_forward_block(text: str) -> bool:
+    """Does the text contain the header line of a forwarded message? (Whoever wrote it:
+    this only tells the user what the text says about itself.)"""
+    return any(ln.strip() == FORWARD_MARKER for ln in text.split("\n"))
 
 
 # ----------------------------------------------------------------- results
@@ -475,6 +554,12 @@ class Prepared:
     """Set when the policy forbids sending: the mail only stays a draft."""
     prompt: str
     sender_reason: str = ""
+    origin: OriginInfo | None = None
+    """The original of a reply or forward, as the server knows it: composed by this
+    server (``built``), or - for a stored draft - looked up through ``In-Reply-To`` and
+    only set when the draft really ends with the quote of that message."""
+    verified_quote: str = ""
+    """The quoted block that was verified (``origin`` is set), else ``""``."""
 
     @property
     def needs_confirmation(self) -> bool:
@@ -538,6 +623,8 @@ class Sender:
             original=MessageRef.decode(reply_to_id) if reply_to_id else None,
             warnings=list(built.draft.warnings),
             sender_reason=built.reason,
+            origin=built.draft.origin,
+            verified_quote=built.draft.quoted,
         )
 
     async def prepare_draft(self, draft_id: str) -> Prepared:
@@ -574,15 +661,54 @@ class Sender:
                 "that draft does not exist any more (sent or deleted?)",
                 hint="Create a new one with save_draft or send_message.",
             ) from e
+        out = parse_outgoing(raw)
+        origin, verified = await self._verify_quote(acc, out)
         return await self._prepare(
-            parse_outgoing(raw),
+            out,
             acc,
             built=None,
             ref=ref,
             original=None,
             warnings=[],
             sender_reason="the draft's From address",
+            origin=origin,
+            verified_quote=verified,
         )
+
+    async def _verify_quote(self, acc: Account, out: Outgoing) -> tuple[OriginInfo | None, str]:
+        """For a stored reply draft: find the message it answers and check that the
+        draft really ends with this server's quote of it. Only then may the user be told
+        "this is the original"; anything else (other text, a forged attribution, the
+        original gone) stays ordinary text. Never raises."""
+        if not out.in_reply_to or out.preview_cut:
+            return None, ""
+        wanted = out.in_reply_to
+        limits = self.config.limits
+
+        def fn(session: ImapSession) -> tuple[OriginInfo, str] | None:
+            ref = self._find_original(session, wanted)
+            if ref is None:
+                return None
+            msg = session.fetch_message(
+                ref,
+                max_bytes=limits.max_message_bytes,
+                max_body_chars=QUOTE_FETCH_CHARS,
+                body_offset=0,
+            )
+            original = original_of(msg)
+            block = quote_block(original)
+            if not sanitize_text(out.preview).rstrip().endswith(sanitize_text(block).rstrip()):
+                return None
+            return origin_info(original, "reply", out.subject), block
+
+        async def work(a: Account) -> tuple[OriginInfo, str] | None:
+            return await self.router.call(a, fn)
+
+        try:
+            found = await self.router.run_one(acc, work)
+        except Exception:  # noqa: BLE001 - verification is best effort; unverified is safe
+            return None, ""
+        return found if found is not None else (None, "")
 
     def _allowed(self) -> None:
         pol = self.config.policy
@@ -645,6 +771,8 @@ class Sender:
         original: MessageRef | None,
         warnings: list[str],
         sender_reason: str,
+        origin: OriginInfo | None = None,
+        verified_quote: str = "",
     ) -> Prepared:
         ident = self._identity(out.sender.email)
         smtp_acc = self.config.smtp_account(ident.smtp_account or "")
@@ -674,6 +802,7 @@ class Sender:
                 note=f"Content fingerprint {fingerprint(out.raw)}",
                 text=built.draft.body if built is not None else None,
                 quoted=built.draft.quoted if built is not None else "",
+                origin=origin,
             )
         return Prepared(
             out=out,
@@ -689,6 +818,8 @@ class Sender:
             keep_reason=keep,
             prompt=prompt,
             sender_reason=sender_reason,
+            origin=origin,
+            verified_quote=verified_quote,
         )
 
     # ------------------------------------------------------------ executing

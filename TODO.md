@@ -216,7 +216,7 @@ from time to time (AGENTS.md, "Regular cleanup").
 - [ ] The approvals list shows application and time only; a short summary (subject, first
       recipient) could be cached in the sealed part of the record. An approval stores the draft as
       `account / folder / UID`; renaming the account or a UIDVALIDITY change makes it "gone".
-      `split_quoted` is heuristic (the quote is folded, never hidden).
+      The quote is folded only when verified against the original (`split_verified_quote`).
 
 ## Portal
 

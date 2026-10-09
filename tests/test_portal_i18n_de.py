@@ -184,6 +184,14 @@ def _view() -> dict[str, Any]:
         "sender when and where the mail is read (tracking).",
         "quoted": ["> q"],
         "quoted_note": "",
+        "origin": {
+            "kind": "reply",
+            "sender": "B <b@example.org>",
+            "date": "2026-10-01 10:00 UTC",
+            "subject": "Offer",
+            "subject_ok": False,
+        },
+        "forward_in_text": False,
         "reasons": ["the policy asks for confirmation of every message"],
         "warnings": ["the draft has no subject"],
     }
@@ -307,7 +315,13 @@ CONTEXTS: dict[str, dict[str, Any]] = {
     },  # fmt: skip
     "consent_reauth.html": {"error": "bad_credentials", "carried": [("grant", HOSTILE)]},
     "error.html": {"reason": "notfound"},
-    "headers.html": {"mid": "m1.x", "lines": [{"name": "X", "value": HOSTILE, "auth": True}]},
+    "headers.html": {
+        "mid": "m1.x",
+        "lines": [
+            {"name": "X", "value": HOSTILE, "auth": True, "claimed": False},
+            {"name": "X-Spam-Status", "value": "x", "auth": False, "claimed": True},
+        ],
+    },
     "identities.html": {
         "identities": [
             {
@@ -414,6 +428,20 @@ def test_page_renders_in_german_without_english_leftovers(template: str):
     # hostile values stay escaped in both languages
     for text in (page, english):
         assert "<script>" not in text and "</script><script" not in text
+
+
+@pytest.mark.parametrize("variant", ["forward", "forward_bad_subject", "unverified_forward"])
+def test_approval_origin_variants_in_german(variant: str):
+    t = Translator()
+    view = _view()
+    if variant == "unverified_forward":
+        view["origin"], view["forward_in_text"] = None, True
+    else:
+        view["origin"] = {**view["origin"], "kind": "forward", "subject_ok": variant == "forward"}
+    ctx = {**BASE, **CONTEXTS["approval.html"], "view": view}
+    page = t.render("approval.html", "de", **ctx)
+    assert not [m for m in _untranslated_english() if m in page]
+    assert "Weitergeleitete Nachricht" in page or "weitergeleitete Nachricht" in page
 
 
 def test_error_pages_and_notices_and_error_boxes_in_german():

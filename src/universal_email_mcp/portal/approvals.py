@@ -48,11 +48,12 @@ from universal_email_mcp.service.send import (
     class_tag,
     content_hash,
     extra_sections,
+    has_forward_block,
     html_excerpt,
     html_heading,
     preview_cut_note,
     remote_images_warning,
-    split_quoted,
+    split_verified_quote,
     text_excerpt,
 )
 from universal_email_mcp.store import Grant, PendingApproval
@@ -92,7 +93,8 @@ def view_of(p: Prepared) -> dict[str, Any]:
         }
         for c in p.classified
     ]
-    new_text, quoted = split_quoted(out.preview)
+    new_text, quoted = split_verified_quote(out.preview, p.verified_quote)
+    origin = p.origin
     shown, note = text_excerpt(new_text)
     q_shown, q_note = text_excerpt(quoted)
     return {
@@ -117,6 +119,18 @@ def view_of(p: Prepared) -> dict[str, Any]:
         "images_warning": remote_images_warning(out) if out.remote_images else "",
         "quoted": q_shown,
         "quoted_note": q_note,
+        "origin": (
+            {
+                "kind": origin.kind,
+                "sender": sanitize_line(origin.sender)[:120],
+                "date": origin.date,
+                "subject": sanitize_line(origin.subject)[:100],
+                "subject_ok": origin.subject_ok,
+            }
+            if origin is not None
+            else None
+        ),
+        "forward_in_text": origin is None and has_forward_block(out.preview),
         "reasons": list(p.reasons),
         "warnings": [sanitize_line(w)[:200] for w in p.warnings][:10],
     }

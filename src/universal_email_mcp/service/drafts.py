@@ -534,11 +534,10 @@ def drafts_folder(session: ImapSession):  # noqa: ANN202
     return folder
 
 
-def _loaded(
-    session: ImapSession, ref: MessageRef, msg: Message, *, attachments: bool, att_cap: int
-) -> _Loaded:
+def original_of(msg: Message) -> Original:
+    """The message as the original of a reply or forward."""
     s = msg.summary
-    original = Original(
+    return Original(
         message_id=s.message_id,
         in_reply_to=s.in_reply_to,
         references=s.references,
@@ -551,6 +550,12 @@ def _loaded(
         body=msg.body.text,
         body_truncated=msg.body.truncated or msg.source_truncated,
     )
+
+
+def _loaded(
+    session: ImapSession, ref: MessageRef, msg: Message, *, attachments: bool, att_cap: int
+) -> _Loaded:
+    original = original_of(msg)
     warnings: list[str] = []
     files: list[FileAttachment] = []
     if msg.source_truncated:

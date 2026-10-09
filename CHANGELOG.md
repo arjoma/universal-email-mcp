@@ -443,6 +443,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Variation selectors U+E0100–E01EF (and a few more invisible format characters)
   are stripped from mail text.
 
+- Hostile mail can no longer take the server or a listing down: header, body and folder-name
+  decoders never raise and never return a lone UTF-16 surrogate (UTF-7 such as `+2D0-` killed
+  the stdio server's JSON writer); an unusable charset (`undefined`, NUL, bytes-to-bytes
+  codecs) falls back to UTF-8 / Windows-1252; one message whose headers cannot be handled is
+  shown as a marked placeholder (`[unreadable message: ...]`, id kept, so it can still be moved
+  or deleted) instead of dropping its account from the listing; a malformed MIME parameter
+  (`name*0*`) leaves the message readable (the bare content type is kept, the stdlib's lenient
+  policy is the fallback); MIME bombs (tens of thousands of delimiter lines) are refused before
+  the stdlib parser sees them; header values are capped before RFC 2047 decoding and
+  `References` is deduplicated in linear time.
+- HTML nested deeper than the parser keeps (libxml2 silently drops everything below ~255
+  levels) is converted by stripping tags, with a note, instead of hiding the text from the reader.
+- The send confirmation and the portal approval page identify the original of a reply or
+  forward (sender, date, subject, first lines), say "FORWARDED MESSAGE" for forwards and warn
+  when the subject is not `Re:` / `Fwd:` plus the original's subject. The portal only folds a
+  quote the server verified against the message in the mailbox (`In-Reply-To`); text the
+  model wrote that merely looks like a quote is shown as ordinary text and never described as
+  "not written by the application".
+- Free text in the confirmation prompt (subject, display names, file names, notes) is escaped
+  for Markdown, and `＠` / `﹫` in display names are neutralised like `@`.
+- `save_draft`'s structured `quoted` is fenced and defanged like `get_message` bodies.
+- Defanging also breaks protocol-relative links (`//host/path`) and compatibility forms
+  (fullwidth `ｈｔｔｐｓ://`, `https‥//`).
+- File names: Unicode blanks (Braille blank, NBSP, em space ...) collapse to one space and long
+  names are shortened in the middle, so a run of blanks cannot hide `.exe` behind `.pdf`.
+- The raw-headers page labels authentication / spam headers that are not above the first
+  `Received` line as "from the sender, not checked" and renders raw 8-bit header bytes.
+- Listing items cap subject, address and reference counts and lengths in structured output.
+
 ### Fixed
 
 - A connection that broke while a write (flag change, move, append, folder creation) was in
@@ -450,6 +479,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   APPEND duplicated the message); the error says to check the result first. The move fallback
   (COPY + UID EXPUNGE) no longer withdraws a `\\Deleted` mark that another client had set on
   a message before.
+- The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
+  both transfer decoders run in a worker thread instead of on the event loop.
 - A timed-out account no longer blocks the server until the read time-out, and
   retries against a stalling server share one connection attempt.
 - Paging no longer skips messages deleted between pages; cursors stop retrying
