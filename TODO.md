@@ -7,6 +7,15 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
+- [ ] `NetPolicy.total_timeout` (60 s) bounds a whole SMTP submission: a 25 MiB send over a
+      slow uplink is cut mid-DATA (reported as unknown outcome). Scale it by message size or
+      make it a setting (`Config.net_policy` has no knob yet).
+- [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from
+      `limits.max_message_bytes`, which an operator may raise above that.
+- [ ] `ImapLoginVerifier` semaphore wait has no timeout (16 tarpits hold sign-ins up to
+      `total_timeout`); the first write after a server-side idle drop now fails instead of
+      reconnecting (could be softened with a NOOP probe before the first write).
+- [ ] `oauth/fetch.py` docstring still says "call it through asyncio.to_thread".
 - [ ] Message ids name the account only by its name (`MessageRef.account`): an account that is
       deleted and re-added under the same name (or the positional `Account N` names of the
       per-user config) lets a stale id address another mailbox; UIDVALIDITY is the only

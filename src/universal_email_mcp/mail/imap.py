@@ -30,6 +30,7 @@ import imaplib
 import re
 import socket
 import ssl
+import sys
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -385,6 +386,8 @@ class _GuardedIMAP4(IMAP4WithTimeout):
         class _Upgrade:
             def wrap_socket(self, sock: socket.socket, **kw: Any) -> ssl.SSLSocket:
                 pending = getattr(guarded, "_readbuf", None)
+                if pending is None and sys.version_info >= (3, 14):
+                    raise TlsError("cannot verify the read buffer after STARTTLS")  # fail closed
                 if isinstance(pending, list) and any(pending):
                     raise TlsError("the server sent data in the clear after STARTTLS")
                 return real.wrap_socket(sock, **kw)
