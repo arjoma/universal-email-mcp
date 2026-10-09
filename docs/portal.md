@@ -231,8 +231,8 @@ signed-in user's entries. The text is translatable like every other page. Detail
 * **Delete all my data.** `GET /portal/privacy/delete` shows what will go and asks to type the
   sign-in address; it needs a recent password entry like every sensitive action (stale: redirect
   to `/portal/reauth` and back). `POST` checks the CSRF token, the password freshness and the typed
-  address (case-insensitive), calls `Store.delete_user`, closes the user's pooled mail
-  connections and viewer contexts (`UserPool.forget_user`), clears the session cookie and shows
+  address (case-insensitive), calls `Store.delete_user`, retires the user's pooled mail
+  contexts (`UserPool.forget_user`; calls in flight finish, then the connections close), clears the session cookie and shows
   "Your data was deleted". Signing in again afterwards starts from scratch like a new user.
   Audit event `portal.delete_all` (log only, with counts per record kind; no feed entry because
   the feed is deleted too).

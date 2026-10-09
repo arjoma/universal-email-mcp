@@ -26,7 +26,9 @@ from universal_email_mcp.store import (
     Identity,
     MailAccount,
     PendingApproval,
+    PortalSession,
     Store,
+    Token,
     User,
 )
 
@@ -64,8 +66,8 @@ async def build_export(store: Store, user: User, now: datetime) -> dict[str, Any
         for a in await store.list_for_user(PendingApproval, user.id)
         if a.status != "sent"  # send markers are replay guards, not the user's data
     ]
-    sessions = await store.backend.find("portal_sessions", "user_id", user.id)
-    tokens = await store.backend.find("tokens", "user_id", user.id)
+    sessions = await store.list_for_user(PortalSession, user.id)
+    tokens = await store.list_for_user(Token, user.id)
     return {
         "format": EXPORT_FORMAT,
         "version": EXPORT_VERSION,
