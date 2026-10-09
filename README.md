@@ -49,12 +49,14 @@ never from the file. The server is **read-only** so far, with five tools:
 | `list_folders` | top level first with subfolder counts (`Clients ▸ 87`); `parent=` drills down, `query=` searches all levels, `depth=` (≤ 3) |
 | `find_messages` | time window (`today`, `this_week` …), from/to/subject/body, unread/flagged/attachments — exact, server-side; plus `query` (wildcard or fuzzy) |
 | `get_message` | headers, text body (paged, fenced as untrusted), attachments; `thread=true` for the conversation |
-| `find_contacts` | recent correspondents; `query=` finds a person (deeper search), `sent_to` marks people you wrote to |
+| `find_contacts` | recent correspondents; `query=` finds a person (deeper search); `sent_to` (yes/no/unknown) marks people you wrote to |
 
 `query` works the same everywhere: with `*` or `?` it is a case-insensitive,
-umlaut-folded wildcard pattern over whole words (`hub*`, `*gmbh`, `clients/m*` —
-`*` also crosses folder levels); anything else is matched fuzzily (typos,
-`Müller`/`Mueller`, name order). Lists are bounded; each result's footer says how
+umlaut-folded wildcard pattern that starts at a word start (`hub*` finds "Anna
+Huber", `*gmbh`; inside a word: `*ub*`). For folders a pattern without `/`
+matches the folder's own name at any level, one with `/` its path, where `*`
+also crosses levels (`clients/m*`, `*/2025`). Anything else is matched fuzzily
+(typos, `Müller`/`Mueller`, name order). Lists are bounded; each result's footer says how
 to narrow it or fetch the next page (`cursor`).
 
 Claude Desktop (`claude_desktop_config.json`):

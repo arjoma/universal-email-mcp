@@ -33,6 +33,12 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
       raw headers, `.eml` and attachment downloads in the authenticated portal.
 
+## WP 2b (folders as labels) — conversation search
+- [ ] `get_message(thread=true)` searches at most 25 folders (special folders,
+      archive and folders named like the participants first; the rest are listed
+      as skipped). Restructure: a time budget instead of a folder count, and later
+      rounds only in folders that had hits.
+
 ## M1 review leftovers
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
       `SINCE`/`BEFORE` compare the server's INTERNALDATE day (server time zone) —
