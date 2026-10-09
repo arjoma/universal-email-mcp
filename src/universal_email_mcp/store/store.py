@@ -45,6 +45,7 @@ from universal_email_mcp.store.records import (
 R = TypeVar("R", bound=Record)
 
 SEALED_KEY = "_sealed"
+_META_FIELDS = frozenset({"id", "version", "extra", "extra_sealed"})
 ACTIVITY_MAX_TEXT = 64
 _BATCH = 400  # Firestore transactions allow 500 writes
 
@@ -151,11 +152,15 @@ class Store:
         doc: Doc = {}
         sealed: dict[str, Any] = {}
         for f in dataclasses.fields(rec):
-            if f.name in ("id", "version"):
+            if f.name in _META_FIELDS:
                 continue
             value = getattr(rec, f.name)
             _check_datetimes(value)
             (sealed if f.name in cls.SEALED else doc)[f.name] = _plain(value)
+        for k, v in rec.extra.items():  # fields of a newer code version, kept as they are
+            doc.setdefault(k, v)
+        for k, v in rec.extra_sealed.items():
+            sealed.setdefault(k, v)
         if sealed:
             doc[SEALED_KEY] = self.keys.seal_json(sealed, self._aad(cls, rec.owner, rec.id))
         doc[VERSION_KEY] = version
@@ -165,21 +170,24 @@ class Store:
         values: dict[str, Any] = {
             k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY)
         }
-        if cls.SEALED:
+        if cls.SEALED or SEALED_KEY in doc:
             if not isinstance(doc.get(SEALED_KEY), str):
                 raise CryptoError("record has no sealed data")
             owner = rec_id if cls is User else str(doc.get("user_id", ""))
-            values.update(
-                self.keys.open_json(doc[SEALED_KEY], self._aad(cls, owner, rec_id)),
-            )
+            sealed = self.keys.open_json(doc[SEALED_KEY], self._aad(cls, owner, rec_id))
+        else:
+            sealed = {}
+        values.update(sealed)
         hints = _field_hints(cls)
         for name, value in values.items():
             if isinstance(value, list) and _is_tuple(hints.get(name)):
                 values[name] = tuple(cast("list[Any]", value))
-        known = {f.name for f in dataclasses.fields(cls)}
+        known = {f.name for f in dataclasses.fields(cls)} - _META_FIELDS
         return cls(
             id=rec_id,
             version=int(doc[VERSION_KEY]),
+            extra={k: v for k, v in values.items() if k not in known and k not in sealed},
+            extra_sealed={k: v for k, v in sealed.items() if k not in known},
             **{k: v for k, v in values.items() if k in known},
         )
 
@@ -623,7 +631,7 @@ def _when(rec: Record) -> datetime:
 def _export(rec: Record) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for f in dataclasses.fields(rec):
-        if f.name in rec.EXPORT_EXCLUDE or f.name == "version":
+        if f.name in rec.EXPORT_EXCLUDE or f.name in _META_FIELDS:
             continue
         value = getattr(rec, f.name)
         out[f.name] = value.isoformat() if isinstance(value, datetime) else _plain(value)

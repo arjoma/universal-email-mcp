@@ -13,7 +13,7 @@ correspondents, folder names, attachment names or search terms.
 | SQLite | single VM / on-prem | planned, see `TODO.md` |
 
 Firestore layout: one top-level collection per record kind (optional name prefix so several
-instances can share a project), document id = record id (percent-encoded). Fields:
+instances can share a project), document id = SHA-256 of kind and record id (record ids can be attacker-chosen URLs; the real id is in `_id`). Fields:
 the plain record fields, `_v` (version), `expires_at` (timestamp) and `_sealed` (encrypted
 blob). Enable TTL deletion once per collection:
 
@@ -52,7 +52,7 @@ tripwire against accidents; callers must still pass names and counts only. Accou
 ### Privacy: export and delete
 
 `Store.export_user(user_id)` returns everything stored about a user as plain data (passwords,
-token digests and keys left out). `Store.delete_user(user_id)` removes every record of the
+token digests, draft references and keys left out). `Store.delete_user(user_id)` removes every record of the
 user (accounts, identities, sessions, grants, tokens, codes, approvals, activity, the user
 itself) and returns counts; run it again if it was interrupted. OAuth clients are shared
 across users and not personal data.

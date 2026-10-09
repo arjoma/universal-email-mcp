@@ -605,3 +605,46 @@ async def test_missing_sealed_blob_is_a_crypto_error(store: Store) -> None:
     await store.backend.commit([Op("replace", "accounts", "r1", doc, 1)])
     with pytest.raises(CryptoError):
         await store.get(MailAccount, "r1")
+
+
+HOSTILE_IDS = [".", "..", "__name__", "__x__", "a/b/c", "x" * 5000, "https://c.example/" + "p" * 3000,
+               "ünï/cödé\u202e%2F", " ", "\x00"]  # fmt: skip
+
+
+@pytest.mark.parametrize("client_id", HOSTILE_IDS)
+async def test_hostile_record_ids(store: Store, client_id: str) -> None:
+    c = await store.register_client(client_id, name="x")
+    assert (await store.get(OAuthClient, client_id)) == c
+    assert [i async for i, _ in store.backend.scan("oauth_clients")] == [client_id]
+    await store.update(c)
+    await store.delete(OAuthClient, client_id)
+    assert await store.get(OAuthClient, client_id) is None
+
+
+async def test_unknown_fields_survive_update(store: Store) -> None:
+    from universal_email_mcp.store.backend import Op
+    from universal_email_mcp.store.crypto import Aad
+
+    await store.create(make(MailAccount))
+    doc = dict(await store.backend.get("accounts", "r1") or {})
+    aad = Aad("u_1", "accounts", "r1", "_sealed")
+    sealed = store.keys.open_json(doc["_sealed"], aad)
+    sealed["future_secret"] = "S3CRET-FUTURE"
+    doc["_sealed"] = store.keys.seal_json(sealed, aad)
+    doc["future_flag"] = {"a": [1, 2]}
+    await store.backend.commit([Op("replace", "accounts", "r1", doc, 1)])
+
+    acc = await store.get(MailAccount, "r1")
+    assert acc and acc.extra == {"future_flag": {"a": [1, 2]}}
+    assert acc.extra_sealed == {"future_secret": "S3CRET-FUTURE"}
+    await store.update(replace(acc, name="Renamed"))
+    raw = await store.backend.get("accounts", "r1") or {}
+    assert raw["future_flag"] == {"a": [1, 2]}
+    assert "S3CRET-FUTURE" not in repr(raw)  # still sealed
+    again = await store.get(MailAccount, "r1")
+    assert again and again.name == "Renamed" and again.extra_sealed == acc.extra_sealed
+
+
+async def test_export_omits_draft_refs(store: Store) -> None:
+    await store.create_approval(user_id="u_1", grant_id="g", identity_id="i", content_hash="h", draft_ref="DRAFT-REF-X")  # fmt: skip
+    assert "DRAFT-REF-X" not in repr(await store.export_user("u_1"))

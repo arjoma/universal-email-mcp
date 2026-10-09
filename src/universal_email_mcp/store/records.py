@@ -26,6 +26,11 @@ class Record:
 
     id: str
     version: int = 0
+    extra: dict[str, Any] = field(default_factory=dict[str, Any], repr=False, compare=False)
+    """Plain fields this code version does not know (written by a newer instance); kept
+    unchanged on update so rolling deploys do not erase them."""
+    extra_sealed: dict[str, Any] = field(default_factory=dict[str, Any], repr=False, compare=False)
+    """The same for unknown fields inside the sealed blob."""
 
     @property
     def owner(self) -> str:
@@ -204,6 +209,7 @@ class PendingApproval(Record):
 
     KIND: ClassVar[str] = "approvals"
     SEALED: ClassVar[tuple[str, ...]] = ("draft_ref",)
+    EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("draft_ref",)
 
     user_id: str
     grant_id: str
