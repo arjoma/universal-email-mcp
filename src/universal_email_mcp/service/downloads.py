@@ -15,7 +15,6 @@ re-checks account, UIDVALIDITY and that the message still exists.
 
 from __future__ import annotations
 
-import base64
 import binascii
 import hashlib
 import hmac
@@ -26,6 +25,7 @@ from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import AttachmentNotFound, InvalidRef, TooLarge
 from universal_email_mcp.mail.bodystructure import BodyLeaf, decoded_size
 from universal_email_mcp.mail.transfer import make_decoder
@@ -48,14 +48,6 @@ class LinkExpired(Exception):
     """A genuine token whose lifetime is over."""
 
 
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
-
-
-def _unb64(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-
-
 class DownloadTokens:
     def __init__(
         self,
@@ -75,7 +67,7 @@ class DownloadTokens:
         exp = int(self._clock() + self._ttl)
         data = [ref.account, ref.folder, ref.uidvalidity, ref.uid, section, exp]
         payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        return _PREFIX + _b64(payload) + "." + _b64(self._mac(payload))
+        return _PREFIX + b64u(payload) + "." + b64u(self._mac(payload))
 
     def verify(self, token: str) -> tuple[MessageRef, str]:
         """The reference and section of a valid token. The signature is checked
@@ -85,7 +77,7 @@ class DownloadTokens:
             raise LinkInvalid
         try:
             body, mac = token[len(_PREFIX) :].split(".", 1)
-            payload, mac_bytes = _unb64(body), _unb64(mac)
+            payload, mac_bytes = unb64u(body), unb64u(mac)
         except (ValueError, binascii.Error) as e:
             raise LinkInvalid from e
         if not hmac.compare_digest(mac_bytes, self._mac(payload)):

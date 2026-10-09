@@ -17,7 +17,6 @@ paging session); remote mode passes a shared key so any instance can continue.
 
 from __future__ import annotations
 
-import base64
 import binascii
 import hashlib
 import hmac
@@ -27,6 +26,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import InvalidCursor
 
 _PREFIX = "c1."
@@ -70,14 +70,6 @@ def query_hash(args: Mapping[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
-
-
-def _unb64(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-
-
 class CursorCodec:
     def __init__(self, key: bytes | None = None) -> None:
         self._key = key or secrets.token_bytes(32)
@@ -97,7 +89,7 @@ class CursorCodec:
             ],
         }
         payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        return _PREFIX + _b64(payload) + "." + _b64(self._mac(payload))
+        return _PREFIX + b64u(payload) + "." + b64u(self._mac(payload))
 
     def decode(self, text: str, *, tool: str, query: str) -> Cursor:
         """Verify and decode; raises :class:`InvalidCursor` for anything wrong,
@@ -106,7 +98,7 @@ class CursorCodec:
             raise InvalidCursor("not a cursor from this server")
         try:
             body, mac = text[len(_PREFIX) :].split(".", 1)
-            payload, mac_bytes = _unb64(body), _unb64(mac)
+            payload, mac_bytes = unb64u(body), unb64u(mac)
         except (ValueError, binascii.Error) as e:
             raise InvalidCursor("cursor is corrupted") from e
         if not hmac.compare_digest(mac_bytes, self._mac(payload)):

@@ -37,6 +37,7 @@ from typing import Any
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import ConfigError, MailError
 
 FORMAT = "e1"
@@ -49,14 +50,6 @@ class CryptoError(MailError):
     """A blob cannot be opened (tampered, wrong place, unknown key). Never carries key material."""
 
     code = "STORE_CRYPTO"
-
-
-def _b64u(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _unb64u(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
 def _key_number(key_id: str) -> int:
@@ -164,7 +157,7 @@ class KeyRing:
     def seal(self, plaintext: bytes, aad: Aad) -> str:
         nonce = os.urandom(_NONCE_BYTES)
         ct = self._aead[self.active].encrypt(nonce, plaintext, aad.encode(self.active))
-        return f"{FORMAT}.{self.active}.{_b64u(nonce + ct)}"
+        return f"{FORMAT}.{self.active}.{b64u(nonce + ct)}"
 
     def key_id_of(self, blob: str) -> str:
         parts = blob.split(".")
@@ -178,7 +171,7 @@ class KeyRing:
         if aead is None:
             raise CryptoError(f"blob was sealed with unknown key {key_id[:12]!r}")
         try:
-            raw = _unb64u(blob.split(".")[2])
+            raw = unb64u(blob.split(".")[2])
         except (binascii.Error, ValueError):
             raise CryptoError("blob is not valid base64") from None
         if len(raw) < _NONCE_BYTES + 16:

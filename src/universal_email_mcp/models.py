@@ -6,13 +6,13 @@ directly usable as structured tool output. Datetimes are timezone-aware.
 
 from __future__ import annotations
 
-import base64
 import binascii
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, get_args
 
+from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import InvalidRef
 
 # --------------------------------------------------------------------------- servers
@@ -245,7 +245,7 @@ class MessageRef:
                 [self.account, self.folder, self.uidvalidity, self.uid],
             )
         payload = json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        return prefix + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+        return prefix + b64u(payload)
 
     @property
     def id(self) -> str:
@@ -267,7 +267,7 @@ class MessageRef:
         if not body or any(c not in _B64URL for c in body):
             raise InvalidRef("message id contains invalid characters")
         try:
-            raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+            raw = unb64u(body)
             data = json.loads(raw.decode("utf-8"))
         except (binascii.Error, ValueError, UnicodeDecodeError) as e:
             raise InvalidRef("message id is corrupted") from e

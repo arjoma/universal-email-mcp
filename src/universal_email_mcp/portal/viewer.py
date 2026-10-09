@@ -23,7 +23,6 @@ Everything is read-only (``BODY.PEEK``): viewing a message does not mark it read
 from __future__ import annotations
 
 import asyncio
-import base64
 import binascii
 import contextlib
 import hashlib
@@ -43,6 +42,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import (
     AccountTimeout,
     AttachmentNotFound,
@@ -116,13 +116,13 @@ class ContentTokens:
     def issue(self, user_id: str, message_id: str, remote_images: bool) -> str:
         data = [user_id, message_id, int(remote_images), int(self._clock() + self._ttl)]
         payload = json.dumps(data, separators=(",", ":")).encode()
-        return _b64(payload) + "." + _b64(self._mac(payload))
+        return b64u(payload) + "." + b64u(self._mac(payload))
 
     def verify(self, token: str) -> tuple[str, str, bool] | None:
         try:
             body, mac = token.split(".", 1)
-            payload = _unb64(body)
-            if not hmac.compare_digest(_unb64(mac), self._mac(payload)):
+            payload = unb64u(body)
+            if not hmac.compare_digest(unb64u(mac), self._mac(payload)):
                 return None
             user_id, message_id, images, exp = json.loads(payload)
             if not (isinstance(user_id, str) and isinstance(message_id, str)):
@@ -132,14 +132,6 @@ class ContentTokens:
             return user_id, message_id, bool(images)
         except (ValueError, TypeError, binascii.Error):
             return None
-
-
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
-
-
-def _unb64(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
 # --------------------------------------------------------------------------- helpers
