@@ -281,7 +281,10 @@ class MessageSummary:
 
 @dataclass(frozen=True, slots=True)
 class Attachment:
-    """An attachment or inline part. ``part_id`` is the IMAP body section (e.g. ``2.1``)."""
+    """An attachment or inline part. ``part_id`` is the IMAP body section (e.g. ``2.1``)
+    as the **server** numbers it (from BODYSTRUCTURE), the id ``get_attachment`` takes.
+    ``size`` is the decoded size; ``size_estimated`` when it was derived from the
+    encoded size (the message was only fetched partially)."""
 
     part_id: str
     filename: str | None
@@ -289,6 +292,7 @@ class Attachment:
     size: int
     inline: bool = False
     content_id: str | None = None
+    size_estimated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

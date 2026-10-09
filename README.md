@@ -41,14 +41,15 @@ the local config file (see [`docs/config.example.toml`](https://github.com/arjom
 accounts from the config file ([`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml);
 default `~/.config/universal-email-mcp/config.toml`, or `--config PATH` / `UEM_CONFIG`).
 Passwords come from environment variables (`password_env`) or the OS keyring —
-never from the file. The server is **read-only** so far, with five tools:
+never from the file. The server is **read-only** so far, with six tools:
 
 | Tool | What it does |
 |---|---|
-| `account_info` | accounts, permissions, server features, quota, identities, limits |
+| `account_info` | accounts, permissions, server features, quota, identities, limits, plus a cheap overview (unread in INBOX, Drafts/Junk counts, number of folders) |
 | `list_folders` | top level first with subfolder counts (`Clients ▸ 87`); `parent=` drills down, `query=` searches all levels, `depth=` (≤ 3) |
 | `find_messages` | time window (`today`, `this_week` …), from/to/subject/body, unread/flagged/attachments — exact, server-side; plus `query` (wildcard or fuzzy) |
 | `get_message` | headers, text body (paged, fenced as untrusted), attachments; `thread=true` for the conversation |
+| `get_attachment` | one attachment by the id `get_message` lists: text-like files inline (fenced, paged), other files as an embedded resource up to `limits.max_attachment_bytes` (default 5 MiB); never marks mail as read |
 | `find_contacts` | recent correspondents; `query=` finds a person (deeper search); `sent_to` (yes/no/unknown) marks people you wrote to |
 
 `query` works the same everywhere: with `*` or `?` it is a case-insensitive,

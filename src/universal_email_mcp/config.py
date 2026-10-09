@@ -72,6 +72,9 @@ class Limits:
     max_results: int = 50
     max_body_chars: int = 20_000
     max_message_bytes: int = 10 * 1024 * 1024
+    max_attachment_bytes: int = 5 * 1024 * 1024
+    """Largest attachment ``get_attachment`` returns (decoded); bigger ones are
+    refused or, with a download link provider, handed out as a link."""
     max_accounts_per_call: int = 10
     account_timeout: float = 30.0
     max_headers_scanned: int = 2_000
@@ -310,6 +313,7 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         "max_results",
         "max_body_chars",
         "max_message_bytes",
+        "max_attachment_bytes",
         "max_accounts_per_call",
         "account_timeout",
         "max_headers_scanned",
@@ -320,6 +324,9 @@ def _parse_limits(c: _Ctx, t: dict[str, Any]) -> Limits:
         max_results=int(c.num(t, "max_results", w, d.max_results, integer=True)),
         max_body_chars=int(c.num(t, "max_body_chars", w, d.max_body_chars, integer=True)),
         max_message_bytes=int(c.num(t, "max_message_bytes", w, d.max_message_bytes, integer=True)),
+        max_attachment_bytes=int(
+            c.num(t, "max_attachment_bytes", w, d.max_attachment_bytes, integer=True)
+        ),
         max_accounts_per_call=int(
             c.num(t, "max_accounts_per_call", w, d.max_accounts_per_call, integer=True)
         ),

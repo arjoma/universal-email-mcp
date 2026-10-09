@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `get_attachment`: reads one attachment by the id `get_message` lists. Text-like
+  files (text, CSV, JSON, XML, HTML, SVG) come back as fenced, defanged, paged text;
+  other files as an embedded resource (base64 blob); files over
+  `limits.max_attachment_bytes` (default 5 MiB) are refused with their size. Part
+  numbers come from the server's `BODYSTRUCTURE`, so a malformed message (where
+  Python's MIME parser and the server disagree) gives the right bytes or a refusal,
+  never another part's bytes. Only `BODY.PEEK[n]` is used (no `\Seen`).
+- `get_message` lists attachments with their server part id and the real decoded
+  size, also when only the beginning of a large message was read (marked `~` as an
+  estimate); file names lose path components, control and bidi characters.
+- `account_info` returns a cheap overview per account (unread/message counts of INBOX,
+  Drafts and Junk, number of folders); `overview=false` skips it.
+- `MailService(download_links=...)`: hook for authenticated attachment download
+  links (portal in remote mode, loopback listener locally; not built yet). With a
+  provider `get_message` lists a link per attachment and `get_attachment` hands out
+  a link for files over the cap.
 - `universal-email-mcp probe`: log in read-only to an IMAP server (`--host`,
   `--server <preset>` or `--account <name>`) and report capabilities, namespace,
   folders with detected roles and counts, quota and the strategies the bridge will

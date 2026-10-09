@@ -23,6 +23,7 @@ max_recipients = 20
 max_results = 50                      # messages per tool call
 max_body_chars = 20000                # characters of body text per call
 max_message_bytes = 10485760          # larger messages are fetched partially
+max_attachment_bytes = 5242880        # largest attachment get_attachment returns
 max_accounts_per_call = 10
 account_timeout = 30                  # seconds per account in a fan-out
 max_headers_scanned = 2000            # headers per account for fuzzy search / contacts

@@ -120,21 +120,56 @@ class MessageList(_Model):
 
 
 class AttachmentOut(_Model):
-    part_id: str
-    filename: str | None
-    content_type: str
-    size: int
+    part_id: str = Field(description="Pass as 'attachment' to get_attachment.")
+    filename: str | None = Field(
+        description="Untrusted; path parts and control characters removed."
+    )
+    content_type: str = Field(description="As declared by the sender (untrusted).")
+    size: int = Field(description="Decoded size in bytes.")
+    size_estimated: bool = Field(
+        default=False, description="The size was derived from the encoded size."
+    )
     inline: bool
+    download_url: str | None = Field(
+        default=None, description="Server-generated download link (when the server offers one)."
+    )
 
     @classmethod
-    def of(cls, a: Attachment) -> AttachmentOut:
+    def of(cls, a: Attachment, download_url: str | None = None) -> AttachmentOut:
         return cls(
             part_id=a.part_id,
             filename=a.filename,
             content_type=a.content_type,
             size=a.size,
+            size_estimated=a.size_estimated,
             inline=a.inline,
+            download_url=download_url,
         )
+
+
+class AttachmentContent(_Model):
+    message_id: str
+    attachment: str
+    filename: str | None = Field(
+        description="Untrusted; path parts and control characters removed."
+    )
+    content_type: str = Field(description="As declared by the sender (untrusted).")
+    size: int = Field(description="Decoded size in bytes (estimated when size_exact is false).")
+    size_exact: bool
+    kind: Literal["text", "resource", "link"] = Field(
+        description=(
+            "text: 'text' holds a window of the decoded file, fenced as untrusted; "
+            "resource: the file is attached as an embedded resource (base64 blob) "
+            "in the result's content; link: too large to return, use download_url."
+        )
+    )
+    text: str | None = Field(description="Fenced, defanged text (kind=text).")
+    offset: int
+    length: int = Field(description="Characters of the text in this window.")
+    total_chars: int
+    next_offset: int | None = Field(description="Pass as 'offset' to read on.")
+    download_url: str | None = Field(description="Server-generated download link, if offered.")
+    notes: list[str]
 
 
 class BodyOut(_Model):
@@ -214,6 +249,21 @@ class Quota(_Model):
     limit: int
 
 
+class SpecialFolderOut(_Model):
+    role: str
+    name: str
+    messages: int
+    unread: int
+
+
+class Overview(_Model):
+    folders: int = Field(description="Folders in the account.")
+    selectable: int = Field(description="Folders that hold messages (not just groups).")
+    special: list[SpecialFolderOut] = Field(
+        description="Message and unread counts of INBOX, Drafts and Junk (where present)."
+    )
+
+
 class AccountOut(_Model):
     name: str
     kind: str
@@ -227,6 +277,9 @@ class AccountOut(_Model):
     features: dict[str, bool | list[str]]
     quota: list[Quota]
     folder_roles: dict[str, str]
+    overview: Overview | None = Field(
+        default=None, description="Cheap counts; null when not asked for or not available."
+    )
     notes: list[str]
 
 
@@ -244,6 +297,7 @@ class PolicyOut(_Model):
     tools: str = Field(description="Which tool set this server offers.")
     max_results: int
     max_body_chars: int
+    max_attachment_bytes: int
     max_accounts_per_call: int
     account_timeout: float
     max_headers_scanned: int
