@@ -7,6 +7,18 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
+- [ ] Message ids name the account only by its name (`MessageRef.account`): an account that is
+      deleted and re-added under the same name (or the positional `Account N` names of the
+      per-user config) lets a stale id address another mailbox; UIDVALIDITY is the only
+      guard. Add a stable account key (store record id, or a short hash of host + user) to
+      the ref, encode it in the id and compare it in `ensure_ref_matches`. Touches every
+      `MessageRef(...)` constructor, hence not done in the network WP.
+- [ ] `build_html_view` (viewer) still runs on asyncio's default executor. It is CPU only
+      and has no network I/O, but a pathological message can occupy a worker; give it a
+      bounded executor of its own.
+- [ ] `getaddrinfo` in `net.resolve_checked` is not covered by the `Deadline` (the libc
+      resolver timeouts apply; a hostile authoritative DNS server can stall one worker thread
+      for that long). `run_deadline` abandons the thread after `GRACE`.
 - [ ] Run `deploy/gcp` against a real project once (see Deployment) and correct the docs.
 - [ ] Try SMTP against a real server and fill `ServerProfile.smtp_saves_sent`; check the
       archive scheme of the united-domains hoster with `probe` (see Send, IMAP).

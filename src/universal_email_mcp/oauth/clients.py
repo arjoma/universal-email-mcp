@@ -24,6 +24,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any
 
+from universal_email_mcp.bounded import run_deadline
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.oauth.config import OAuthConfig
 from universal_email_mcp.oauth.fetch import (
@@ -197,10 +198,17 @@ class ClientRegistry:
             )
         try:
             async with self._sem:
-                body = await asyncio.to_thread(fetch_document, client_id, self._fetch_policy)
+                body = await run_deadline(
+                    lambda: fetch_document(client_id, self._fetch_policy),
+                    seconds=self._fetch_policy.total_timeout,
+                )
         except FetchError as e:
             raise ClientError(
                 "The client's metadata document could not be fetched.", str(e)
+            ) from None
+        except TimeoutError:
+            raise ClientError(
+                "The client's metadata document could not be fetched.", "timeout"
             ) from None
         name, redirects = parse_client_document(client_id, body)
         now = self._store.now()

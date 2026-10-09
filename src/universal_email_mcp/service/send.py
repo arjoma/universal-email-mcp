@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from universal_email_mcp import audit
+from universal_email_mcp.bounded import run_deadline
 from universal_email_mcp.config import Config, SendPolicy, resolve_password
 from universal_email_mcp.errors import (
     AlreadySent,
@@ -163,6 +164,19 @@ class SendLimiter:
 
     def record(self, key: str) -> None:
         self._recent(key).append(self._clock())
+
+    def reserve(self, key: str) -> float:
+        """Count a send that is about to start (so concurrent sends see it); the returned
+        token goes to :meth:`release` if the send certainly did not happen."""
+        now = self._clock()
+        self._recent(key).append(now)
+        return now
+
+    def release(self, key: str, token: float) -> None:
+        try:
+            self._recent(key).remove(token)
+        except ValueError:
+            pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -782,48 +796,55 @@ class Sender:
                     )
             if mid:
                 self._in_flight.add(mid)
+            reserved = self.limiter.reserve(smtp_acc.name)
+        cfg = self.config
+        try:
+
+            def run() -> smtp.SmtpReceipt:
+                endpoint = smtp_acc.server.smtp
+                if endpoint is None:  # pragma: no cover - guarded by config validation
+                    raise NotPermitted("the account has no SMTP server")
+                return self._submit(
+                    endpoint,
+                    smtp_acc.username,
+                    resolve_password(smtp_acc),
+                    sender=out.sender.email,
+                    recipients=envelope,
+                    raw=out.raw,
+                    max_bytes=cfg.limits.max_send_bytes,
+                    tls=smtp_acc.tls,
+                    net=cfg.net_policy(smtp_acc),
+                )
+
             try:
-
-                def run() -> smtp.SmtpReceipt:
-                    cfg = self.config
-                    endpoint = smtp_acc.server.smtp
-                    if endpoint is None:  # pragma: no cover - guarded by config validation
-                        raise NotPermitted("the account has no SMTP server")
-                    return self._submit(
-                        endpoint,
-                        smtp_acc.username,
-                        resolve_password(smtp_acc),
-                        sender=out.sender.email,
-                        recipients=envelope,
-                        raw=out.raw,
-                        max_bytes=cfg.limits.max_send_bytes,
-                        tls=smtp_acc.tls,
-                        net=cfg.net_policy(smtp_acc),
-                    )
-
                 try:
-                    receipt = await asyncio.to_thread(run)
-                except MailError as e:
-                    await audit.record("send.failed", **base, code=e.code)
-                    if not isinstance(e, SendOutcomeUnknown):
-                        # unknown outcome: the mail may be out, so the claim stays (no resend)
-                        await self._unclaim(claimed)
-                    if p.ref is not None:
-                        e.hint = (e.hint + " " if e.hint else "") + (
-                            f"The message is kept as a draft (id {p.ref.encode()})."
-                        )
-                    raise
-                except Exception:
-                    await audit.record("send.failed", **base, code="UNEXPECTED")
+                    receipt = await run_deadline(
+                        run, seconds=cfg.net_policy(smtp_acc).total_timeout
+                    )
+                except TimeoutError:  # the thread did not even end after the watchdog
+                    raise SendOutcomeUnknown("the SMTP server did not finish in time") from None
+            except MailError as e:
+                await audit.record("send.failed", **base, code=e.code)
+                if not isinstance(e, SendOutcomeUnknown):
+                    # unknown outcome: the mail may be out, so the claim stays (no resend)
                     await self._unclaim(claimed)
-                    raise
-                if mid:
-                    self._sent.add(mid)
-                self.limiter.record(smtp_acc.name)
-                if self.remote is not None:
-                    await self._record_remote()
-            finally:
-                self._in_flight.discard(mid)
+                    self.limiter.release(smtp_acc.name, reserved)
+                if p.ref is not None:
+                    e.hint = (e.hint + " " if e.hint else "") + (
+                        f"The message is kept as a draft (id {p.ref.encode()})."
+                    )
+                raise
+            except Exception:
+                await audit.record("send.failed", **base, code="UNEXPECTED")
+                await self._unclaim(claimed)
+                self.limiter.release(smtp_acc.name, reserved)
+                raise
+            if mid:
+                self._sent.add(mid)
+            if self.remote is not None:
+                await self._record_remote()
+        finally:
+            self._in_flight.discard(mid)
         await audit.record("send.sent", **base)
         result.status = "sent"
         result.receipt = receipt.reply

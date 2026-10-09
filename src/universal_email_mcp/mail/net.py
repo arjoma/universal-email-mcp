@@ -46,7 +46,7 @@ class NetPolicy:
     """``None`` = any port; remote free entry uses ``{993, 995, 465, 587}``."""
     connect_timeout: float = 15.0
     read_timeout: float = 60.0
-    total_timeout: float = 120.0
+    total_timeout: float = 60.0
     """Absolute budget of one connect (TLS, STARTTLS, login) or one one-shot operation
     (portal test, sign-in check, SMTP submit): a :class:`Deadline` shuts the sockets
     down when it runs out, however slowly a hostile server trickles bytes (every
@@ -228,6 +228,11 @@ def _shutdown_quietly(sock: socket.socket) -> None:
         sock.shutdown(socket.SHUT_RDWR)
     except OSError:
         pass
+
+
+def current_deadline() -> Deadline | None:
+    """The :class:`Deadline` of the running ``with`` block in this thread, if any."""
+    return _current_deadline.get()
 
 
 def _watch(sock: socket.socket) -> Deadline | None:

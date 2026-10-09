@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from universal_email_mcp.bounded import run_deadline
 from universal_email_mcp.errors import (
     AddressNotAllowed,
     AuthFailed,
@@ -25,7 +26,7 @@ from universal_email_mcp.errors import (
 )
 from universal_email_mcp.mail import smtp
 from universal_email_mcp.mail.imap import ImapSession
-from universal_email_mcp.mail.net import NetPolicy, Resolver
+from universal_email_mcp.mail.net import NetPolicy, Resolver, current_deadline
 from universal_email_mcp.mail.pop3 import Pop3Session
 from universal_email_mcp.models import Endpoint, TlsSettings
 
@@ -104,9 +105,19 @@ class LiveTester:
         return self._slots
 
     async def _run(self, fn: Callable[[], TestOutcome]) -> TestOutcome:
+        """On a daemon thread of its own under an absolute deadline: a server that
+        trickles bytes cannot keep the thread (or any shared pool) busy past it."""
+
+        def attempt() -> TestOutcome:
+            outcome = fn()
+            deadline = current_deadline()
+            if deadline is not None and deadline.expired and not outcome.ok:
+                return TestOutcome(TIMEOUT)  # the cut connection's error is not the story
+            return outcome
+
         try:
             async with self._limit():
-                return await asyncio.wait_for(asyncio.to_thread(fn), TEST_TIMEOUT)
+                return await run_deadline(attempt, seconds=TEST_TIMEOUT)
         except TimeoutError:
             return TestOutcome(TIMEOUT)
 

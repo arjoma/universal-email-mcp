@@ -77,8 +77,10 @@ Code must treat it that way everywhere:
 - `presets.py` — server presets, `MAIL_SERVERS` / `LOGIN_DOMAINS` parsing.
 - `config.py` — local-mode TOML config and password lookup (env / keyring).
 - `mail/net.py` — SSRF-safe connect (resolve once, check every IP, connect to it,
-  TLS on the host name). `mail/imap.py` — synchronous `ImapSession`
-  (run it via `asyncio.to_thread`): reads use EXAMINE; the few write methods
+  TLS on the host name) and `Deadline` (absolute watchdog that shuts the sockets down).
+  `bounded.py` — `run_daemon` / `run_deadline`: **blocking mail I/O never runs on asyncio's
+  default executor** (`asyncio.to_thread`), always on a daemon thread of its own under a
+  `Deadline`. `mail/imap.py` — synchronous `ImapSession` (run it that way): reads use EXAMINE; the few write methods
   (`set_flags`, `move_messages`, `create_folder`) are UID-scoped, check UIDVALIDITY
   first and never issue a plain EXPUNGE. `mail/mime.py` — parsing, HTML→text,
   `fence_untrusted`. `mail/folders.py` — role detection; `mail/foldername.py` —

@@ -1,7 +1,8 @@
 """IMAP backend on top of ``imapclient``.
 
 :class:`ImapSession` is **synchronous and not thread-safe**: one session per
-worker thread; async callers use ``await asyncio.to_thread(...)``. Reads never
+worker thread; async callers use :func:`universal_email_mcp.bounded.run_daemon` (never
+``asyncio.to_thread``: a tarpitting server would pin the shared default executor). Reads never
 change mailbox state: folders are opened with EXAMINE and bodies fetched with
 ``BODY.PEEK`` (``\\Seen`` is never set).
 
