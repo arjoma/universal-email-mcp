@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 import pytest
 
@@ -384,7 +385,6 @@ def test_refresh_cannot_widen_the_scope(client):
     assert ok.status_code == 200
 
 
-def test_access_token_cannot_be_used_as_refresh_token(client):
 async def test_refresh_with_a_narrower_scope_issues_a_narrower_token(client, store):
     """RFC 6749 section 6: the new token has at most the requested scope; the narrowing
     sticks for the refresh-token chain (a later refresh does not widen it back)."""
@@ -412,6 +412,7 @@ async def test_refresh_with_a_narrower_scope_issues_a_narrower_token(client, sto
     assert wide.json()["error"] == "invalid_scope"
 
 
+def test_access_token_cannot_be_used_as_refresh_token(client):
     a, first = connect(client)
     r = refresh(client, a.client_id, first["access_token"])
     assert r.json()["error"] == "invalid_grant"
@@ -779,3 +780,90 @@ async def test_consent_without_accounts_grants_nothing(client, store):
     assert r.status_code == 400 and "Select at least one permission" in r.text
     q = query_of(a.decide(action="deny").headers["location"])
     assert q["error"] == "access_denied"
+
+
+# ---------------------------------------------------------------- repeated parameters
+
+
+def _post_pairs(client, path: str, pairs):
+    """A form post whose body repeats names (a dict cannot)."""
+    return client.post(
+        path,
+        content=urlencode(pairs),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+
+def test_authorize_rejects_a_repeated_parameter(client):
+    """RFC 6749 section 3.1: no parameter more than once ("last wins" invites parser games)."""
+    a = Authz(client, register(client))
+    for name, other in (
+        ("client_id", register(client)),
+        ("redirect_uri", a.redirect_uri),
+        ("state", "second"),
+        ("code_challenge", a.challenge),
+        ("scope", "mail.read"),
+    ):
+        pairs = [*a.params().items(), (name, other)]
+        r = client.get("/authorize", params=pairs)
+        assert r.status_code == 400 and "location" not in r.headers, name
+    assert a.open().status_code == 200  # the unrepeated request is fine
+
+
+def test_authorize_post_rejects_a_repeated_parameter_or_action(client):
+    a = Authz(client, register(client))
+    page = a.consent_page()
+    form = {**hidden_fields(page.text), "action": "deny"}
+    ok = _post_pairs(client, "/authorize", [*form.items(), ("action", "approve")])
+    assert ok.status_code == 400 and "location" not in ok.headers
+    again = _post_pairs(client, "/authorize", [*form.items(), ("state", "other")])
+    assert again.status_code == 400 and "location" not in again.headers
+
+
+def test_token_endpoint_rejects_repeated_parameters(client):
+    a = Authz(client, register(client))
+    code = a.code()
+    data = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", a.client_id),
+        ("client_id", register(client)),
+        ("redirect_uri", a.redirect_uri),
+        ("code_verifier", a.verifier),
+    ]
+    r = _post_pairs(client, "/token", data)
+    assert r.status_code == 400 and r.json()["error"] == "invalid_request"
+    # the refusal came before the code was looked at: it is still good
+    assert a.exchange(code).status_code == 200
+
+
+def test_refresh_and_revoke_reject_repeated_parameters(client):
+    a, first = connect(client)
+    r = _post_pairs(
+        client,
+        "/token",
+        [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first["refresh_token"]),
+            ("client_id", a.client_id),
+            ("scope", "mail.read"),
+            ("scope", "mail.read"),
+        ],
+    )
+    assert r.status_code == 400 and r.json()["error"] == "invalid_request"
+    r = _post_pairs(
+        client,
+        "/revoke",
+        [("token", "x" * 40), ("token", first["refresh_token"]), ("client_id", a.client_id)],
+    )
+    assert r.status_code == 400 and r.json()["error"] == "invalid_request"
+    assert refresh(client, a.client_id, first["refresh_token"]).status_code == 200
+
+
+def test_register_rejects_a_duplicated_member(client):
+    body = (
+        '{"redirect_uris": ["http://127.0.0.1:49152/cb"],'
+        ' "redirect_uris": ["https://evil.example/cb"]}'
+    )
+    r = client.post("/register", content=body, headers={"content-type": "application/json"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_client_metadata"
