@@ -7,29 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Tools renamed and merged** (tool surface of the roadmap, WP 2-0):
-  `find_messages` replaces `list_messages` and `search_messages` (a time window
-  is just one criterion; the `fuzzy` flag is gone — use `query`), and
-  `get_message(thread=true)` replaces `get_thread`.
-- One `query` parameter for `find_messages`, `list_folders` and `find_contacts`:
-  with `*` or `?` a case-insensitive, umlaut-folded wildcard pattern over whole
-  words (`*` crosses folder levels), otherwise fuzzy matching. Structured
-  criteria (`from`, `to`, `subject`, `body`, dates, flags) stay an exact
-  server-side search.
-- `list_folders` shows the top level first, each folder with its number of
-  direct subfolders; `parent=` drills down (approximate names, ambiguity
-  returned as a choice), `query=` searches all levels, `depth=` (≤ 3) adds levels.
-  Paged with a cursor; message/unread counts only for the folders shown
-  (at most 50); similar names when nothing matches. The output is a flat list
-  (`level`, `subfolders`, `descendants`) instead of a nested tree.
-- `find_contacts` without `query` is a quick overview (last 7 days, newest 150
-  messages per account, most recent first); with `query` it searches deeper
-  (180 days by default). No match → similar names and how to look further back.
-  Paged with a cursor.
-- Every list result's footer says how to narrow it or continue.
-
 ### Added
 
 - `universal-email-mcp probe`: log in read-only to an IMAP server (`--host`,
@@ -46,16 +23,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrides), structured search with UTF-8, message summaries, full messages with
   HTML-to-text conversion and attachment lists, fencing of untrusted content.
 - `universal-email-mcp local`: MCP server over stdio (works with Claude Desktop
-  and Claude Code via `uvx universal-email-mcp local`) with the read-only tools
-  `account_info`, `list_folders` (roles and counts), `find_messages` (time
-  windows like `today`, `this_week`, `last_7_days`, structured criteria, fuzzy
-  matching that tolerates typos, umlaut spellings and name order),
-  `get_message` (fenced, paged body; never marks as read; conversations across
-  INBOX, Sent and other folders) and `find_contacts` (ranked by frequency and
-  recency, marks addresses you have written to).
+  and Claude Code via `uvx universal-email-mcp local`) with five read-only tools:
+  - `account_info`: accounts, permissions, server features, quota, identities,
+    policy and limits.
+  - `list_folders`: the top level first, each folder with its role and number of
+    direct subfolders; `parent=` drills down (approximate names; ambiguity is
+    returned as a choice), `query=` searches all levels, `depth=` (≤ 3) adds
+    levels; message/unread counts for the folders shown (at most 50); similar
+    names when nothing matches.
+  - `find_messages`: time windows (`today`, `this_week`, `last_7_days` …) and
+    from/to/subject/body/unread/flagged/attachment criteria as an exact
+    server-side search, plus a free-text `query`.
+  - `get_message`: fenced, paged body (never marks as read); `thread=true` shows
+    the conversation across INBOX, Sent and other folders (archive and folders
+    named like the participants first).
+  - `find_contacts`: a quick overview of recent correspondents, or with `query`
+    a deeper search; `sent_to` (yes / no / unknown) marks addresses you have
+    written to in the last two years.
+- One `query` parameter for `find_messages`, `list_folders` and `find_contacts`:
+  with `*` or `?` a case-insensitive, umlaut-folded wildcard pattern starting at
+  a word start (for folders: the folder's own name, or — with `/` — its path,
+  where `*` also crosses levels); otherwise fuzzy matching that tolerates typos,
+  umlaut spellings and name order.
+- Every list result is bounded and its footer says how to narrow it or continue.
 - Searches and listings span all accounts in parallel with a per-account
   time-out; failing accounts are reported with the partial result. Cursor
-  paging with signed cursors.
+  paging with signed cursors; an account that fails between pages keeps its
+  position and is retried.
 - Results are Markdown tables (mail text escaped: no links, images, HTML or
   table breakage from crafted subjects) plus structured content with output
   schemas; errors carry a code and a hint.

@@ -85,8 +85,10 @@ Code must treat it that way everywhere:
   operations), `index.py` (header cache per folder + UIDVALIDITY), `fuzzy.py`
   (rapidfuzz matching, umlaut variants, folder resolution), `query.py` (**the one
   `query` parameter of all list tools: wildcard pattern or fuzzy**),
-  `folder_list.py` (folder tree, drill-down and search for `list_folders`),
-  `cursor.py` (signed paging cursors), `timewindow.py` (`today`, `this_week` …).
+  `folder_list.py` (folder tree, the one folder-name resolver, folder search),
+  `cursor.py` (signed paging cursors), `paging.py` (keyset paging over accounts,
+  retry cursors), `trust.py` (per-account "sent to" sets — basis of the send-time
+  recipient check), `timewindow.py` (`today`, `this_week` …).
 - `server/` — MCP layer: `app.py` (`build_server()`: tools, instructions, error
   results), `schemas.py` (output schemas), `render.py` (**`escape_cell()` — the one
   place that makes mail text safe in Markdown**), `local.py` (stdio mode).
