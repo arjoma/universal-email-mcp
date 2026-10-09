@@ -1,0 +1,75 @@
+{# Shared pieces of the portal pages. Every visible string goes through _(). #}
+{% macro csrf() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{%- endmacro %}
+
+{% macro notice_box(code) -%}
+{% if code %}
+<p class="notice" role="status">
+{%- if code == "account_added" %}{{ _("The mail account was added.") }}
+{%- elif code == "account_removed" %}{{ _("The mail account was removed.") }}
+{%- elif code == "permissions_saved" %}{{ _("The permissions were saved.") }}
+{%- elif code == "password_saved" %}{{ _("The new password was saved.") }}
+{%- elif code == "identity_saved" %}{{ _("The sender identity was saved.") }}
+{%- elif code == "identity_removed" %}{{ _("The sender identity was removed.") }}
+{%- elif code == "identity_default" %}{{ _("The default sender identity was changed.") }}
+{%- elif code == "client_revoked" %}{{ _("The application was disconnected.") }}
+{%- elif code == "client_saved" %}{{ _("The permissions of the application were reduced.") }}
+{%- elif code == "language_saved" %}{{ _("The language was changed.") }}
+{%- elif code == "signed_out" %}{{ _("You are signed out.") }}
+{%- endif %}</p>
+{% endif %}
+{%- endmacro %}
+
+{% macro error_box(code) -%}
+{% if code %}
+<p class="error" role="alert">
+{%- if code == "csrf" %}{{ _("The form has expired. Please try again.") }}
+{%- elif code == "name" %}{{ _("Give the account a name.") }}
+{%- elif code == "name_taken" %}{{ _("You already have an account with this name.") }}
+{%- elif code == "too_many" %}{{ _("The limit for this kind of item is reached. Remove one first.") }}
+{%- elif code == "server" %}{{ _("Choose a mail server from the list.") }}
+{%- elif code == "host" %}{{ _("Enter the host name of the mail server (for example mail.example.com).") }}
+{%- elif code == "protocol" %}{{ _("This server does not offer the chosen protocol.") }}
+{%- elif code == "username" %}{{ _("Enter the user name.") }}
+{%- elif code == "password" %}{{ _("Enter the password (without line breaks).") }}
+{%- elif code == "rate_limited" %}{{ _("Too many attempts. Please wait a few minutes and try again.") }}
+{%- elif code == "bad_credentials" %}{{ _("The password is not correct.") }}
+{%- elif code == "unavailable" %}{{ _("The mail server could not be reached. Please try again later.") }}
+{%- elif code == "test_auth" %}{{ _("The server rejected the user name or password.") }}
+{%- elif code == "test_unreachable" %}{{ _("The server could not be reached.") }}
+{%- elif code == "test_tls" %}{{ _("The secure connection to the server could not be verified.") }}
+{%- elif code == "test_blocked" %}{{ _("This server address is not allowed.") }}
+{%- elif code == "test_unsupported" %}{{ _("The server lacks features this service needs.") }}
+{%- elif code == "test_timeout" %}{{ _("The server did not answer in time.") }}
+{%- elif code == "test_protocol" %}{{ _("The server answered in an unexpected way.") }}
+{%- elif code == "address" %}{{ _("Enter a valid e-mail address.") }}
+{%- elif code == "address_taken" %}{{ _("You already have an identity with this address.") }}
+{%- elif code == "display_name" %}{{ _("The display name must be plain text without quotes, angle brackets or line breaks.") }}
+{%- elif code == "signature" %}{{ _("The signature is too long or contains control characters.") }}
+{%- elif code == "smtp_account" %}{{ _("Choose a mail account whose server can send mail.") }}
+{%- elif code == "store_account" %}{{ _("Choose an IMAP account for drafts and sent copies.") }}
+{%- elif code == "send_needs" %}{{ _("Sending needs a sending account and an IMAP account with the drafts permission.") }}
+{%- elif code == "send_off" %}{{ _("The operator of this service does not allow sending.") }}
+{%- elif code == "keep_one" %}{{ _("Keep at least one permission, or disconnect the application.") }}
+{%- else %}{{ _("This request is not valid, so nothing was done.") }}
+{%- endif %}</p>
+{% endif %}
+{%- endmacro %}
+
+{% macro permission_label(p) -%}
+{% if p == "read" %}{{ _("Read mail") }}
+{%- elif p == "organize" %}{{ _("Organize (mark, move, create folders)") }}
+{%- elif p == "delete" %}{{ _("Delete (move to Trash)") }}
+{%- elif p == "drafts" %}{{ _("Write drafts") }}
+{%- endif %}
+{%- endmacro %}
+
+{% macro test_result(r) -%}
+<li>
+  <strong>{% if r.kind == "smtp" %}{{ _("Sending (SMTP)") }}{% elif r.kind == "pop3" %}{{ _("Receiving (POP3)") }}{% else %}{{ _("Receiving (IMAP)") }}{% endif %}:</strong>
+  {% if r.outcome.status == "ok" %}<span class="ok">{{ _("Connected and signed in.") }}</span>
+  {% if r.outcome.features %}<span class="hint">{{ _("Features") }}: {% for f in r.outcome.features %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+  {% else %}{{ error_box("test_" ~ r.outcome.status) }}{% endif %}
+</li>
+{%- endmacro %}

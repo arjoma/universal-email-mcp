@@ -11,8 +11,13 @@ stack that applies to everything:
 3. bearer authentication for the protected prefixes (``/mcp``),
 4. request body size limit.
 
-CORS is deliberately not offered: no ``Access-Control-*`` header is ever sent, so
-browsers cannot call the endpoints cross-origin.
+CORS is off by default: no ``Access-Control-*`` header is sent, so browsers cannot call
+the endpoints cross-origin. OAuth mode switches it on for the **cookie-less** endpoints
+only (``HttpSettings.cors_paths``: metadata, ``/register``, ``/token``, ``/revoke``,
+``/mcp``), so browser-based MCP clients can work. Those endpoints authenticate with bearer
+tokens or not at all, never with cookies, so ``Access-Control-Allow-Origin: *`` (without
+credentials) gives a foreign page nothing it could not get with a plain HTTP client. The
+pages that use cookies keep the strict ``Origin`` check and answer no preflight.
 """
 
 from __future__ import annotations
@@ -57,6 +62,14 @@ PAGE_HEADERS: tuple[tuple[str, str], ...] = (
 )
 HSTS = ("strict-transport-security", "max-age=63072000; includeSubDomains")
 
+CORS_ALLOW_HEADERS = (
+    "authorization, content-type, accept, mcp-protocol-version, mcp-session-id, "
+    "last-event-id, mcp-method, mcp-name"
+)
+CORS_EXPOSE_HEADERS = "www-authenticate, mcp-session-id, mcp-protocol-version"
+CORS_METHODS = "GET, POST, DELETE, OPTIONS"
+CORS_MAX_AGE = "600"
+
 ReadinessCheck = Callable[[], Awaitable[bool]]
 """Returns True when the dependency is usable. The store check plugs in here (3b)."""
 TokenCheck = Callable[[str], Any]
@@ -83,6 +96,9 @@ class HttpSettings:
     hsts: bool = False
     protected_prefixes: tuple[str, ...] = (MCP_PATH,)
     realm: str = "universal-email-mcp"
+    cors_paths: tuple[str, ...] = ()
+    """Path prefixes (cookie-less endpoints) that answer CORS preflights and may be called
+    from any origin. Empty = no CORS at all."""
     resource_metadata_url: str | None = None
     """RFC 9728 URL advertised in ``WWW-Authenticate`` so clients can discover the
     authorization server."""
@@ -104,6 +120,11 @@ async def _send_json(
 
 def _first_segment(path: str) -> str:
     return "/" + path.lstrip("/").split("/", 1)[0]
+
+
+def under(path: str, prefixes: Iterable[str]) -> bool:
+    """Is ``path`` one of the prefixes or below one (``/mcp`` matches ``/mcp/x``, not ``/mcpx``)?"""
+    return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
 
 
 def _host_only(value: str) -> str:
@@ -172,10 +193,18 @@ class RequestContextMiddleware:
 class HostOriginMiddleware:
     """Refuse requests whose ``Host`` is not ours or whose ``Origin`` is foreign."""
 
-    def __init__(self, app: ASGIApp, *, hosts: Iterable[str], origins: Iterable[str]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        hosts: Iterable[str],
+        origins: Iterable[str],
+        origin_exempt: Sequence[str] = (),
+    ) -> None:
         self.app = app
         self._hosts = frozenset(h.lower() for h in hosts)
         self._origins = frozenset(o.lower().rstrip("/") for o in origins)
+        self._exempt = tuple(origin_exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["path"] in UNGUARDED_PATHS:
@@ -187,10 +216,67 @@ class HostOriginMiddleware:
             await _send_json(send, 421, {"error": "invalid_host"})
             return
         origin = headers.get("origin")
-        if origin is not None and origin.lower().rstrip("/") not in self._origins:
+        if (
+            origin is not None
+            and origin.lower().rstrip("/") not in self._origins
+            and not under(scope["path"], self._exempt)
+        ):
             await _send_json(send, 403, {"error": "invalid_origin"})
             return
         await self.app(scope, receive, send)
+
+
+class CorsMiddleware:
+    """CORS for the cookie-less endpoints: answers preflights, marks responses.
+
+    No credentials mode: ``Access-Control-Allow-Origin: *`` and never
+    ``Allow-Credentials``, so browsers withhold cookies and the response is of no use to a
+    page that is not holding a bearer token itself. Runs after the Host check and before
+    bearer authentication (a preflight carries no token)."""
+
+    def __init__(self, app: ASGIApp, *, prefixes: Sequence[str]) -> None:
+        self.app = app
+        self._prefixes = tuple(prefixes)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not under(scope["path"], self._prefixes):
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        if (
+            scope["method"] == "OPTIONS"
+            and "origin" in headers
+            and "access-control-request-method" in headers
+        ):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 204,
+                    "headers": [
+                        (b"access-control-allow-origin", b"*"),
+                        (b"access-control-allow-methods", CORS_METHODS.encode()),
+                        (b"access-control-allow-headers", CORS_ALLOW_HEADERS.encode()),
+                        (b"access-control-max-age", CORS_MAX_AGE.encode()),
+                        (b"content-length", b"0"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        async def wrapped_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message = {
+                    **message,
+                    "headers": [
+                        *message["headers"],
+                        (b"access-control-allow-origin", b"*"),
+                        (b"access-control-expose-headers", CORS_EXPOSE_HEADERS.encode()),
+                    ],
+                }
+            await send(message)
+
+        await self.app(scope, receive, wrapped_send)
 
 
 class BearerAuthMiddleware:
@@ -349,9 +435,14 @@ def create_app(
     middleware = [
         Middleware(RequestContextMiddleware, hsts=settings.hsts),
         Middleware(
-            HostOriginMiddleware, hosts=settings.allowed_hosts, origins=settings.allowed_origins
+            HostOriginMiddleware,
+            hosts=settings.allowed_hosts,
+            origins=settings.allowed_origins,
+            origin_exempt=settings.cors_paths,
         ),
     ]
+    if settings.cors_paths:
+        middleware.append(Middleware(CorsMiddleware, prefixes=settings.cors_paths))
     if token_check is not None:
         middleware.append(
             Middleware(

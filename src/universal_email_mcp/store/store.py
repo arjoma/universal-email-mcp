@@ -275,14 +275,37 @@ class Store:
     # -- portal sessions --------------------------------------------------------------
 
     async def create_portal_session(
-        self, user_id: str, ttl: timedelta = timedelta(hours=12)
+        self, user_id: str, ttl: timedelta = timedelta(hours=12), *, fresh_login: bool = False
     ) -> tuple[str, PortalSession]:
-        """Returns ``(cookie value, record)``; only the digest is stored."""
+        """Returns ``(cookie value, record)``; only the digest is stored. ``fresh_login``:
+        the password was just typed, so the session counts as re-authenticated."""
         raw, now = new_token("uem_ps"), self.now()
         rec = PortalSession(
-            id=hash_token(raw), user_id=user_id, created_at=now, last_seen=now, expires_at=now + ttl
+            id=hash_token(raw),
+            user_id=user_id,
+            created_at=now,
+            last_seen=now,
+            reauth_at=now if fresh_login else None,
+            expires_at=now + ttl,
         )
         return raw, await self.create(rec)
+
+    def reauth_fresh(self, session: PortalSession, window: timedelta) -> bool:
+        """Did the user type the password within ``window``?"""
+        return session.reauth_at is not None and self.now() - session.reauth_at <= window
+
+    async def mark_reauth(self, session: PortalSession) -> PortalSession:
+        """Record that the password was just typed again (retries on a concurrent touch)."""
+        current = session
+        for _ in range(4):
+            try:
+                return await self.update(replace(current, reauth_at=self.now()))
+            except StoreConflict:
+                again = await self.get(PortalSession, session.id)
+                if again is None:
+                    return session
+                current = again
+        return current
 
     async def get_portal_session(self, raw: str) -> PortalSession | None:
         return await self.get(PortalSession, hash_token(raw))

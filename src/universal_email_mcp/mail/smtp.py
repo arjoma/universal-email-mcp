@@ -151,6 +151,50 @@ def submit(
         _close(conn)
 
 
+def check_login(
+    endpoint: Endpoint,
+    username: str,
+    password: str,
+    *,
+    tls: TlsSettings = TlsSettings(),  # noqa: B008 - frozen dataclass
+    net: NetPolicy | None = None,
+    resolver: Resolver | None = None,
+) -> tuple[str, ...]:
+    """Connect and log in, send nothing (the portal's "test sending" check). Returns the
+    server's advertised SMTP extensions (upper case). Raises the same :class:`MailError`
+    subclasses as :func:`submit`."""
+    net = net or NetPolicy()
+    host, implicit = endpoint.host, endpoint.tls == "tls"
+    ctx = tls_context(verify=tls.verify, ca_file=tls.ca_file)
+
+    def factory() -> socket.socket:
+        sock = open_connection(host, endpoint.port, net, resolver)
+        return wrap_tls(sock, ctx, host) if implicit else sock
+
+    conn = _Smtp(host, factory)
+    try:
+        _open_authenticated(conn, endpoint, username, password, ctx)
+        return tuple(sorted(k.upper() for k in conn.esmtp_features))
+    except MailError:
+        raise
+    except ssl.SSLCertVerificationError as e:
+        raise TlsError(f"certificate verification failed for {host}: {e.verify_message}") from e
+    except ssl.SSLError as e:
+        raise TlsError(f"TLS error talking to {host}: {e.reason or e}") from e
+    except smtplib.SMTPServerDisconnected as e:
+        raise ServerUnreachable(
+            f"connection to {host}:{endpoint.port} lost: {_text(str(e))}"
+        ) from e
+    except smtplib.SMTPException as e:
+        raise ProtocolError(f"the SMTP server answered unexpectedly: {_text(str(e))}") from e
+    except OSError as e:
+        raise ServerUnreachable(
+            f"connection to {host}:{endpoint.port} failed: {_text(str(e))}"
+        ) from e
+    finally:
+        _close(conn)
+
+
 def _close(conn: smtplib.SMTP) -> None:
     try:
         conn.quit()
@@ -161,17 +205,10 @@ def _close(conn: smtplib.SMTP) -> None:
             pass
 
 
-def _session(
-    conn: _Smtp,
-    endpoint: Endpoint,
-    username: str,
-    password: str,
-    sender: str,
-    recipients: Sequence[str],
-    data: bytes,
-    max_bytes: int,
-    ctx: ssl.SSLContext,
-) -> SmtpReceipt:
+def _open_authenticated(
+    conn: _Smtp, endpoint: Endpoint, username: str, password: str, ctx: ssl.SSLContext
+) -> None:
+    """Connect, EHLO, STARTTLS where needed, log in. Refuses to log in without TLS."""
     host = endpoint.host
     implicit = endpoint.tls == "tls"
     code, banner = conn.connect(host, endpoint.port)
@@ -205,6 +242,21 @@ def _session(
         ) from e
     except smtplib.SMTPNotSupportedError as e:
         raise AuthFailed(f"no supported login mechanism: {_text(str(e))}") from e
+
+
+def _session(
+    conn: _Smtp,
+    endpoint: Endpoint,
+    username: str,
+    password: str,
+    sender: str,
+    recipients: Sequence[str],
+    data: bytes,
+    max_bytes: int,
+    ctx: ssl.SSLContext,
+) -> SmtpReceipt:
+    implicit = endpoint.tls == "tls"
+    _open_authenticated(conn, endpoint, username, password, ctx)
 
     options: list[str] = []
     size_limit = _declared_size(conn)

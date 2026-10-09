@@ -40,6 +40,11 @@ class RateLimits:
     token_window: timedelta = timedelta(minutes=1)
     client_fetch_per_ip: int = 30
     client_fetch_window: timedelta = timedelta(minutes=1)
+    test_per_user: int = 10
+    test_per_ip: int = 30
+    test_per_target: int = 5
+    test_window: timedelta = timedelta(minutes=10)
+    """Portal connection tests open outbound connections and try logins."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +60,9 @@ class OAuthConfig:
     portal_idle: timedelta = timedelta(minutes=30)
     portal_max: timedelta = timedelta(hours=12)
     trusted_proxy_hops: int = 0
+    reauth_window: timedelta = timedelta(minutes=5)
+    max_accounts: int = 10
+    max_identities: int = 10
     cimd_cache_ttl: timedelta = timedelta(hours=1)
     rate_limits: RateLimits = field(default_factory=RateLimits)
 

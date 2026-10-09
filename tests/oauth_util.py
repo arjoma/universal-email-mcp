@@ -99,6 +99,16 @@ def hidden_fields(page: str) -> dict[str, str]:
     }
 
 
+def grant_values(page: str) -> list[str]:
+    """The ``account:scope`` values of the consent page's checkboxes, in page order."""
+    return [html.unescape(v) for v in re.findall(r'name="grant" value="([^"]+)"', page)]
+
+
+def account_id_of(page: str) -> str:
+    """Id of the first account on a consent page (the sign-in mailbox, ``a_...``)."""
+    return grant_values(page)[0].split(":")[0]
+
+
 def query_of(location: str) -> dict[str, str]:
     return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
 
@@ -162,7 +172,12 @@ class Authz:
     ) -> httpx2.Response:
         page = self.consent_page()
         form: dict[str, Any] = {**hidden_fields(page.text), "action": action}
-        form["grant"] = ["primary:mail.read"] if grants is None else grants
+        account = account_id_of(page.text)
+        form["grant"] = (
+            [f"{account}:mail.read"]
+            if grants is None
+            else [g.replace("primary:", f"{account}:", 1) for g in grants]
+        )
         form.update(extra)
         return self.client.post("/authorize", data=form)
 
@@ -205,3 +220,20 @@ def refresh(client: TestClient, client_id: str, token: str, **extra: str) -> htt
 
 def bearer(token: str) -> Mapping[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def identity_ids_of(page: str) -> list[str]:
+    return [html.unescape(v) for v in re.findall(r'name="identity" value="([^"]+)"', page)]
+
+
+async def allow_sending(store: Store, user_address: str = "alice@example.org") -> str:
+    """Turn on ``send`` for the user's sign-in identity; returns the identity id."""
+    from dataclasses import replace
+
+    from universal_email_mcp.oauth.identity import Pseudonyms
+    from universal_email_mcp.store import Identity
+
+    user_id = Pseudonyms(PSEUDONYM_KEY).user_id(user_address)
+    (ident,) = await store.list_for_user(Identity, user_id)
+    await store.update(replace(ident, send=True))
+    return ident.id

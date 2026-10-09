@@ -1,0 +1,42 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ account.name }}{% endblock %}
+{% block heading %}{{ account.name }}{% endblock %}
+{% block body %}
+{{ m.notice_box(notice) }}
+{{ m.error_box(error) }}
+<dl>
+  <dt>{{ _("Protocol") }}</dt><dd>{{ account.protocol }}</dd>
+  <dt>{{ _("Server") }}</dt><dd><code>{{ account.host }}</code></dd>
+  <dt>{{ _("User name") }}</dt><dd>{{ account.username }}</dd>
+</dl>
+
+{% if results %}
+<h2>{{ _("Test result") }}</h2>
+<ul class="plain results">
+  {% for r in results %}{{ m.test_result(r) }}{% endfor %}
+</ul>
+{% endif %}
+
+<form method="post" action="/portal/accounts/{{ account.id }}/test" class="inline">
+  {{ m.csrf() }}
+  <button type="submit">{{ _("Test the connection") }}</button>
+</form>
+
+<h2>{{ _("Permissions") }}</h2>
+<form method="post" action="/portal/accounts/{{ account.id }}/permissions">
+  {{ m.csrf() }}
+  {% for p in allowed %}
+  <label class="choice"><input type="checkbox" name="perm" value="{{ p }}"{% if p in account.permissions or p == "read" %} checked{% endif %}{% if p == "read" %} disabled{% endif %}> {{ m.permission_label(p) }}</label>
+  {% endfor %}
+  <input type="hidden" name="perm" value="read">
+  <p class="hint">{{ _("An upper limit for every connected application. Adding a permission asks for your password.") }}</p>
+  <div class="buttons"><button type="submit" class="primary">{{ _("Save") }}</button></div>
+</form>
+
+<h2>{{ _("More") }}</h2>
+<ul class="plain">
+  <li><a href="/portal/accounts/{{ account.id }}/password">{{ _("Change the stored password") }}</a></li>
+  <li><a class="danger" href="/portal/accounts/{{ account.id }}/remove">{{ _("Remove this account") }}</a></li>
+  <li><a href="/portal/accounts">{{ _("Back to all accounts") }}</a></li>
+</ul>
+{% endblock %}
