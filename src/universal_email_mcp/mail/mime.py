@@ -14,7 +14,6 @@ import codecs
 import email.errors
 import email.header
 import email.utils
-import html as html_mod
 import quopri
 import re
 import secrets
@@ -25,6 +24,7 @@ from datetime import UTC, datetime
 from email import policy
 from email.message import Message
 from email.parser import BytesHeaderParser, BytesParser
+from html.parser import HTMLParser
 from typing import Literal
 
 from universal_email_mcp.models import (
@@ -120,9 +120,18 @@ def slice_text(text: str, max_chars: int, offset: int = 0) -> TextSlice:
 # --------------------------------------------------------------------------- headers
 
 
+_SLOW_OR_BROKEN_CODECS = frozenset(
+    {"punycode", "idna", "undefined", "unicode_escape", "unicode-escape", "raw_unicode_escape"}
+)
+"""Codecs that are quadratic (``punycode``: 2 MB took 40 s), always fail, or are escape
+languages rather than character sets. Mail declaring one is read as UTF-8 / Windows-1252."""
+
+
 def _usable_codec(name: str) -> bool:
     """A real text codec: no bytes-to-bytes transforms (``rot13``, ``hex`` …), no
     NUL or other garbage in the name."""
+    if name in _SLOW_OR_BROKEN_CODECS:
+        return False
     try:
         info = codecs.lookup(name)
     except (LookupError, ValueError, UnicodeError):
@@ -534,10 +543,40 @@ def html_to_text(
     return _tidy(text)
 
 
+_STRIP_MAX_CHARS = 200_000
+
+
+class _TextOnly(HTMLParser):
+    """Visible text of HTML without building a tree (linear, no nesting limit)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("script", "style", "head"):
+            self._skip += 1
+        self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style", "head") and self._skip:
+            self._skip -= 1
+        self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip:
+            self.parts.append(data)
+
+
 def _strip_tags(html: str) -> str:
-    text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>", " ", html)
-    text = re.sub(r"(?s)<[^>]*>", " ", text)
-    return _tidy(re.sub(r"[ \t]{2,}", " ", html_mod.unescape(text)))
+    parser = _TextOnly()
+    try:
+        parser.feed(html[:_STRIP_MAX_CHARS])
+        parser.close()
+    except Exception:  # noqa: BLE001 - hostile markup; keep what was read
+        pass
+    return _tidy(re.sub(r"[ \t]{2,}", " ", "".join(parser.parts)))
 
 
 def _tidy(text: str) -> str:
@@ -895,13 +934,14 @@ MAX_DELIMITER_LINES = 10_000
 """The same delimiter line (``--boundary``) more than this often: a MIME bomb. The
 stdlib parser needs seconds and hundreds of MB for a few MB of empty parts, and the
 part limits only apply after parsing, so the raw bytes are checked first."""
-MAX_DELIMITER_LINES_TOTAL = 50_000
-_DELIMITER_LINE = re.compile(rb"^--[^\r\n]{0,200}", re.MULTILINE)
+MAX_DELIMITER_LINES_TOTAL = 20_000
+_DELIMITER_LINE = re.compile(rb"(?:^|(?<=\r))--[^\r\n]{0,200}", re.MULTILINE)
+_MULTIPART = re.compile(rb"(?i)multipart/")
 
 
 def _check_complexity(raw: bytes) -> None:
-    if raw.count(b"--") <= MAX_DELIMITER_LINES:
-        return
+    if raw.count(b"--") <= MAX_DELIMITER_LINES or not _MULTIPART.search(raw):
+        return  # only multipart mail has delimiter lines (a log full of "-- " lines is text)
     counts: dict[bytes, int] = {}
     total = 0
     for m in _DELIMITER_LINE.finditer(raw):

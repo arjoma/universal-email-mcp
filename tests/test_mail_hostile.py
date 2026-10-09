@@ -329,3 +329,39 @@ def test_structured_listing_items_cap_header_fields():
     assert len(item.to[0].name) <= schemas.MAX_NAME_CHARS
     assert len(item.to[0].email) <= schemas.MAX_EMAIL_CHARS
     assert len(item.model_dump_json()) < 30_000
+
+
+# review round: CR-only bombs, strip-tags DoS, slow codecs, false positives -----------
+
+
+def test_cr_only_delimiter_bomb_is_refused():
+    raw = b"From: a@b.c\rContent-Type: multipart/mixed; boundary=X\r\r" + b"--X\r\r" * 100_000
+    started = time.monotonic()
+    p = parse_message(raw)
+    assert time.monotonic() - started < 3 and p.text_source == "unparseable"
+
+
+def test_many_signature_lines_in_plain_text_are_not_a_bomb():
+    body = "-- \n" * 15_000
+    p = parse_message(f"From: a@b.c\r\nContent-Type: text/plain\r\n\r\n{body}".encode())
+    assert p.text_source in ("plain", "none")
+
+
+def test_deep_html_fallback_is_linear_on_unclosed_tags():
+    html = "<div>" * 300 + "<script " * 20_000 + "<a" * 100_000
+    started = time.monotonic()
+    html_to_text(html, notes=[])
+    assert time.monotonic() - started < 3
+
+
+def test_quadratic_codecs_are_not_used():
+    started = time.monotonic()
+    out = decode_text(b"a" * 2_000_000, "punycode")
+    assert time.monotonic() - started < 3 and out.startswith("a")
+
+
+def test_forged_auth_headers_without_received_are_not_own():
+    from universal_email_mcp.service.viewer import HeaderLine
+
+    assert not HeaderLine("Authentication-Results", "x", False).authentication
+    assert HeaderLine("Authentication-Results", "x", True).authentication
