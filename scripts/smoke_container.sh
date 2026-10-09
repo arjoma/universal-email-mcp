@@ -59,6 +59,10 @@ grep -qi '^www-authenticate: *bearer.*resource_metadata=' <<<"$headers" \
 [[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: 10.0.0.1:8080' "${base}/health")" == 200 ]] \
   || fail "/health must answer for any Host"
 
+# The Firestore client is in the image (EXTRAS=gcp).
+"$engine" run --rm --entrypoint python "$image" -c "import google.cloud.firestore" \
+  || fail "google-cloud-firestore missing (build with EXTRAS=gcp)"
+
 # Unprivileged user, as in production.
 uid="$("$engine" exec "$name" id -u)"
 [[ "$uid" == 10001 ]] || fail "container runs as uid ${uid}, expected 10001"

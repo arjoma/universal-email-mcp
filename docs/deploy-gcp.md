@@ -89,7 +89,7 @@ The build runs as `uem-build`, builds the `Dockerfile` with `EXTRAS=gcp`, pushes
 `REGION-docker.pkg.dev/PROJECT_ID/REPO/universal-email-mcp:<build id>`, resolves the
 image **digest** and applies the rendered `service.yaml` with
 `gcloud run services replace`. Substitutions: `_REGION`, `_SERVICE`, `_REPO`, `_IMAGE`,
-`_RUNTIME_SA`, `_BUILD_SA`, `_PUBLIC_URL`, `_CONTENT_ORIGIN`, `_LOGIN_DOMAINS`,
+`_RUNTIME_SA`, `_BUILD_SA`, `_FIRESTORE_DATABASE`, `_STORE_ACTIVE_KEY`, `_PUBLIC_URL`, `_CONTENT_ORIGIN`, `_LOGIN_DOMAINS`,
 `_MAIL_SERVERS`, `_FIRESTORE_PREFIX`, `_INGRESS`, `_MIN_INSTANCES`, `_MAX_INSTANCES`,
 `_TRUSTED_PROXY_HOPS` (defaults in the file). Settings that are not substitutions
 (limits, policy, token lifetimes; [operator-env.md](operator-env.md)) are added as `env`
@@ -115,7 +115,7 @@ After the first successful deploy, check:
 ```bash
 URL=$(gcloud run services describe universal-email-mcp --region "$REGION" --format 'value(status.url)')
 curl -s "$URL/health"                              # {"status":"ok"}
-curl -s -H "Host: mail.example.org" "$URL/ready"   # exempt from Host checks; 200 when the store works
+curl -s "$URL/ready"                                # exempt from Host checks; 200 when the store works
 ```
 
 The run.app URL itself answers 421 on other paths until you add its host to
@@ -226,18 +226,21 @@ The key ring `STORE_KEYS` (`k1=...,k2=...`) seals the stored credentials
 ([stored-data.md](stored-data.md)). Rotate on a schedule, after a suspected leak, or when
 someone who could read the secret leaves.
 
-1. Add a key without removing the old one (the value goes straight into Secret Manager;
-   do not paste it into a terminal history or a ticket):
+0. **Pin the active key first.** Without `STORE_ACTIVE_KEY` the highest key in the ring is
+   active, and the secret is read as `latest` at instance start: a new or scaled-out instance
+   would start writing `k2` blobs the running instances cannot read. Deploy once with
+   `_STORE_ACTIVE_KEY=k1` (substitution of `cloudbuild.yaml`) and wait for the rollout.
+1. Add the new key without removing the old one (the value goes straight from `openssl`
+   into Secret Manager and is never printed; do not paste keys into a terminal or ticket):
    ```bash
    current=$(gcloud secrets versions access latest --secret uem-store-keys)   # stays in a variable
    printf '%s,k2=%s' "$current" "$(openssl rand -base64 32)" \
      | gcloud secrets versions add uem-store-keys --data-file=-
    unset current
    ```
-2. Make `k2` the key for new blobs and deploy a new revision (the old keys still decrypt):
-   `gcloud run services update universal-email-mcp --region "$REGION" --update-env-vars STORE_ACTIVE_KEY=k2`
-   (put the same in your deploy substitutions; without `STORE_ACTIVE_KEY` the highest key is used,
-   so the variable is optional).
+2. Deploy with `_STORE_ACTIVE_KEY=k2`: the new revision reads the ring with both keys and
+   seals new blobs with `k2`; old blobs still open with `k1`. (The old revision keeps
+   working until traffic moves: it has `k1` pinned and only the ring it started with.)
 3. Re-seal what nobody has written since, as a one-off Cloud Run job with the same image,
    service account and secrets (the command is safe to repeat; it prints counts per record kind):
    ```bash
@@ -257,15 +260,22 @@ someone who could read the secret leaves.
    gcloud run jobs deploy uem-rotate-keys --region "$REGION" --image "$IMAGE" \
      --service-account "uem-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
      --command python --args "^|^-c|$CODE" \
-     --set-env-vars "STORE_BACKEND=firestore,FIRESTORE_PROJECT=${PROJECT_ID},PUBLIC_URL=https://mail.example.org,LOGIN_DOMAINS=example.org=imap.example.org,STORE_ACTIVE_KEY=k2" \
+     --set-env-vars "^|^STORE_BACKEND=firestore|FIRESTORE_PROJECT=${PROJECT_ID}|PUBLIC_URL=https://mail.example.org|LOGIN_DOMAINS=example.org=imap.example.org|STORE_ACTIVE_KEY=k2" \
      --set-secrets "STORE_KEYS=uem-store-keys:latest,PSEUDONYM_KEY=uem-pseudonym-key:latest"
    gcloud run jobs execute uem-rotate-keys --region "$REGION" --wait
    ```
-   (`FIRESTORE_PREFIX` and every other variable that affects the store must match the service.)
-4. When the counts have dropped to 0 on a second run, remove `k1` from the ring: add a
-   new secret version containing only `k2=...`, deploy again. **Keep the old secret version
-   enabled until the backups that were sealed with `k1` have expired** (a restored backup
-   needs the key that sealed it); destroy it afterwards.
+   (`FIRESTORE_DATABASE`, `FIRESTORE_PREFIX` and every other variable that affects the store or
+   the sign-in settings must match the service; copy them from the deployed revision.)
+4. When a second run reports 0 everywhere, remove `k1` from the ring by adding a version that
+   contains only the remaining keys (again without printing them), keep `_STORE_ACTIVE_KEY=k2`,
+   and deploy:
+   ```bash
+   gcloud secrets versions access latest --secret uem-store-keys \
+     | tr ',' '\n' | grep -v '^k1=' | paste -sd, - \
+     | gcloud secrets versions add uem-store-keys --data-file=-
+   ```
+   **Keep the old secret version enabled until the backups that were sealed with `k1` have
+   expired** (a restored backup needs the key that sealed it); destroy it afterwards.
 
 Losing a key makes the blobs sealed with it unreadable (users have to add their mail
 accounts again); the pseudonym key can never be rotated without a migration. Both secrets

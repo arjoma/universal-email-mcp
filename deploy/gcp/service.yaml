@@ -74,6 +74,10 @@ spec:
               value: "__MAIL_SERVERS__"
             - name: FIRESTORE_PROJECT
               value: "__PROJECT_ID__"
+            - name: FIRESTORE_DATABASE
+              value: "__FIRESTORE_DATABASE__"
+            - name: STORE_ACTIVE_KEY
+              value: "__STORE_ACTIVE_KEY__"
             - name: FIRESTORE_PREFIX
               value: "__FIRESTORE_PREFIX__"
             # Cloud Run puts one proxy (the Google Front End) in front. With an external
@@ -94,7 +98,8 @@ spec:
                 secretKeyRef:
                   name: uem-pseudonym-key
                   key: latest
-            # STORE_ACTIVE_KEY is only set during a key rotation (docs/deploy-gcp.md).
+            # STORE_ACTIVE_KEY (above) is empty (= highest key) except around a key
+            # rotation: pin it BEFORE adding a key (docs/deploy-gcp.md).
           # Readiness gate: loaded config and one store round trip.
           startupProbe:
             httpGet:

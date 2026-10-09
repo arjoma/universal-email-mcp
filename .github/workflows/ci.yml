@@ -109,8 +109,8 @@ jobs:
           vuln-type: os,library
 
   deploy-files:
-    # Static checks of the deployment files (YAML parses, shell syntax, shellcheck); the
-    # rest is in tests/test_deploy_files.py.
+    # shellcheck of the deployment scripts; YAML, rendering and syntax checks are in
+    # tests/test_deploy_files.py (run by the test job).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

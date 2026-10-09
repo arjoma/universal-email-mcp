@@ -6,7 +6,7 @@
 #   SERVICE=uem IMAGE=... RUNTIME_SA=... PROJECT_ID=... PUBLIC_URL=... LOGIN_DOMAINS=... \
 #     deploy/gcp/render.sh > /tmp/service.yaml
 #
-# Values must not contain newlines. Secrets never pass through here.
+# Values must not contain newlines, double quotes or backslashes. Secrets never pass through here.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,13 +22,20 @@ export CONTENT_ORIGIN="${CONTENT_ORIGIN:-}"
 export FIRESTORE_PREFIX="${FIRESTORE_PREFIX:-}"
 export TRUSTED_PROXY_HOPS="${TRUSTED_PROXY_HOPS:-1}"
 export NETWORK="${NETWORK:-}" SUBNET="${SUBNET:-}"
+export FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-(default)}"
+export STORE_ACTIVE_KEY="${STORE_ACTIVE_KEY:-}"
+shopt -u patsub_replacement 2>/dev/null || true   # bash 5.2: "&" in a value is literal
 
 # Comment lines are dropped first: they mention placeholders only as prose.
 out="$(grep -v '^[[:space:]]*#' "$template")"
 for name in SERVICE IMAGE RUNTIME_SA PROJECT_ID PUBLIC_URL LOGIN_DOMAINS INGRESS \
   MIN_INSTANCES MAX_INSTANCES MAIL_SERVERS CONTENT_ORIGIN FIRESTORE_PREFIX \
-  TRUSTED_PROXY_HOPS NETWORK SUBNET; do
+  TRUSTED_PROXY_HOPS NETWORK SUBNET FIRESTORE_DATABASE STORE_ACTIVE_KEY; do
   value="${!name}"
+  # Values land in double-quoted YAML scalars.
+  case "$value" in
+    *\"* | *\\*) echo "render.sh: $name contains a quote or backslash" >&2; exit 1 ;;
+  esac
   out="${out//__${name}__/${value}}"
 done
 
