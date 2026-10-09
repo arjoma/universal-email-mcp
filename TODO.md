@@ -25,6 +25,21 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Bounded extraction (page/char limits, timeouts, zip-bomb/resource guards).
 - [ ] Attachment-aware search ("the PDF invoice from Huber") and summaries.
 
+## POP3
+- [ ] No download links for POP3 attachments (the loopback/portal download reads
+      IMAP sections): a link would need RETR + parse under the size cap per request.
+- [ ] POP3 header cache lives in process memory only; a persistent cache (remote mode,
+      store) would avoid re-reading `TOP` for the newest N after every restart.
+- [ ] POP3 `APOP` and SASL mechanisms other than `PLAIN` are not implemented (TLS is
+      mandatory, so `USER`/`PASS` is as safe as the rest).
+- [ ] A POP3 mailbox with more than `max_headers_scanned` messages is searched only in
+      its newest part; an optional "deep" mode (more headers per call, background
+      warm-up of the cache) is not built.
+- [ ] POP3 arrival time is the topmost `Received` header (no INTERNALDATE); a mail
+      server that adds none leaves the (forgeable) `Date` header as the only date.
+- [ ] POP3 servers that lock the mailbox per session: a reconnect while another client
+      holds the lock fails with a clear error but is not retried.
+
 ## Folder map
 - [ ] Remote mode: the instructions are per user (WP 3e passes the signed-in user's
       maps to `build_server(folder_maps=…)`); stale-instruction refresh is `account_info`.

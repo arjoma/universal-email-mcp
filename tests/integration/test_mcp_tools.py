@@ -466,7 +466,9 @@ async def test_find_contacts(seeded: Seeded):
         assert data["contacts"] == [] and "180 days" in md and "days=" in md
 
 
-async def test_partial_failure_and_pop3_reported(seeded: Seeded, monkeypatch: pytest.MonkeyPatch):
+async def test_partial_failure_reported_for_imap_and_pop3(
+    seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("UEM_IT_WRONG", "not-the-password")
     cfg = seeded.config(
         {
@@ -476,20 +478,24 @@ async def test_partial_failure_and_pop3_reported(seeded: Seeded, monkeypatch: py
             "tls_verify": False,
             "imap": {"host": seeded.server.host, "port": seeded.server.imaps_port},
         },
-        {"name": "Old POP", "kind": "pop3", "username": "x", "server": "pop.example.org"},
+        {
+            "name": "Old POP",
+            "kind": "pop3",
+            "username": seeded.work,
+            "password_env": "UEM_IT_WRONG",
+            "tls_verify": False,
+            "pop3": {"host": seeded.server.host, "port": seeded.server.pop3s_port},
+        },
     )
     service = MailService(cfg)
     try:
         async with Client(build_server(service)) as c:
             md, data = await call(c, "find_messages", window="today")
             codes = {p["account"]: p["code"] for p in data["problems"]}
-            assert codes == {"Broken": "AUTH_FAILED", "Old POP": "NOT_SUPPORTED_YET"}
+            assert codes == {"Broken": "AUTH_FAILED", "Old POP": "AUTH_FAILED"}
             assert subjects(data) == ["Heute: Kaffee?"]
             assert "partial result" in md and "Broken" in md
             r = await c.call_tool("find_messages", {"window": "today", "accounts": ["Broken"]})
             assert r.is_error and "AUTH_FAILED" in text(r)
-            _md, info = await call(c, "account_info")
-            pop = next(a for a in info["accounts"] if a["name"] == "Old POP")
-            assert pop["connected"] is False and "not supported yet" in pop["notes"][0]
     finally:
         await service.aclose()

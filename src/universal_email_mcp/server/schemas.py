@@ -56,7 +56,7 @@ class MessageItem(_Model):
     to: list[AddressOut]
     cc: list[AddressOut]
     subject: str
-    unread: bool
+    unread: bool | None = Field(description="Unread; null when unknown (POP3 has no read state).")
     flagged: bool
     has_attachments: bool
     size: int | None
@@ -92,7 +92,7 @@ class MessageItem(_Model):
             to=[AddressOut.of(a) for a in s.to],
             cc=[AddressOut.of(a) for a in s.cc],
             subject=s.subject,
-            unread=not s.seen,
+            unread=None if s.ref.is_pop3 else not s.seen,
             flagged=s.flagged,
             has_attachments=s.has_attachments,
             size=s.size,
@@ -257,7 +257,7 @@ class SpecialFolderOut(_Model):
     role: str
     name: str
     messages: int
-    unread: int
+    unread: int | None = Field(description="Unread messages; null when unknown (POP3).")
 
 
 class Overview(_Model):

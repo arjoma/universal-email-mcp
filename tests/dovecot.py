@@ -1,4 +1,4 @@
-"""Throw-away Dovecot IMAP server in a container (rootless podman, docker fallback).
+"""Throw-away Dovecot IMAP/POP3 server in a container (rootless podman, docker fallback).
 
 Shared by the integration tests (``tests/integration/conftest.py``: anonymous
 container on random ports per test session) and the developer sandbox
@@ -6,6 +6,9 @@ container on random ports per test session) and the developer sandbox
 
 The image accepts any user name with the password from ``USER_PASSWORD`` and
 serves implicit TLS on 31993 and STARTTLS on 31143 with a self-signed certificate.
+POP3 is not enabled in the image's ``protocols``; :data:`DOVECOT_COMMAND` turns it on
+(implicit TLS 31995, STLS 31110) from the same maildir, so mail seeded over IMAP is
+readable over POP3. CI starts the container with the same command.
 """
 
 from __future__ import annotations
@@ -27,6 +30,12 @@ IMAPS_PORT = 31993
 """Implicit-TLS IMAP port inside the container."""
 STARTTLS_PORT = 31143
 """Plain IMAP + STARTTLS port inside the container."""
+POP3S_PORT = 31995
+"""Implicit-TLS POP3 port inside the container."""
+POP3_PORT = 31110
+"""Plain POP3 + STLS port inside the container."""
+DOVECOT_COMMAND = ("/dovecot/sbin/dovecot", "-F", "-o", "protocols=imap pop3 submission lmtp sieve")
+"""The image's default command plus POP3 (the image enables IMAP, LMTP, submission, sieve)."""
 MAIL_TMPFS = "/srv/vmail:rw,mode=1777"
 """Mail storage on tmpfs: Dovecot fsyncs every write, ~100x slower seeding on disk."""
 
@@ -96,13 +105,15 @@ def run_container(
     name: str | None = None,
     imaps_port: int | None = None,
     starttls_port: int | None = None,
+    pop3s_port: int | None = None,
+    pop3_port: int | None = None,
     remove: bool = True,
     labels: Mapping[str, str] | None = None,
 ) -> str:
     """Start the image detached on 127.0.0.1 and return the container id.
 
     Ports ``None`` bind to a random free host port. Mail lives on a tmpfs, so it is
-    gone when the container stops.
+    gone when the container stops. POP3 is enabled (see :data:`DOVECOT_COMMAND`).
     """
     cmd = [rt, "run", "-d", "--tmpfs", MAIL_TMPFS]
     if remove:
@@ -111,9 +122,14 @@ def run_container(
         cmd += ["--name", name]
     for key, value in (labels or {}).items():
         cmd += ["--label", f"{key}={value}"]
-    for host_port, container_port in ((imaps_port, IMAPS_PORT), (starttls_port, STARTTLS_PORT)):
+    for host_port, container_port in (
+        (imaps_port, IMAPS_PORT),
+        (starttls_port, STARTTLS_PORT),
+        (pop3s_port, POP3S_PORT),
+        (pop3_port, POP3_PORT),
+    ):
         cmd += ["-p", f"127.0.0.1:{host_port or ''}:{container_port}"]
-    cmd += ["-e", f"USER_PASSWORD={password}", DOVECOT_IMAGE]
+    cmd += ["-e", f"USER_PASSWORD={password}", DOVECOT_IMAGE, *DOVECOT_COMMAND]
     return run_runtime(cmd, timeout=600).strip()
 
 

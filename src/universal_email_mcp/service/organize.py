@@ -220,6 +220,12 @@ class Organizer:
             except InvalidRef as e:
                 out.fail(e)
                 continue
+            if ref.is_pop3:
+                out.account = ref.account
+                out.fail(
+                    NotPermitted("POP3 accounts are read-only: this message cannot be changed")
+                )
+                continue
             if ref.account not in accounts:
                 accounts[ref.account] = self._account(ref.account, permission)
             acc = accounts[ref.account]

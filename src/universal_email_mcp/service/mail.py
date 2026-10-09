@@ -42,6 +42,7 @@ from universal_email_mcp.mail.imap import (
     ServerFeatures,
 )
 from universal_email_mcp.mail.mime import decode_text, sanitize_text, slice_text
+from universal_email_mcp.mail.pop3 import Pop3Session
 from universal_email_mcp.models import (
     Account,
     Address,
@@ -65,7 +66,12 @@ from universal_email_mcp.service.paging import (
     keyset_page,
 )
 from universal_email_mcp.service.query import Query, score_message, similar
-from universal_email_mcp.service.router import AccountProblem, AccountRouter, Fanout
+from universal_email_mcp.service.router import (
+    AccountProblem,
+    AccountRouter,
+    Fanout,
+    ensure_ref_matches,
+)
 from universal_email_mcp.service.send import Sender
 from universal_email_mcp.service.trust import SentTo, SentToIndex
 
@@ -114,6 +120,12 @@ MAX_TERM_CHARS = 60
 
 def _now() -> float:
     return time.monotonic()
+
+
+POP3_NOTE = (
+    "POP3 account: INBOX only, no read or flagged state, messages cannot be changed; "
+    "search looks at the headers of the newest messages"
+)
 
 
 # =========================================================================== results
@@ -174,7 +186,8 @@ class SpecialFolderStatus:
     role: FolderRole
     name: str
     messages: int
-    unseen: int
+    unseen: int | None
+    """``None``: unknown (POP3 has no read state)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,10 +389,14 @@ class MailService:
 
     def message_url(self, ref: MessageRef) -> str | None:
         """``.eml`` download link when a provider is configured."""
+        if ref.is_pop3:  # no server-side sections to stream from (see mail.pop3)
+            return None
         return self._download_links.message_url(ref) if self._download_links else None
 
     def attachment_url(self, ref: MessageRef, section: str) -> str | None:
         """Download link for one attachment when a provider is configured."""
+        if ref.is_pop3:
+            return None
         return self._download_links.attachment_url(ref, section) if self._download_links else None
 
     async def aclose(self) -> None:
@@ -426,6 +443,9 @@ class MailService:
                 f.role: f.display_name for f in folders if f.role is not None
             }
             notes += session.role_warnings
+            pop3 = isinstance(session, Pop3Session)
+            if isinstance(session, Pop3Session):
+                notes += [POP3_NOTE, *session.notes]
             summary: AccountOverview | None = None
             if overview:
                 special: list[SpecialFolderStatus] = []
@@ -439,7 +459,9 @@ class MailService:
                         notes.append(f"{folder.display_name}: status unavailable: {e.message}")
                         continue
                     special.append(
-                        SpecialFolderStatus(role, folder.display_name, st.messages, st.unseen)
+                        SpecialFolderStatus(
+                            role, folder.display_name, st.messages, None if pop3 else st.unseen
+                        )
                     )
                 summary = AccountOverview(
                     len(folders), sum(1 for f in folders if f.selectable), tuple(special)
@@ -545,6 +567,8 @@ class MailService:
                 session.list_folders(refresh=cur is None), self._prefix(session)
             )
             out = _AccountFolderRows([])
+            if isinstance(session, Pop3Session):
+                out.notes.append(f"{acc}: {POP3_NOTE}")
             base = roots
             if parent is not None:
                 try:
@@ -662,7 +686,10 @@ class MailService:
                     st = session.folder_status(info.name)
                 except (FolderNotFound, ProtocolError):
                     continue
-                r.messages, r.unread = st.messages, st.unseen
+                r.messages, r.unread = (
+                    st.messages,
+                    None if isinstance(session, Pop3Session) else st.unseen,
+                )
 
         # Failures here only leave counts empty: the folder list itself stands.
         await self._fan([a for a in selected if a.name in by_account], work)
@@ -878,6 +905,7 @@ class MailService:
             if e.code == "CONFIG_INVALID":
                 raise InvalidRef("message id refers to an unknown account") from e
             raise
+        ensure_ref_matches(ref, acc)
         return ref, acc
 
     async def get_message(self, message_id: str, *, offset: int, max_chars: int | None) -> Message:
@@ -954,6 +982,8 @@ class MailService:
         self, session: ImapSession, ref: MessageRef, cap: int, deadline: float | None = None
     ) -> tuple[MessageSummary, list[MessageSummary], list[str], list[str]]:
         notes: list[str] = []
+        if ref.is_pop3 and isinstance(session, Pop3Session):
+            ref = session.resolve_ref(ref)
         first = session.fetch_summaries(ref.folder, [ref.uid], uidvalidity=ref.uidvalidity)
         if not first:
             raise InvalidRef("message not found (moved or deleted?)")

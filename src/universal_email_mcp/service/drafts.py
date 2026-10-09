@@ -38,7 +38,7 @@ from universal_email_mcp.mail.compose import Draft, FileAttachment, Original
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.models import Account, Address, Identity, Message, MessageRef
 from universal_email_mcp.service.index import HeaderIndex
-from universal_email_mcp.service.router import AccountRouter
+from universal_email_mcp.service.router import AccountRouter, ensure_ref_matches
 from universal_email_mcp.service.trust import SentToIndex
 
 QUOTE_FETCH_CHARS = compose.MAX_QUOTE_CHARS + 1_000
@@ -232,6 +232,8 @@ class Drafter:
             compose.header_text(sender, "from", max_chars=200)
 
         old_ref = MessageRef.decode(draft_id) if draft_id else None
+        if old_ref is not None and old_ref.is_pop3:
+            raise NotPermitted("POP3 accounts are read-only: that is not a draft id")
         if old_ref is not None:
             store = self._account(old_ref.account, "drafts")
             if account and account.casefold() != store.name.casefold():
@@ -239,6 +241,8 @@ class Drafter:
         orig_ref_id = reply_to_id or forward_id
         orig_ref = MessageRef.decode(orig_ref_id) if orig_ref_id else None
         orig_acc = self._account(orig_ref.account, "read") if orig_ref else None
+        if orig_ref is not None and orig_acc is not None:
+            ensure_ref_matches(orig_ref, orig_acc)
 
         loaded: _Loaded | None = None
         if orig_ref is not None and orig_acc is not None:

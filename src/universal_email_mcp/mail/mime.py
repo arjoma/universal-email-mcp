@@ -852,6 +852,57 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
     )
 
 
+@dataclass(frozen=True, slots=True)
+class RawPart:
+    """One leaf part cut out of a message by this parser's numbering."""
+
+    section: str
+    content_type: str
+    charset: str | None
+    filename: str | None
+    disposition: str | None
+    content_id: str | None
+    data: bytes
+    """Decoded content (transfer encoding undone)."""
+
+
+def extract_part(raw: bytes, section: str) -> RawPart | None:
+    """The leaf at ``section`` (numbered like :func:`iter_parts`, which is also how
+    :func:`parse_message` numbers attachments), or ``None``. For backends without a
+    server-side structure (POP3): the parser's numbering is the authority there."""
+    try:
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        for sec, part in iter_parts(msg):
+            if sec != section:
+                continue
+            if part.get_content_maintype() == "message":
+                # Cut from the original bytes: re-serialising would change line ends.
+                body = _raw_part_body(raw, msg, sec)
+                if body is not None:
+                    data = decode_transfer(body, str(part.get("Content-Transfer-Encoding", "7bit")))
+                else:
+                    data = _serialized_body(part)
+            else:
+                data = _part_bytes(part)
+            try:
+                charset = part.get_content_charset()
+            except Exception:  # noqa: BLE001 - malformed parameters
+                charset = None
+            cid = part.get("Content-ID")
+            return RawPart(
+                section=sec,
+                content_type=part.get_content_type(),
+                charset=charset,
+                filename=_filename(part),
+                disposition=_disposition(part),
+                content_id=parse_msgid(str(cid)) if cid else None,
+                data=data,
+            )
+    except RecursionError:
+        return None
+    return None
+
+
 _MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}$")
 
 
