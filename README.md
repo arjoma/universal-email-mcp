@@ -64,6 +64,17 @@ again against the permissions of the account each message belongs to:
 | `create_folder` | organize | a folder (nested levels, `parent=` named exactly), subscribed; never renames or deletes folders |
 | `delete_messages` | delete | moves to Trash (recoverable); mail already in Trash stays; there is no permanent deletion |
 
+| `save_draft` | drafts | writes a draft into the account's Drafts folder: new, reply (`reply_to_id`, `reply_all`), forward (`forward_id`, attaches the original's files only), or replaces an earlier one (`draft_id`); **never sends** |
+
+`save_draft` picks the sender among your configured identities (`from` names one;
+else the identity the original was addressed to, else the default; a made-up
+address is refused), adds the signature and the quoted original, validates every
+address and refuses line breaks in headers. A reply goes to the original's
+Reply-To (else From), like in a mail client, and warns when that points to another
+domain. The result previews the draft and warns about recipients you never wrote
+to. An identity needs `store_account` (or `account`) for its drafts; no SMTP server
+is needed yet. Plain text only.
+
 Changes are reported per message. They use UIDs checked against the folder's
 UIDVALIDITY, `UID MOVE` (or `UID COPY` + `UID EXPUNGE` with UIDPLUS, otherwise
 refused), and never a plain `EXPUNGE`. Try them on the sandbox mailbox

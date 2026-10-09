@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`enabled`, `port`, `link_ttl`, `max_download_bytes`). `get_message` also offers
   a "download .eml" link (`/m/<token>`, the raw message); `account_info` reports
   whether download links are on (and where) or off (and why).
+- `save_draft` (permission `drafts`; offered only when an account allows it and the
+  policy is not read-only): writes a plain-text draft into the account's Drafts
+  folder (`\Draft`, `\Seen`; the new draft's id from `APPENDUID`) and never sends.
+  New mail, reply, reply-all (`reply_to_id`, `reply_all`) and forward (`forward_id`;
+  attaches the original's files through the verified part lookup, capped by
+  `limits.max_attachment_bytes` per file and 10 MiB in total, never local files or
+  URLs); `draft_id` replaces a draft: the new version is appended first, then the old
+  one removed with `\Deleted` + `UID EXPUNGE` of that one UID, only if it is a
+  `\Draft` in the Drafts folder (otherwise, or without UIDPLUS, it is left and the
+  result says so). The sender is always a configured identity (explicit `from`, the
+  address the original was sent to, an identity of the original's account, the
+  default); threading headers come from the original with strict Message-ID syntax
+  checks and at most 10 References; recipients are validated, line breaks and control
+  characters in headers are refused, the policy's `max_recipients` applies. The result
+  previews the draft and warns about a Reply-To to another domain, malformed
+  addresses of the original and recipients never written to.
 - `get_attachment`: reads one attachment by the id `get_message` lists. Text-like
   files (text, CSV, JSON, XML, HTML, SVG) come back as fenced, defanged, paged text;
   other files as an embedded resource (base64 blob); files over

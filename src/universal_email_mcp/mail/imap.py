@@ -286,6 +286,20 @@ class MoveResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AppendResult:
+    """Result of :meth:`ImapSession.append_message`."""
+
+    folder: str
+    """Wire name of the folder."""
+    uidvalidity: int | None
+    uid: int | None
+    """The new message's UID; ``None`` if the server did not say and it was not found."""
+
+
+_APPENDUID = re.compile(r"\[APPENDUID (\d+) (\d+)\]", re.I)
+
+
+@dataclass(frozen=True, slots=True)
 class LoginInfo:
     """Facts gathered while connecting (for ``probe`` and diagnostics)."""
 
@@ -1474,6 +1488,70 @@ class ImapSession:
         except (imaplib.IMAP4.error, OSError):
             self.subscribe_failed.append(wire)
         return True
+
+    # ------------------------------------------------------------ drafts
+
+    def append_message(self, folder: str, raw: bytes, *, flags: Sequence[str]) -> AppendResult:
+        """``APPEND`` a complete message (CRLF, as composed) to ``folder`` (wire name).
+
+        The new message's UID comes from ``APPENDUID`` (UIDPLUS). Without it the
+        message is looked up by its ``Message-ID`` header: found exactly once, that
+        is its UID; otherwise ``uid`` is ``None`` (the message is saved all the same).
+        """
+        wire = _wire_name(folder)
+        self._check_own(wire)
+        try:
+            resp = self._client.append(wire, raw, flags=[f.encode("ascii") for f in flags])
+        except (imaplib.IMAP4.abort, OSError) as e:
+            raise ServerUnreachable(f"connection lost during APPEND: {_server_text(e)}") from e
+        except imaplib.IMAP4.error as e:
+            text = _server_text(e)
+            if "TRYCREATE" in text.upper() or "NONEXISTENT" in text.upper():
+                raise FolderNotFound(f"folder {decode_folder_name(wire)!r} does not exist") from e
+            raise ProtocolError(f"APPEND failed: {text}") from e
+        m = _APPENDUID.search(_s(resp))
+        if m:
+            return AppendResult(wire, int(m.group(1)), int(m.group(2)))
+        return self._find_appended(wire, raw)
+
+    def _find_appended(self, wire: str, raw: bytes) -> AppendResult:
+        head = raw.split(b"\r\n\r\n", 1)[0].decode("utf-8", "replace")
+        mid = re.search(r"(?im)^Message-ID:[ \t]*(<[^<>\s]+>)", head)
+        if mid is None:
+            return AppendResult(wire, None, None)
+        _wire, uidvalidity, exists = self._examine(wire)
+        if exists == 0:
+            return AppendResult(wire, uidvalidity, None)
+        uids, _order = self._search_call([b"HEADER", b"Message-ID", _astring(mid.group(1))], None)
+        return AppendResult(wire, uidvalidity, uids[0] if len(uids) == 1 else None)
+
+    def remove_draft(
+        self, folder: str, uid: int, *, uidvalidity: int
+    ) -> Literal["removed", "missing", "not_a_draft", "no_uidplus"]:
+        """Remove exactly one message from the Drafts folder ``folder`` (wire name):
+        ``\\Deleted`` plus ``UID EXPUNGE`` of that one UID (UIDPLUS), never a plain
+        ``EXPUNGE`` (which would also remove other mail marked as deleted). Only a
+        message that carries ``\\Draft`` is touched. Without UIDPLUS nothing is changed
+        (``"no_uidplus"``). Raises :class:`UidValidityChanged` if the folder was reset.
+        """
+        if not self.has("UIDPLUS"):
+            return "no_uidplus"
+        self._select_for_write(folder, uidvalidity)
+        flags = self._existing([uid]).get(uid)
+        if flags is None:
+            return "missing"
+        if "\\Draft" not in flags:
+            return "not_a_draft"
+        self._call("STORE", lambda: self._client.add_flags([uid], [b"\\Deleted"], silent=True))
+        try:
+            self._call("UID EXPUNGE", lambda: self._client.uid_expunge([uid]))
+        except MailError:
+            try:  # do not leave the old version hidden as "deleted"
+                self._client.remove_flags([uid], [b"\\Deleted"], silent=True)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        return "removed"
 
 
 # =========================================================================== helpers

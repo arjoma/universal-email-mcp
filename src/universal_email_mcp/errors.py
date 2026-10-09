@@ -167,3 +167,11 @@ class NoTrashFolder(MailError):
         "The account has no recognisable Trash folder (see account_info). Set "
         "folders.trash in the account configuration. Permanent deletion is not offered."
     )
+
+
+class NoDraftsFolder(MailError):
+    code = "NO_DRAFTS_FOLDER"
+    default_hint = (
+        "The account has no recognisable Drafts folder (see account_info). Set "
+        "folders.drafts in the account configuration."
+    )

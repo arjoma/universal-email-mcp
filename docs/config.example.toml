@@ -77,10 +77,15 @@ password_env = "UEM_OLDPOP_PASSWORD"
 # tls_ca_file = "~/certs/my-ca.pem"
 
 # ---------------------------------------------------------------- identities
-# Senders (used from milestone M2 on). account = SMTP transport and credentials
-# plus the IMAP account that receives Drafts/Sent copies (override separately
-# with smtp_account / store_account). Exactly one identity is the default; if
-# none is marked, the first one is.
+# Senders. save_draft writes drafts as one of these identities (an unknown sender
+# is refused). account = SMTP transport and credentials plus the IMAP account that
+# receives Drafts/Sent copies (override separately with smtp_account /
+# store_account; an identity that only needs drafts can set store_account alone,
+# without any SMTP server). The IMAP account needs the "drafts" permission.
+# Several addresses (addresses = [...]) are recognised when replying: the one the
+# original was sent to becomes the sender. Exactly one identity is the default; if
+# none is marked, the first one is. The signature is appended after the text,
+# below a "-- " separator line that the server adds.
 
 [[identities]]
 address = "alice@example.com"
@@ -89,6 +94,5 @@ account = "Work"
 default = true
 send = false
 signature = """
---
 Alice Example
-"""
+Example Inc."""
