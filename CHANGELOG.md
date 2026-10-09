@@ -31,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   homographs, mixed scripts, other top-level domains - also for addresses that were
   written to before). Policy: `[policy] send` = `off` | `draft` | `confirm` |
   `confirm-external` | `on`, `internal_domains`, `max_sends_per_hour`/`_per_day`,
-  `limits.max_send_bytes`; identity keys `save_sent` and `file_replies`. The user
+  `limits.max_send_bytes`; identity keys `save_sent` and `file_replies` (default `both`: the copy of a reply also goes into the user folder the original is filed in).
+  The confirmation shows the whole new text (cap 3000 characters / 80 lines, cut parts
+  announced with numbers), summarises a quoted original and lists up to 20 attachments.
+  `\Answered` needs `organize` or `drafts` on the original's account. The user
   confirms through MCP elicitation (both protocol eras: mid-call request and
   2026-07-28 input-required retry; the question carries a content fingerprint); a
   client that cannot elicit, or a declined confirmation, leaves a draft. After a

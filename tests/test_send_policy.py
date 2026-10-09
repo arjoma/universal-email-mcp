@@ -3,6 +3,7 @@ elicitation adapter (no servers)."""
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
@@ -294,7 +295,31 @@ def test_confirmation_text_is_sanitised_and_complete():
         assert bad not in text
     assert "http://evil.example" not in text  # defanged
     assert "Confirmation needed because why." in text
-    assert len(text) <= 4000
+    assert len(text) <= 10_000
+
+
+def test_confirmation_shows_the_whole_new_text_and_announces_cuts():
+    out = parse_outgoing(RAW)
+    ident = Identity("Me", ("me@example.org",), send=True)
+    lines = [f"line {i} " + "x" * 20 for i in range(1, 201)]
+    body = "\n".join(lines)
+    text = confirmation_text(ident, out, [], [], text=body, quoted="a\nb\nc")
+    assert "> line 80 " in text and "line 81 " not in text  # 80 lines
+    n_cut = len(body) - len("\n".join(lines[:80]))
+    assert f"{n_cut} more characters (120 lines) of the text NOT shown" in text
+    assert "[quoted original: 3 lines, not shown]" in text
+    # text after the old 15-line limit is visible
+    short = confirmation_text(ident, out, [], [], text="\n".join(f"l{i}" for i in range(1, 41)))
+    assert "> l40" in short and "NOT shown" not in short
+
+
+def test_confirmation_lists_attachments_up_to_20_then_counts():
+    raw = b"From: a@x.example\nTo: b@y.example\n\nhi\n"
+    out = parse_outgoing(raw)
+    out = dataclasses.replace(out, attachments=tuple((f"f{i}.bin", 1000 + i) for i in range(23)))
+    text = confirmation_text(Identity("Me", ("a@x.example",)), out, [], [])
+    assert "Attachments (23):" in text and "f19.bin" in text and "f20.bin" not in text
+    assert "and 3 more attachment(s) NOT listed" in text
 
 
 # ---------------------------------------------------------------- outgoing parser

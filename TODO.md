@@ -200,7 +200,7 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       subdomain handling is only in `allowed_recipient_domains`.
 - [ ] SMTPUTF8 (non-ASCII local parts) is refused; 8-bit bodies need the server's 8BITMIME.
       The EHLO name is the fixed `localhost`.
-- [ ] `\Answered` needs `organize` on the original's account; a forward does not set `$Forwarded`.
+- [ ] `\Answered` needs `organize` or `drafts` on the original's account; a forward does not set `$Forwarded`.
       The original of a plain `draft_id` reply is searched in at most 25 folders / 10 s of the
       store account (INBOX first); one in another account is not found.
 - [ ] The Sent copy keeps the `Bcc` header (the user's own record); the Sent-to index does not

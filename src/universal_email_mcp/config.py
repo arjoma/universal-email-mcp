@@ -575,7 +575,7 @@ def _parse_identity(
         raise c.err(
             w, f"save_sent = {save_sent!r} is invalid", hint=f"Use: {', '.join(SAVE_SENT)}."
         )
-    file_replies = c.str_(t, "file_replies", w, "sent") or "sent"
+    file_replies = c.str_(t, "file_replies", w, "both") or "both"
     if file_replies not in FILE_REPLIES:
         raise c.err(
             w,

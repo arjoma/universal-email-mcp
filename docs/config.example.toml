@@ -101,9 +101,9 @@ password_env = "UEM_OLDPOP_PASSWORD"
 # with the "drafts" permission: a message is always saved as a draft first, the Sent
 # copy goes there, and a declined or impossible confirmation leaves the draft.
 # save_sent = auto (copy to Sent unless the SMTP server files it itself) | always | never
-# file_replies = sent | thread_folder | both: when a reply's original is filed in a
-#   folder of your own (not INBOX, not Archive), `both` also puts the copy there and
-#   `thread_folder` only there (falls back to Sent when no such folder).
+# file_replies = both (default) | sent | thread_folder: when a reply's original is filed in
+#   a folder of your own (not INBOX, not a special folder), `both` puts the copy in Sent and
+#   there, `sent` only in Sent, `thread_folder` only there (Sent when there is no such folder).
 #
 # Senders. save_draft writes drafts as one of these identities (an unknown sender
 # is refused). account = SMTP transport and credentials plus the IMAP account that
@@ -122,7 +122,7 @@ account = "Work"
 default = true
 send = false                    # true: send_message may send as this identity
 # save_sent = "auto"
-# file_replies = "sent"
+# file_replies = "both"
 signature = """
 Alice Example
 Example Inc."""
