@@ -22,6 +22,7 @@ Everything is read-only (``BODY.PEEK``): viewing a message does not mark it read
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
@@ -275,6 +276,7 @@ class ViewerEndpoints(PortalEndpoints):
                 html=bool(frame),
                 attachments=len(msg.attachments),
                 size=_bucket(msg.summary.size),
+                coalesce=True,
             )
             return self._page(
                 request,
@@ -318,7 +320,11 @@ class ViewerEndpoints(PortalEndpoints):
                 item["current"] = e.summary_id == mid
                 items.append(item)
             await self.svc.audit(
-                "viewer.open", user=auth.user.id, kind="thread", messages=len(items)
+                "viewer.open",
+                user=auth.user.id,
+                kind="thread",
+                messages=len(items),
+                coalesce=True,
             )
             return self._page(
                 request,
@@ -339,7 +345,9 @@ class ViewerEndpoints(PortalEndpoints):
         async def handler(auth: Auth, viewer: Viewer, mid: str) -> Response:
             viewer.resolve(mid)
             lines = await viewer.headers(mid)
-            await self.svc.audit("viewer.raw", user=auth.user.id, kind="headers", lines=len(lines))
+            await self.svc.audit(
+                "viewer.raw", user=auth.user.id, kind="headers", lines=len(lines), coalesce=True
+            )
             return self._page(
                 request,
                 "headers.html",
@@ -468,13 +476,16 @@ class ViewerEndpoints(PortalEndpoints):
                 complete = True
             finally:
                 await stack.aclose()
-                await self.svc.audit(
-                    "viewer.raw" if kind == "eml" else "attachment.download",
-                    user=user,
-                    kind=kind,
-                    size=_bucket(sent),
-                    family=_family(dl.content_type),
-                    complete=complete,
+                await asyncio.shield(
+                    self.svc.audit(
+                        "viewer.raw" if kind == "eml" else "attachment.download",
+                        user=user,
+                        kind=kind,
+                        size=_bucket(sent),
+                        family=_family(dl.content_type),
+                        complete=complete,
+                        coalesce=True,
+                    )
                 )
 
         return StreamingResponse(

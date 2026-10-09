@@ -171,7 +171,9 @@ class PerUserServer(MCPServer):
                 user=ctx.user_id,
                 grant=ctx.grant_id,
                 tool=name if name in audit.READ_TOOLS | audit.WRITE_TOOLS else "unknown",
-                outcome="ok" if code == "ok" else "error",
+                outcome="ok"
+                if code == "ok" and not (counts.get("failed") and not counts.get("succeeded"))
+                else "error",
                 code=None if code == "ok" else code,
                 dur=audit.duration_bucket(seconds),
                 accounts=len(ctx.records),
