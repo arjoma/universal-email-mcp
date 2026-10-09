@@ -49,6 +49,7 @@ _INVISIBLE = re.compile(
     r"\ufff9-\ufffb\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
     r"\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
 )
+_BLANKS = re.compile(r"[\xa0\u1680\u2000-\u200a\u202f\u205f\u2800\u3000]")
 _LINE_SEP = re.compile(r"[\u2028\u2029\x85]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _CONTROL_ALL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -71,8 +72,11 @@ def sanitize_text(text: str) -> str:
 
 
 def sanitize_line(text: str) -> str:
-    """Like :func:`sanitize_text` for single-line values (headers): no line breaks."""
+    """Like :func:`sanitize_text` for single-line values (headers): no line breaks.
+    Unicode blanks (NBSP, em space, Braille blank …) become one plain space, so a run
+    of them cannot push the end of a file name out of view."""
     text = _LINE_SEP.sub(" ", strip_surrogates(text))
+    text = _BLANKS.sub(" ", text)
     text = _INVISIBLE.sub("", text)
     text = _CONTROL_ALL.sub(" ", text)
     return re.sub(r" {2,}", " ", text).strip()
