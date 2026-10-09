@@ -6,13 +6,29 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 Vendor-neutral MCP server for IMAP, POP3 and SMTP mailboxes. Public repo
 (`arjoma/universal-email-mcp`), Apache-2.0, all development in public.
-Design and scope: `docs/plans/2026-09-30-design.md`; parked ideas: `TODO.md`.
+Design and scope: `docs/plans/2026-09-30-design.md`; what is left and in which
+order: `docs/plans/2026-10-09-roadmap.md`; parked ideas: `TODO.md`.
 
 - **Vendor neutral.** Nothing company- or deployment-specific belongs here (no
   instance names, hostnames of real deployments, GCP project ids, secrets).
   Deployment config lives in a separate private repository.
 - Stack: Python ≥ 3.12, `uv`, MCP Python SDK 2.x (`mcp.server.mcpserver.MCPServer`),
   protocol 2026-07-28 (stateless HTTP) with legacy transport support.
+
+## Language: English only
+
+The project is **100 % English**: code, identifiers, comments, docstrings, tool
+descriptions and server instructions, error messages, logs, docs, commit
+messages, PRs, issues, changelog. Conversations with the maintainer may be in
+German — that stays in the chat and never ends up in the repository.
+
+- German appears only as **data** the code has to understand: folder names
+  (`Gesendet`, `Entwürfe`), fuzzy-matching synonyms (`Kunden`), test corpora.
+- **End-user UI** (portal, consent, message viewer — anything a person sees in the
+  browser) is built **translatable from the start** (no hard-coded strings in
+  templates), but ships English only for now. Later: the operator sets the
+  deployment's default language, each user can switch. German will be the second
+  language. Tool output for the AI client stays English.
 
 ## Security principle: no e-mail is trusted
 
@@ -90,6 +106,23 @@ Dovecot server: locally they start it with rootless **podman** (or a working
 docker) and skip if neither is available; CI provides it as a service container
 and sets `UEM_TEST_REQUIRE_INTEGRATION=1` so they cannot silently skip there.
 Protocol behaviour is tested against the server, not mocks.
+
+## Local testing with a real mailbox
+
+Personal test setup lives in the checkout but is gitignored (`.env`, `*.local.toml`):
+
+```bash
+cp docs/config.example.toml config.local.toml   # trim to your accounts
+cp .env.example .env                            # sets UEM_CONFIG=config.local.toml
+uv run keyring set universal-email-mcp Work     # password into the OS keyring
+uv run --env-file .env universal-email-mcp probe --account Work
+claude mcp add email -- uv run --directory "$PWD" --env-file .env universal-email-mcp local
+```
+
+Prefer the keyring over `password_env` in `.env`: coding agents working in the
+repository can read `.env`. Start with `permissions = ["read"]`; write
+operations are tried on a throw-away Dovecot first (roadmap step 0b), not on a
+real mailbox.
 
 ## Releases
 
