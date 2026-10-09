@@ -9,9 +9,8 @@ variables) and never logged.
 
 > **Status: preview.** `serve` has two modes. **OAuth mode** (work package 3c) is the
 > default: set `STORE_BACKEND`, `PUBLIC_URL` and `LOGIN_DOMAINS`; users sign in, clients
-> are authorized, and `/mcp` needs an access token (see [oauth.md](oauth.md)). Until the
-> per-user service (3e) `/mcp` offers only `account_info`; the mail tools, the limits and
-> the policy below apply per user from 3e on. The temporary **dev mode** (`UEM_DEV_TOKEN`
+> are authorized, and `/mcp` needs an access token (see [oauth.md](oauth.md)); it serves each
+> user's own accounts (per-user service, 3e) with the limits and policy below. The temporary **dev mode** (`UEM_DEV_TOKEN`
 > or `--insecure-local`) serves the accounts of a local TOML config (`--config` /
 > `UEM_CONFIG`) behind one static bearer token; do not expose it to users. The two modes
 > are exclusive (setting both is an error).
@@ -74,7 +73,10 @@ The scopes clients can obtain follow the policy: with `UEM_READ_ONLY=true` only
 ## Limits and policy
 
 Same meaning as `[limits]` and `[policy]` in the TOML config; a set variable
-overrides the TOML value.
+overrides the TOML value. In OAuth mode they apply to every user's service; a grant can
+only narrow them (the effective permissions are the intersection with `UEM_READ_ONLY`).
+`UEM_SEND_POLICY` and the other send settings take effect with work package 3f; until then
+`send_message` is not offered in remote mode.
 
 | Variable | Config key |
 |---|---|
@@ -85,11 +87,31 @@ overrides the TOML value.
 | `UEM_ALLOWED_RECIPIENT_DOMAINS`, `UEM_INTERNAL_DOMAINS` (comma separated) | `[policy] allowed_recipient_domains`, `internal_domains` |
 | `UEM_MAX_RECIPIENTS`, `UEM_MAX_SENDS_PER_HOUR`, `UEM_MAX_SENDS_PER_DAY` | `[policy] max_recipients`, ... |
 
+## Per-user service: connections and calls (OAuth mode)
+
+Caps of the per-instance pool of mail connections and per-user services (design section 4,
+"Connections"). Each connected client (grant) has its own set of connections, at most one per
+account; hosters often cap connections per mailbox, so keep the idle time short.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `UEM_MAX_CONNECTIONS` | `200` | Open mail-server connections in this process. When reached, the longest idle connection of anybody is closed; if none is idle the call fails with `BUSY`. |
+| `UEM_MAX_CONNECTIONS_PER_USER` | `8` | The same per user (all of the user's clients together). |
+| `UEM_MAX_CONCURRENT_CALLS_PER_USER` | `8` | Tool calls of one user running at once; more are refused with `BUSY` (clients can retry). Calls to one account are serialised anyway. |
+| `UEM_CONNECTION_IDLE_TTL` | `120` | Seconds an unused connection stays open (swept every 30 s). |
+| `UEM_USER_IDLE_TTL` | `900` | Seconds an unused per-user service (decrypted accounts, header caches) stays in memory. |
+| `UEM_MAX_CACHED_USERS` | `500` | Per-user services kept in memory; the least recently used idle ones go first. |
+| `UEM_REAUTH_RETRY_AFTER` | `600` | After a rejected login (`REAUTH_REQUIRED`) the account is not tried again for this long, unless its password or user name changed. |
+
+A deployment with several instances multiplies the connection caps; size
+`--max-instances` and these values so that `instances x UEM_MAX_CONNECTIONS` stays within what
+the mail servers accept. The caps are per process; tool-call rate limits come with M4.
+
 ## Endpoints
 
 | Path | Purpose |
 |---|---|
-| `/mcp` | MCP over Streamable HTTP, **stateless**: clients of protocol 2026-07-28 get the sessionless transport, older clients (<= 2025-11-25) the legacy transport without sessions (no back-channel, so no in-chat confirmation for them). OAuth mode: needs an access token issued for this resource; otherwise 401 with `WWW-Authenticate: Bearer resource_metadata="..."`. Dev mode: `Authorization: Bearer <UEM_DEV_TOKEN>`. |
+| `/mcp` | MCP over Streamable HTTP, **stateless**: clients of protocol 2026-07-28 get the sessionless transport, older clients (<= 2025-11-25) the legacy transport without sessions (no back-channel, so no in-chat confirmation for them). OAuth mode: needs an access token issued for this resource, and serves the tools of the token's grant; otherwise 401 with `WWW-Authenticate: Bearer resource_metadata="..."`. Dev mode: `Authorization: Bearer <UEM_DEV_TOKEN>`. |
 | `/.well-known/oauth-*`, `/authorize`, `/token`, `/revoke`, `/register`, `/portal/assets/*` | OAuth mode: the authorization server, see [oauth.md](oauth.md). |
 | `/portal`, `/portal/*` | OAuth mode: the user portal (accounts, identities, connected applications), see [portal.md](portal.md). |
 | `/health` | Liveness: `200 {"status":"ok"}`, no dependencies. |

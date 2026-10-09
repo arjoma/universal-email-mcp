@@ -251,3 +251,35 @@ def test_portal_settings():
 def test_default_ports_are_dropped_from_the_origin():
     op = load({"PUBLIC_URL": "https://mcp.example.com:443"})
     assert op.allowed_origins == ("https://mcp.example.com",)
+
+
+def test_pool_settings():
+    d = oauth({}).pool
+    assert (d.max_connections, d.max_connections_per_user, d.max_concurrent_calls_per_user) == (
+        200,
+        8,
+        8,
+    )
+    op = oauth(
+        {
+            "UEM_MAX_CONNECTIONS": "50",
+            "UEM_MAX_CONNECTIONS_PER_USER": "3",
+            "UEM_MAX_CONCURRENT_CALLS_PER_USER": "4",
+            "UEM_CONNECTION_IDLE_TTL": "60",
+            "UEM_USER_IDLE_TTL": "120",
+            "UEM_MAX_CACHED_USERS": "10",
+            "UEM_REAUTH_RETRY_AFTER": "30",
+        }
+    )
+    p = op.pool
+    assert (p.max_connections, p.max_connections_per_user, p.max_concurrent_calls_per_user) == (
+        50,
+        3,
+        4,
+    )
+    assert (p.connection_idle_ttl, p.user_idle_ttl, p.max_cached_users) == (60, 120, 10)
+    assert p.reauth_retry_after == 30
+    for var in ("UEM_MAX_CONNECTIONS", "UEM_MAX_CONCURRENT_CALLS_PER_USER", "UEM_USER_IDLE_TTL"):
+        for bad in ("0", "many"):
+            with pytest.raises(ConfigError, match=var):
+                oauth({var: bad})

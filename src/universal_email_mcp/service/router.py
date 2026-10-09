@@ -24,7 +24,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from universal_email_mcp.config import Config, resolve_password
 from universal_email_mcp.errors import (
@@ -49,6 +49,23 @@ DEFAULT_IDLE_TTL = 120.0
 Permission = str  # "read" | "organize" | "delete" | "drafts"
 Connector = Callable[[Account, Config], Any]
 """Opens an authenticated session for an account (blocking; runs in a thread)."""
+
+
+class ConnectionHooks(Protocol):
+    """Remote mode: the pool of the per-user service watches every new connection.
+
+    All three run on the event loop and must not block.
+    """
+
+    def before_connect(self, router: AccountRouter, account: Account) -> None:
+        """Called before a *new* connection attempt; raise a :class:`MailError` to refuse
+        it (connection caps, an account known to need a new password)."""
+
+    def connect_failed(self, account: Account, error: MailError) -> MailError:
+        """A connection attempt failed; return the error to report (may be a replacement)."""
+        ...
+
+    def connect_succeeded(self, account: Account) -> None: ...
 
 
 def connect_imap(account: Account, config: Config) -> ImapSession:
@@ -175,8 +192,13 @@ class AccountRouter:
         connectors: Mapping[AccountKind, Connector] | None = None,
         idle_ttl: float = DEFAULT_IDLE_TTL,
         clock: Callable[[], float] = time.monotonic,
+        hooks: ConnectionHooks | None = None,
+        no_accounts_hint: str = "Add [[accounts]] to the config file.",
     ) -> None:
         self.config = config
+        self._hooks = hooks
+        self._no_accounts_hint = no_accounts_hint
+        self._closed = False
         self._connectors = dict(DEFAULT_CONNECTORS if connectors is None else connectors)
         self._pop3_states: dict[str, Pop3State] = {}
         if connectors is None:
@@ -219,9 +241,7 @@ class AccountRouter:
         else:
             wanted = list(self.config.accounts)
             if not wanted:
-                raise ConfigError(
-                    "no accounts configured", hint="Add [[accounts]] to the config file."
-                )
+                raise ConfigError("no accounts configured", hint=self._no_accounts_hint)
         selected: list[Account] = []
         for acc in wanted:
             if not getattr(acc.permissions, permission, False) or (
@@ -290,11 +310,23 @@ class AccountRouter:
             raise NotSupportedYet(f"{account.kind.upper()} accounts are not supported yet")
         fut = slot.connecting
         if fut is None:
+            if self._closed:
+                raise ServerUnreachable("the connection pool of this client was closed")
+            if self._hooks is not None:
+                self._hooks.before_connect(self, account)
             loop = asyncio.get_running_loop()
             fut = _run_daemon(loop, connector, account, self.config)
             slot.connecting = fut
             fut.add_done_callback(functools.partial(self._connected, slot))
-        return await asyncio.shield(fut)
+        try:
+            return await asyncio.shield(fut)
+        except MailError as e:
+            if self._hooks is None:
+                raise
+            replacement = self._hooks.connect_failed(account, e)
+            if replacement is e:
+                raise
+            raise replacement from e
 
     def _connected(self, slot: _Slot, fut: asyncio.Future[Any]) -> None:
         if slot.connecting is fut:
@@ -302,6 +334,11 @@ class AccountRouter:
         if fut.cancelled() or fut.exception() is not None:
             return
         session = fut.result()
+        if self._closed:  # a connect that finished after aclose(): nobody will close it later
+            _in_thread(_close_quietly, session)
+            return
+        if self._hooks is not None:
+            self._hooks.connect_succeeded(slot.account)
         if slot.session is None:
             slot.session = session
             slot.last_used = self._clock()
@@ -389,6 +426,45 @@ class AccountRouter:
             else:
                 out.results[acc.name] = res
         return out
+
+    # ------------------------------------------------------------ pool support
+
+    def open_connections(self) -> int:
+        """Connections open or being opened (what the pool's caps count)."""
+        return sum(1 for s in self._slots.values() if s.session is not None or s.connecting)
+
+    def idle_sessions(self) -> list[tuple[float, _Slot]]:
+        """``(last_used, slot)`` of connections nobody is using right now."""
+        return [
+            (s.last_used, s)
+            for s in self._slots.values()
+            if s.session is not None and s.connecting is None and not s.lock.locked()
+        ]
+
+    def drop_idle(self, slot: _Slot) -> None:
+        """Close an idle connection (on a cleanup thread; the slot reconnects on demand)."""
+        if slot.session is None or slot.lock.locked():
+            return
+        session, slot.session = slot.session, None
+        _in_thread(_close_quietly, session)
+
+    def close_idle(self, older_than: float) -> int:
+        """Close connections idle for more than ``older_than`` seconds; returns how many."""
+        now = self._clock()
+        stale = [s for t, s in self.idle_sessions() if now - t > older_than]
+        for s in stale:
+            self.drop_idle(s)
+        return len(stale)
+
+    def last_activity(self) -> float:
+        """Latest use of any connection (0 = none yet)."""
+        return max((s.last_used for s in self._slots.values()), default=0.0)
+
+    async def close_for_good(self) -> None:
+        """Close and refuse any later connect (and close a connect still in flight when it
+        completes): the router of a retired per-user service."""
+        self._closed = True
+        await self.aclose()
 
     async def aclose(self) -> None:
         sessions = [s.session for s in self._slots.values() if s.session is not None]

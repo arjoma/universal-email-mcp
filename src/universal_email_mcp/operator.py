@@ -98,6 +98,26 @@ class OAuthSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PoolSettings:
+    """Per-instance resource caps of the per-user service (WP 3e)."""
+
+    max_connections: int = 200
+    """Open mail-server connections in this process (all users)."""
+    max_connections_per_user: int = 8
+    max_concurrent_calls_per_user: int = 8
+    """Tool calls of one user running at once; more are answered with a ``BUSY`` error."""
+    connection_idle_ttl: float = 120.0
+    """Seconds an unused mail connection stays open (hosters cap connections per mailbox)."""
+    user_idle_ttl: float = 900.0
+    """Seconds an unused per-user service (decrypted accounts, header caches) stays in memory."""
+    max_cached_users: int = 500
+    """Per-user services kept in memory; the least recently used idle ones go first."""
+    reauth_retry_after: float = 600.0
+    """After a rejected login the account is not tried again for this long (unless the
+    password changed)."""
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorConfig:
     host: str
     port: int
@@ -122,6 +142,7 @@ class OperatorConfig:
     """Set in OAuth mode (``STORE_BACKEND``), ``None`` in the temporary dev mode."""
     pseudonym_key: bytes = field(default=b"", repr=False)
     oauth: OAuthSettings = OAuthSettings()
+    pool: PoolSettings = PoolSettings()
 
     @property
     def oauth_mode(self) -> bool:
@@ -370,6 +391,23 @@ def _oauth(env: Mapping[str, str]) -> OAuthSettings:
     )
 
 
+def _pool(env: Mapping[str, str]) -> PoolSettings:
+    d = PoolSettings()
+    return PoolSettings(
+        max_connections=_number(env, "UEM_MAX_CONNECTIONS", d.max_connections, int),
+        max_connections_per_user=_number(
+            env, "UEM_MAX_CONNECTIONS_PER_USER", d.max_connections_per_user, int
+        ),
+        max_concurrent_calls_per_user=_number(
+            env, "UEM_MAX_CONCURRENT_CALLS_PER_USER", d.max_concurrent_calls_per_user, int
+        ),
+        connection_idle_ttl=_number(env, "UEM_CONNECTION_IDLE_TTL", d.connection_idle_ttl, float),
+        user_idle_ttl=_number(env, "UEM_USER_IDLE_TTL", d.user_idle_ttl, float),
+        max_cached_users=_number(env, "UEM_MAX_CACHED_USERS", d.max_cached_users, int),
+        reauth_retry_after=_number(env, "UEM_REAUTH_RETRY_AFTER", d.reauth_retry_after, float),
+    )
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -500,4 +538,5 @@ def load_operator_config(
         store=store_settings,
         pseudonym_key=pseudonym_key,
         oauth=_oauth(env),
+        pool=_pool(env),
     )

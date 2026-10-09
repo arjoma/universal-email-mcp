@@ -37,6 +37,21 @@ class AuthFailed(MailError):
     default_hint = "Check the username and password (an app password may be required)."
 
 
+class ReauthRequired(AuthFailed):
+    """Remote mode: the stored mail password stopped working. The user has to enter it
+    again in the portal; until then the server does not try to log in again."""
+
+    code = "REAUTH_REQUIRED"
+    default_hint = "Ask the user to enter the mailbox password again in the portal."
+
+
+class Busy(MailError):
+    """Remote mode: a per-user or per-instance cap is reached (connections, parallel calls)."""
+
+    code = "BUSY"
+    default_hint = "Too many requests at once. Wait a few seconds and try again."
+
+
 class ServerUnreachable(MailError):
     code = "SERVER_UNREACHABLE"
     default_hint = "Check host name, port and network connectivity; the server may be down."

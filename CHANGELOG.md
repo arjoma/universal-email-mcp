@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UEM_MAX_IDENTITIES_PER_USER`.
 - `Identity` store record: `send` and `smtp_account_id` fields.
 - `mail.smtp.check_login()`: connect and authenticate without sending.
+- Per-user service for remote mode (work package 3e; `docs/oauth.md`, "What `/mcp` serves").
+  In OAuth mode `/mcp` now serves the signed-in user's own accounts from the store instead of
+  the one-tool preview: the tool list is computed per request from the connected client's grant
+  (a read-only grant sees the six read tools, organize/delete/drafts add theirs), instructions
+  and folder map are per user, permissions are enforced on every call as account permission
+  ∩ grant scope ∩ token scope ∩ operator policy, and users are isolated from each other
+  (per-user cursor keys, queries and checks by user id). Credentials are decrypted only in
+  memory and never logged. `send_message` is not offered in remote mode until 3f.
+- Resource caps of the per-user pool: `UEM_MAX_CONNECTIONS`, `UEM_MAX_CONNECTIONS_PER_USER`,
+  `UEM_MAX_CONCURRENT_CALLS_PER_USER` (`BUSY` tool error), `UEM_CONNECTION_IDLE_TTL`,
+  `UEM_USER_IDLE_TTL`, `UEM_MAX_CACHED_USERS`; pooled connections are closed when idle or when
+  the account record changes.
+- `REAUTH_REQUIRED`: a mail password the server rejects is reported per account with a pointer to
+  the portal, the account record is marked (`auth_failed_at`, sealed `auth_failed_mark`) and not
+  tried again for `UEM_REAUTH_RETRY_AFTER` seconds unless the login changed.
+
 - OAuth 2.1 authorization server for remote mode (work package 3c; `docs/oauth.md`).
   `serve` without dev flags is now the OAuth server: `/.well-known/oauth-protected-resource`
   (RFC 9728) and `/.well-known/oauth-authorization-server` (RFC 8414), `/authorize`
@@ -60,8 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Operator environment for the store and OAuth: `STORE_BACKEND` (`memory`, `firestore`),
   `STORE_KEYS`/`STORE_KEYS_FILE`, `STORE_ACTIVE_KEY`, `PSEUDONYM_KEY`, `FIRESTORE_*`,
   token and session lifetimes, `UEM_DCR*`, `UEM_TRUSTED_PROXY_HOPS`, `UEM_DEFAULT_LANGUAGE`;
-  `/ready` checks the store. Until the per-user service (3e), `/mcp` in OAuth mode offers
-  only `account_info`.
+  `/ready` checks the store.
 - `universal-email-mcp serve` (remote mode, work package 3a - a dev/test preview): a
   Starlette app on uvicorn with `/mcp` (the SDK's Streamable HTTP in stateless mode:
   protocol 2026-07-28 and the legacy sessionless transport), `/health` (liveness) and

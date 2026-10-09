@@ -2,10 +2,10 @@
 
 Two modes. **OAuth mode** (the default, ``STORE_BACKEND`` set): the server is its own
 OAuth 2.1 authorization server (WP 3c) and ``/mcp`` needs an access token issued for it; until
-the per-user service (3e) it offers only ``account_info``. **Dev/test mode** (WP 3a): the
+XX: the
 accounts come from a local TOML config and ``/mcp`` is guarded by one static bearer token
 (``UEM_DEV_TOKEN``) - or, with the explicit ``--insecure-local`` flag, left open on
-127.0.0.1. Temporary: the per-user service (3e) replaces the TOML accounts.
+127.0.0.1. Temporary: a development aid next to the per-user service.
 
 ``/mcp`` is the SDK's Streamable HTTP endpoint in *stateless* mode: protocol
 2026-07-28 clients get the sessionless transport, older clients (<= 2025-11-25)
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
@@ -26,6 +26,7 @@ import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.routing import BaseRoute
 
 from universal_email_mcp.config import Config, Downloads
 from universal_email_mcp.jsonlog import setup_json_logging
@@ -57,8 +58,13 @@ def transport_security(op: OperatorConfig) -> TransportSecuritySettings:
     )
 
 
-def mcp_group(server: MCPServer, op: OperatorConfig) -> RouteGroup:
-    """``/mcp`` from the SDK, stateless, and the lifespan its session manager needs."""
+def mcp_group(
+    server: MCPServer,
+    op: OperatorConfig,
+    wrap: Callable[[Sequence[BaseRoute]], list[BaseRoute]] | None = None,
+) -> RouteGroup:
+    """``/mcp`` from the SDK, stateless, and the lifespan its session manager needs.
+    ``wrap`` may put middleware around the SDK's routes (OAuth mode: the per-user context)."""
     sdk_app = server.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
@@ -73,7 +79,8 @@ def mcp_group(server: MCPServer, op: OperatorConfig) -> RouteGroup:
         async with sdk_app.router.lifespan_context(sdk_app):
             yield
 
-    return RouteGroup(list(sdk_app.routes), lifespan)
+    routes = list(sdk_app.routes)
+    return RouteGroup(wrap(routes) if wrap else routes, lifespan)
 
 
 def http_settings(op: OperatorConfig) -> HttpSettings:

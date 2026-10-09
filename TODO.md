@@ -162,9 +162,43 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] POP3 servers that lock the mailbox per session: a reconnect while another client
       holds the lock fails with a clear error but is not retried.
 
+### WP 3e (per-user service)
+- [ ] Every `/mcp` POST reads the user's accounts and identities (two store queries) to compare
+      record versions with the cached service. Fine for the memory backend; with Firestore add
+      a short (seconds) per-grant cache or a version counter on the user record. Revocation of
+      the token itself is still checked on every request.
+- [ ] Connection pool is per grant: two clients of one user hold separate connections to the same
+      mailbox (bounded by `UEM_MAX_CONNECTIONS_PER_USER`). Sharing routers per (user, account
+      version) would halve that but needs per-grant permission checks outside the router.
+- [ ] Caps are per process, in memory; several instances multiply them. Tool-call rate limits
+      per user/token (M4) are not there; `BUSY` is returned, never queued.
+- [ ] A saved account's host is not re-checked against `MAIL_SERVERS` at connect time (the
+      portal checks on entry; the SSRF guards of `mail/net.py` always apply). Removing a server
+      from `MAIL_SERVERS` does not disable existing accounts.
+- [ ] The folder map is read on `initialize`/`server/discover` only (clients pinned to 2026-07-28
+      that skip discovery never see instructions) and re-read after 10 minutes; a first
+      `initialize` after idle eviction waits up to 3 s for slow mail servers.
+- [ ] `REAUTH_REQUIRED` marks the account for any `AuthFailed` (also "LOGINDISABLED" and servers
+      that answer a throttled login with NO); the portal (3d) should show the flag
+      (`MailAccount.needs_reauth`) and clear it when the password is re-entered (it clears
+      itself because the flag is tied to the failed login).
+- [ ] Remote `save_draft` needs an identity linked to a drafts-capable account; a grant without
+      any such identity cannot draft (the error says so). 3d should create the identity/account
+      pair in one step (design section 5).
+- [ ] Activity feed / audit events for tool calls (3h) are not written by the per-user service yet.
+- [ ] Review leftovers of 3e: (a) identities not granted but linked to a drafts-capable account
+      are usable for drafts (From can be a non-granted identity; never sent) - decide whether drafts
+      should need the identity grant; (b) `records` keeps decrypted passwords for the context
+      lifetime (slim projection possible); (c) concurrent `acquire` can install an older
+      fingerprint over a newer one (one extra rebuild); (d) a failure mark/clear bumps the account
+      version and rebuilds all of the user's contexts (leave failure fields out of the
+      fingerprint); (e) `ensure_instructions` is not single-flight and runs outside `call_slot`;
+      (f) no instance-wide cap on parallel calls/worker threads; (g) cursor key falls back to a
+      random per-process key without `PSEUDONYM_KEY` (cursors break across instances); (h) the SDK
+      seams (`__class__` swap of the lowlevel server, `list_tools`/`call_tool` overrides) need a
+      canary on SDK upgrades; never set `cache_hints` with public scope (per-user responses).
+
 ### Folder map
-- [ ] Remote mode: the instructions are per user (WP 3e passes the signed-in user's
-      maps to `build_server(folder_maps=…)`); stale-instruction refresh is `account_info`.
 - [ ] `folder_list.build` recurses per level (fine for real mailboxes; a folder tree
       thousands of levels deep would raise `RecursionError`, which the startup path
       survives as "not read").
@@ -249,13 +283,13 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       `RateLimiter.retry_after`, `Row.checked`; huge `UEM_*_TTL` values overflow at startup;
       `--config` is silently ignored in OAuth mode.
 
-- [ ] Dev mode still serves the TOML accounts; the per-user service (3e) replaces them (in
-      OAuth mode `/mcp` offers only `account_info` until then).
+- [ ] Dev mode still serves the TOML accounts (a development aid next to the per-user
+      service; drop it once the portal and the sandbox can stand in).
+      `OperatorConfig.mail_servers` is parsed but unused until 3d.
 - [ ] Consider reporting not-ready after SIGTERM.
-- [ ] Wire the operator limits (`UEM_MAX_*`) and policy (`UEM_*`) per user in 3e; today they
-      overlay the TOML config of the dev mode only.
 - [ ] Audit events (`audit.py`) still go to stderr; 3h moves them to stdout JSON with pseudonyms.
-- [ ] No per-IP/per-token rate limiting and no concurrency cap on `/mcp` (M4 rate limits).
+- [ ] No per-IP/per-token rate limiting on `/mcp` (M4 rate limits); 3e caps parallel calls and
+      connections per user, not calls per minute.
 - [ ] uvicorn re-raises SIGTERM after the graceful stop, so the process exits with status 143
       instead of 0 (harmless on Cloud Run). No CI image build yet (3i `cloudbuild.yaml`).
 - [ ] `Host` matching is exact on names (no wildcards such as `*.run.app`); list each name.
