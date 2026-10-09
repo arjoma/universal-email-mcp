@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{# The answer to Allow/Deny. `target` is the client's registered redirect URI plus our own
+   parameters (code, state, iss, error); the attribute escaping is autoescape's. #}
+{% block head %}<meta http-equiv="refresh" content="0; url={{ target }}">{% endblock %}
+{% block title %}{{ _("Continue to the application") }}{% endblock %}
+{% block heading %}{% if denied %}{{ _("Access denied") }}{% else %}{{ _("Access allowed") }}{% endif %}{% endblock %}
+{% block body %}
+{% if denied %}
+<p class="notice" role="status">{{ _("You denied access. You are being sent back to the application.") }}</p>
+{% else %}
+<p class="notice" role="status">{{ _("Your decision has been saved. You are being sent back to the application.") }}</p>
+{% endif %}
+<p><a class="button" id="continue" href="{{ target }}">{{ _("Continue to the application") }}</a></p>
+<p class="hint">{{ _("After you decide, you are sent to") }} <code>{{ redirect_host }}</code></p>
+{% endblock %}

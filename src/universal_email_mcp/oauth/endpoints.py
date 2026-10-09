@@ -45,7 +45,6 @@ from universal_email_mcp.oauth.config import (
 from universal_email_mcp.oauth.ratelimit import RateLimiter, ip_group
 from universal_email_mcp.oauth.redirects import (
     RedirectError,
-    csp_form_target,
     display_host,
     redirect_matches,
     validate_redirect_uri,
@@ -260,7 +259,7 @@ class OAuthEndpoints:
             return self._back_to_authorize(request, parsed)
         if action == "deny":
             await self.svc.audit("auth.consent", outcome="denied", client=parsed.client.id)
-            return self._redirect_back(parsed, error="access_denied")
+            return self._continue_page(request, parsed, error="access_denied")
         if action == "approve":
             return await self._approve(request, form, parsed, session)
         return _error_page(self.svc, request, "invalid")
@@ -415,7 +414,6 @@ class OAuthEndpoints:
             account_scopes=wanted,
             identities=view_idents,
             send_asked=SCOPE_SEND in req.scopes,
-            form_action_extra=csp_form_target(req.redirect_uri),
             **self._page_context(req),
         )
 
@@ -531,7 +529,7 @@ class OAuthEndpoints:
             scope=scope,
             accounts=len(account_scopes),
         )
-        return self._redirect_back(req, code=code)
+        return self._continue_page(request, req, code=code)
 
     def _reauth_page(
         self,
@@ -555,21 +553,30 @@ class OAuthEndpoints:
             error=error,
             address=user.primary_address,
             carried=carried,
-            form_action_extra=csp_form_target(req.redirect_uri),
             **self._page_context(req),
         )
 
-    def _redirect_back(self, req: AuthzRequest, **params: str) -> Response:
-        return self._redirect_to(req.redirect_uri, req.state, **params)
-
-    def _redirect_to(self, redirect_uri: str, state: str, **params: str) -> Response:
+    def _continue_page(self, request: Request, req: AuthzRequest, **params: str) -> Response:
+        """The answer to Allow/Deny: a 200 page that continues to the client by meta refresh
+        (plus a visible link), not a 303. Chromium applies the page's CSP ``form-action``
+        to every redirect hop after a form post, so a callback that redirects on would be
+        blocked, and opening the form-action up to the client's host would loosen the
+        policy of the consent page. A fresh navigation from a 200 page is not form-action
+        governed. The target is the validated redirect URI of the request, only extended by
+        our own parameters; the template escapes it for the attribute."""
         out = dict(params)
-        if state:
-            out["state"] = state
+        if req.state:
+            out["state"] = req.state
         out["iss"] = self.svc.cfg.issuer  # RFC 9207
-        response = RedirectResponse(add_query(redirect_uri, out), status_code=303)
-        security_headers(response)
-        return response
+        return self.svc.portal.page(
+            request,
+            "continue.html",
+            csrf=False,
+            target=add_query(req.redirect_uri, out),
+            redirect_host=display_host(req.redirect_uri),
+            denied=params.get("error") == "access_denied",
+            client=req.client,
+        )
 
     # -- /token -----------------------------------------------------------------------
 

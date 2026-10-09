@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -18,6 +20,7 @@ from tests.oauth_util import (
     bearer,
     challenge_pair,
     hidden_fields,
+    location_of,
     make_app,
     new_client,
     query_of,
@@ -153,7 +156,7 @@ async def test_send_is_granted_over_identities(client, store):
         "grant": [f"{account_id_of(page.text)}:mail.read"],
     }
     form["identity"] = [ident]
-    code = query_of(client.post("/authorize", data=form).headers["location"])["code"]
+    code = query_of(location_of(client.post("/authorize", data=form)))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read mail.send"
 
 
@@ -163,12 +166,55 @@ def test_nothing_ticked_asks_again(client):
     assert r.status_code == 400 and "Select at least one permission" in r.text
 
 
-def test_deny_redirects_with_access_denied(client):
+def test_deny_continues_to_the_client_with_access_denied(client):
     a = Authz(client, register(client))
     r = a.decide(action="deny")
-    q = query_of(r.headers["location"])
-    assert r.status_code == 303 and r.headers["location"].startswith(a.redirect_uri)
-    assert q == {"error": "access_denied", "state": a.state, "iss": ISSUER}
+    assert r.status_code == 200 and "location" not in r.headers
+    target = location_of(r)
+    assert target.startswith(a.redirect_uri)
+    assert query_of(target) == {"error": "access_denied", "state": a.state, "iss": ISSUER}
+
+
+def test_allow_answers_with_a_200_page_that_continues_by_meta_refresh(client):
+    """A 303 to a callback that redirects on is blocked by CSP form-action in Chromium; a
+    200 page that continues by meta refresh is a fresh navigation and is not."""
+    a = Authz(client, register(client))
+    r = a.decide()
+    assert r.status_code == 200 and "location" not in r.headers
+    target = location_of(r)
+    assert target.startswith(a.redirect_uri + "?")
+    q = query_of(target)
+    assert q["state"] == a.state and q["iss"] == ISSUER and q["code"]
+    refresh_tag = re.search(r'<meta http-equiv="refresh" content="0; url=([^"]*)">', r.text)
+    assert refresh_tag and html.unescape(refresh_tag.group(1)) == target
+    assert a.exchange(q["code"]).status_code == 200
+    # the strict policy stays: the client's host is NOT added to form-action
+    csp = r.headers["content-security-policy"]
+    assert "form-action 'self';" in csp and "127.0.0.1" not in csp
+    assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+    assert "<script" not in r.text.lower()
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_continue_page_escapes_the_target(client):
+    # a registered redirect URI may carry characters that matter inside an attribute
+    uri = "https://app.example.com/cb?a=1&b=%22x%22"
+    cid = register(client, uri)
+    a = Authz(client, cid, redirect_uri=uri, state='"><script>alert(1)</script>')
+    r = a.decide()
+    assert r.status_code == 200
+    assert "<script>alert(1)" not in r.text
+    for m in re.finditer(r'(?:url=|href=")([^"]*)"', r.text):
+        assert "<" not in m.group(1) and "&b=" not in m.group(1).replace("&amp;b=", "")
+    target = location_of(r)
+    assert target.startswith("https://app.example.com/cb?a=1&b=%22x%22&")
+    assert query_of(target)["state"] == a.state
+
+
+def test_continue_page_is_translated(client):
+    client.cookies.set("uem_lang", "de")
+    a = Authz(client, register(client))
+    assert "Weiter zur Anwendung" in a.decide().text
 
 
 def test_no_scope_requested_offers_everything(client):
@@ -246,7 +292,7 @@ async def test_send_only_grant_still_includes_reading(client, store):
     ident = await allow_sending(store)
     page = a.consent_page()
     form = {**hidden_fields(page.text), "action": "approve", "identity": [ident]}
-    code = query_of(client.post("/authorize", data=form).headers["location"])["code"]
+    code = query_of(location_of(client.post("/authorize", data=form)))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read mail.send"
 
 
@@ -391,20 +437,26 @@ async def test_refresh_with_a_narrower_scope_issues_a_narrower_token(client, sto
     from universal_email_mcp.oauth.bearer import StoreTokenVerifier
 
     verifier = StoreTokenVerifier(store, client.app.state.oauth_service.cfg)
+
+    async def scopes_of(token: str) -> tuple[str, ...]:
+        principal = await verifier(token)
+        assert principal is not None
+        return principal.scopes
+
     a = Authz(client, register(client), scope="mail.read mail.organize")
     first = a.exchange(a.code(grants=["primary:mail.organize"])).json()
     assert first["scope"] == "mail.read mail.organize"
-    assert set((await verifier(first["access_token"])).scopes) == {"mail.read", "mail.organize"}
+    assert set((await scopes_of(first["access_token"]))) == {"mail.read", "mail.organize"}
 
     narrow = refresh(client, a.client_id, first["refresh_token"], scope="mail.read")
     assert narrow.status_code == 200, narrow.text
     assert narrow.json()["scope"] == "mail.read"
-    assert (await verifier(narrow.json()["access_token"])).scopes == ("mail.read",)
+    assert await scopes_of(narrow.json()["access_token"]) == ("mail.read",)
 
     # no scope parameter: the scope of the presented token, not the grant's full scope
     again = refresh(client, a.client_id, narrow.json()["refresh_token"])
     assert again.json()["scope"] == "mail.read"
-    assert (await verifier(again.json()["access_token"])).scopes == ("mail.read",)
+    assert await scopes_of(again.json()["access_token"]) == ("mail.read",)
     # widening back is refused
     wide = refresh(
         client, a.client_id, again.json()["refresh_token"], scope="mail.read mail.organize"
@@ -650,18 +702,6 @@ def test_pages_carry_a_strict_csp_and_no_inline_script(client):
     assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
 
 
-def test_consent_page_allows_the_redirect_target_in_form_action(client):
-    a = Authz(client, register(client))
-    csp = a.consent_page().headers["content-security-policy"]
-    assert "form-action 'self' http://127.0.0.1:*" in csp
-    cid = register(client, "https://app.example.com/cb")
-    b = Authz(client, cid, redirect_uri="https://app.example.com/cb")
-    assert (
-        "form-action 'self' https://app.example.com"
-        in b.consent_page().headers["content-security-policy"]
-    )
-
-
 def test_hostile_client_name_is_escaped_and_cleaned(client):
     name = '<script>alert(1)</script>"><img src=x onerror=alert(1)>‮ evil'
     cid = register(client, name=name)
@@ -778,7 +818,7 @@ async def test_consent_without_accounts_grants_nothing(client, store):
     assert 'name="grant"' not in page
     r = a.decide(grants=[])  # nothing to tick: a grant cannot be created
     assert r.status_code == 400 and "Select at least one permission" in r.text
-    q = query_of(a.decide(action="deny").headers["location"])
+    q = query_of(location_of(a.decide(action="deny")))
     assert q["error"] == "access_denied"
 
 

@@ -313,6 +313,11 @@ CONTEXTS: dict[str, dict[str, Any]] = {
         "send_asked": True,
         "identities": [{"id": "i1", "label": HOSTILE, "checked": True}],
     },  # fmt: skip
+    "continue.html": {
+        "target": "https://app.example/cb?code=x&state=y",
+        "redirect_host": HOSTILE,
+        "denied": False,
+    },
     "consent_reauth.html": {"error": "bad_credentials", "carried": [("grant", HOSTILE)]},
     "error.html": {"reason": "notfound"},
     "headers.html": {

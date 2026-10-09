@@ -485,6 +485,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a message before.
 - The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
   both transfer decoders run in a worker thread instead of on the event loop.
+- OAuth consent: Allow and Deny are answered with a 200 page that continues to the client by meta refresh and a visible link (translated, also German) instead of a 303; Chromium blocked a 303 whose callback redirects on because of the CSP `form-action`. The consent pages no longer add the client's host to `form-action`.
+
 - OAuth: a refresh with a narrower `scope` now issues tokens with at most that scope (they used to carry the grant's full scope); the narrowing sticks for the refresh-token chain and `/mcp` honours the token scope.
 
 - A timed-out account no longer blocks the server until the read time-out, and

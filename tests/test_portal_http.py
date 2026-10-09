@@ -287,7 +287,14 @@ def test_portal_actions_are_audited_without_personal_data(app, caplog):
 
 
 async def test_revocation_is_audited(app, caplog):
-    from tests.oauth_util import Authz, account_id_of, hidden_fields, query_of, register
+    from tests.oauth_util import (
+        Authz,
+        account_id_of,
+        hidden_fields,
+        location_of,
+        query_of,
+        register,
+    )
 
     caplog.set_level(logging.INFO, logger="universal_email_mcp.audit")
     with Browser(app) as b:
@@ -296,7 +303,7 @@ async def test_revocation_is_audited(app, caplog):
         page = a.consent_page()
         form = {**hidden_fields(page.text), "action": "approve",
                 "grant": [f"{account_id_of(page.text)}:mail.read"]}  # fmt: skip
-        query_of(b.client.post("/authorize", data=form).headers["location"])
+        query_of(location_of(b.client.post("/authorize", data=form)))
         gid = b.page("/portal/clients").split("/portal/clients/")[1].split('"')[0].split("/")[0]
         b.post(f"/portal/clients/{gid}/revoke")
     assert "portal.grant_revoke" in [e["event"] for e in audit_events(caplog)]
