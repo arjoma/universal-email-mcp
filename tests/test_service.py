@@ -19,6 +19,7 @@ from universal_email_mcp.errors import (
     StaleCursor,
 )
 from universal_email_mcp.mail.imap import SearchCriteria
+from universal_email_mcp.models import MessageRef
 from universal_email_mcp.server.app import build_server
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, SourcePos, query_hash
 from universal_email_mcp.service.index import HeaderIndex
@@ -397,7 +398,7 @@ async def test_thread_flood_of_one_message_id_is_bounded():
     assert len(res.hits) == MAX_SAME_MESSAGE_ID
     assert res.hits[0].summary.subject == "real"
     assert all(h.shared_message_id for h in res.hits)
-    assert any("left out" in n for n in res.notes)
+    assert any("claim the same Message-ID" in n and "not shown" in n for n in res.notes)
 
 
 async def test_conversation_table_marks_shared_message_ids():
@@ -513,6 +514,102 @@ async def test_thread_cap_drops_later_claimants_first_and_keeps_marks():
     # a forgery that survives the cut stays marked
     res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=3)
     assert [h.shared_message_id for h in res.hits] == [True, False, True]
+
+
+def _flip_case(genuine_elsewhere: bool) -> tuple[FakeSession, FakeSession]:
+    """root R -> Q -> P; the forgery F claims P, replies to R (so it is found in
+    the first round, before Q's parent P) and references an unrelated EVIL."""
+    a = FakeSession("A", {"INBOX": [], "Sent": [], "Other": []})
+    b = FakeSession("B", {"INBOX": [], "Sent": []})
+    home = b if genuine_elsewhere else a
+    home.folders["Sent"][1] = replace(
+        _msg("Sent", 1, hours=1, msgid="<p@x>", subject="GENUINE"),
+        ref=MessageRef(home.account_name, "Sent", 1, 1),
+    )
+    a.folders["INBOX"][1] = _msg(
+        "INBOX", 1, hours=2, msgid="<q@x>", in_reply_to="<p@x>", subject="Q"
+    )
+    a.folders["INBOX"][2] = _msg(
+        "INBOX", 2, hours=3, msgid="<r@x>", in_reply_to="<q@x>", subject="root"
+    )
+    a.folders["INBOX"][3] = _msg(
+        "INBOX",
+        3,
+        hours=4,
+        msgid="<p@x>",
+        in_reply_to="<r@x>",
+        references=("<evil@x>",),
+        subject="FORGED",
+    )
+    a.folders["Other"][1] = _msg("Other", 1, hours=5, msgid="<evil@x>", subject="EVIL")
+    return a, b
+
+
+@pytest.mark.parametrize("genuine_elsewhere", [False, True])
+async def test_thread_forgery_that_owned_an_id_for_a_round_keeps_nothing(
+    genuine_elsewhere: bool,
+):
+    a, b = _flip_case(genuine_elsewhere)
+    svc, _ = _service(A=a, B=b)
+    res = await svc.get_thread(a.folders["INBOX"][2].ref.encode(), limit=None)
+    assert _subjects(res) == ["GENUINE", "Q", "root", "FORGED"]
+    assert any("reached only through a later claimant" in n for n in res.notes)
+
+
+async def test_thread_fair_share_reaches_genuine_behind_flooded_folders():
+    folders = ("INBOX", "Lists/a", "Lists/b")
+    a = FakeSession("A", {"INBOX": [], "Sent": [], "Lists/a": [], "Lists/b": [], "Projects": []})
+    a.folders["Projects"][1] = _msg("Projects", 1, hours=1, msgid="<p@x>", subject="GENUINE")
+    a.folders["INBOX"][1] = _msg(
+        "INBOX", 1, hours=2, msgid="<r@x>", in_reply_to="<p@x>", subject="root"
+    )
+    uid = 2
+    for f in folders:
+        for _ in range(120):
+            a.folders[f][uid] = _msg(
+                f, uid, hours=10 + uid, msgid=f"<f{uid}@evil>", in_reply_to="<r@x>", subject="spam"
+            )
+            uid += 1
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    # fetched despite three flooded folders searched before it, and shown despite
+    # the newer fake replies filling the limit
+    assert _subjects(res)[:2] == ["GENUINE", "root"] and len(res.hits) == 50
+    # same with forged copies of the parent instead of distinct fake replies
+    for f in folders:
+        for u, m in list(a.folders[f].items()):
+            if m.subject == "spam":
+                a.folders[f][u] = replace(m, message_id="<p@x>")
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    assert _subjects(res)[:2] == ["GENUINE", "root"] and res.hits[0].shared_message_id
+
+
+async def test_thread_notes_stay_short_with_many_shared_ids():
+    a = FakeSession("A", {"INBOX": []})
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<r@x>", subject="root")
+    uid = 2
+    for k in range(50):
+        for _ in range(2):
+            a.folders["INBOX"][uid] = _msg(
+                "INBOX", uid, hours=10 + uid, msgid=f"<d{k}@evil>", in_reply_to="<r@x>"
+            )
+            uid += 1
+    svc, _ = _service(A=a)
+    res = await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    assert len(res.notes) <= 5 and sum(map(len, res.notes)) < 1200
+    assert any(n.startswith("47 more shared Message-IDs") for n in res.notes)
+
+
+async def test_thread_rounds_search_only_new_ids():
+    a = FakeSession("A", {"INBOX": []})
+    refs = tuple(f"<r{i:02d}@x>" for i in range(40))
+    a.folders["INBOX"][1] = _msg("INBOX", 1, hours=1, msgid="<me@x>", references=refs)
+    svc, _ = _service(A=a)
+    await svc.get_thread(a.folders["INBOX"][1].ref.encode(), limit=None)
+    # 41 ids: 30 in the first round, the other 11 in the second, then stop
+    assert [len(q) for q in a.related_queries] == [30, 11]
+    assert not set(a.related_queries[0]) & set(a.related_queries[1])
 
 
 async def test_thread_search_prioritises_own_ids_and_latest_references():

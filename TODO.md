@@ -73,10 +73,18 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       boundary → PDF `3` vs Dovecot `2.1`). Derive part sections from IMAP
       BODYSTRUCTURE, or verify `BODY[n.MIME]` type/filename before returning bytes.
 - [ ] Threads: arrival order (INTERNALDATE) decides which claimant of a shared
-      Message-ID is followed and kept first; a forgery that arrived before the
-      genuine mail (or was APPENDed with an old date) wins. A flood of fake
-      replies with distinct ids still fills the shown `limit` (newest kept; the
-      note says how many were cut).
+      Message-ID owns it (is followed, kept first); a forgery that arrived before
+      the genuine mail (or was APPENDed with an old date) wins, and any fetched
+      message competes, also one reached only through another claimant's links.
+- [ ] Threads: a flood of fake replies with distinct ids still fills the newest
+      part of the shown `limit` (the message and what it replies to stay; the
+      note counts the cut), and floods in all searched folders (each gets at least
+      `MIN_THREAD_SHARE` headers per round) can use up the header budget before
+      later rounds reach older ancestors.
+- [ ] Report parts (`message/delivery-status` …) are read from the original bytes
+      only when the MIME structure is well-formed; otherwise from Python's
+      re-serialised blocks (QP soft breaks across the inserted blank line can be
+      lost there).
 - [ ] Look-alike senders are hard to spot: tables show only the display name, and a
       fuzzy search for a real contact ranks a look-alike domain or a homoglyph
       name (Cyrillic letters) as high as the original. Flag mixed scripts and

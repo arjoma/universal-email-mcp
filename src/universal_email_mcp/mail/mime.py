@@ -579,53 +579,106 @@ def _body_parts(
         out.extend(next((v for v in versions if any(k == "html" for *_x, k in v)), versions[0]))
 
 
-def _report_text(part: Message) -> str:
-    """A report part (header-style blocks) as text; names and values sanitised.
-    Python parses the blocks before any Content-Transfer-Encoding is undone, so
-    base64 / quoted-printable reports are decoded and their blocks parsed here."""
-    payload = part.get_payload()
+def _after_headers(data: bytes) -> bytes:
+    if data.startswith((b"\r\n", b"\n")):
+        return data[data.index(b"\n") + 1 :]
+    m = re.search(rb"\r?\n\r?\n", data)
+    return data[m.end() :] if m else b""
+
+
+def _split_multipart(body: bytes, boundary: bytes) -> list[bytes]:
+    """The body parts of a multipart body (without the line break that belongs to
+    the next delimiter); stops at the close delimiter."""
+    delims = list(re.finditer(rb"^--" + re.escape(boundary) + rb"(--)?[ \t]*\r?$", body, re.M))
+    chunks: list[bytes] = []
+    for k, m in enumerate(delims):
+        if m.group(1):
+            break
+        start = m.end() + (1 if body[m.end() : m.end() + 1] == b"\n" else 0)
+        end = delims[k + 1].start() if k + 1 < len(delims) else len(body)
+        chunk = body[start:end]
+        chunks.append(chunk[:-2] if chunk.endswith(b"\r\n") else chunk.removesuffix(b"\n"))
+    return chunks
+
+
+def _raw_part_body(raw: bytes, msg: Message, section: str) -> bytes | None:
+    """The undecoded body bytes of the leaf at IMAP ``section``, cut from the
+    original message (Python re-parses some ``message/*`` bodies before their
+    transfer encoding is undone). ``None`` when the part cannot be located with
+    certainty (malformed MIME): the caller falls back to the parsed part."""
+    data, node = raw, msg
+    if _is_container(msg):
+        for index in section.split("."):
+            boundary = node.get_boundary()
+            children = node.get_payload()
+            if not boundary or not isinstance(children, list) or not index.isdigit():
+                return None
+            chunks = _split_multipart(
+                _after_headers(data), boundary.encode("utf-8", "surrogateescape")
+            )
+            n = int(index)
+            if not 1 <= n <= min(len(chunks), len(children)):
+                return None
+            data, node = chunks[n - 1], children[n - 1]
+            if not isinstance(node, Message):
+                return None
+    head = BytesHeaderParser(policy=policy.compat32).parsebytes(data)
+    if head.get_content_type() != node.get_content_type():
+        return None
+    return _after_headers(data)
+
+
+def _report_text(part: Message, raw_body: bytes | None) -> str:
+    """A report part (header-style blocks) as text: transfer encoding undone,
+    charset decoded (UTF-8 for the ``global`` types), RFC 2047 words decoded,
+    every name and value sanitised. Uses the original body bytes when known."""
+    body = raw_body if raw_body is not None else _serialized_body(part)
     cte = str(part.get("Content-Transfer-Encoding", "")).strip().lower()
-    if cte in ("base64", "quoted-printable"):
-        payload = _decoded_blocks(part, cte)
-    elif not isinstance(payload, list):
-        return _tidy(part_text(part))
-    blocks: list[str] = []
-    for block in payload:
-        if not isinstance(block, Message):
-            continue
-        lines = [
-            f"{sanitize_line(_fix_surrogates(str(k)))}: {decode_header(str(v))}"
-            for k, v in block.raw_items()
-        ]
-        rest = block.get_payload()
-        if isinstance(rest, str) and rest.strip():
-            lines.append(_tidy(_fix_surrogates(rest)))
-        if lines:
-            blocks.append("\n".join(lines))
-    return _tidy("\n\n".join(blocks))
-
-
-def _decoded_blocks(part: Message, cte: str) -> list[Message]:
-    try:
-        data = part.as_bytes(policy=policy.compat32)
-    except Exception:  # noqa: BLE001 - unserialisable structure: show nothing
-        return []
-    data = data.replace(b"\r\n", b"\n")
-    body = data.split(b"\n\n", 1)[1] if b"\n\n" in data else b""
     if cte == "base64":
         chars = re.sub(rb"[^A-Za-z0-9+/]", b"", body)
         if len(chars) % 4 == 1:
             chars = chars[:-1]  # a dangling character cannot be decoded
         body = binascii.a2b_base64(chars + b"=" * (-len(chars) % 4))
-    else:
+    elif cte == "quoted-printable":
         body = quopri.decodestring(body)
-    parser = BytesHeaderParser(policy=policy.compat32)
-    chunks = re.split(rb"\r?\n[ \t]*\r?\n", body.strip())
-    return [parser.parsebytes(c) for c in chunks[:1000] if c.strip()]
+    try:
+        charset = part.get_content_charset()
+    except Exception:  # noqa: BLE001 - malformed parameters
+        charset = None
+    # Line by line: one stray 8-bit byte must not turn the rest into mojibake.
+    lines_raw = body.replace(b"\r\n", b"\n").split(b"\n")
+    text = _unfold("\n".join(_decode_bytes(ln, charset or "utf-8") for ln in lines_raw))
+    blocks: list[str] = []
+    for chunk in re.split(r"\n[ \t]*\n", text.strip()):
+        lines: list[str] = []
+        for line in chunk.split("\n"):
+            m = _REPORT_FIELD.match(line)
+            if m:
+                lines.append(f"{sanitize_line(m[1])}: {decode_header(m[2])}")
+            elif line.strip():
+                lines.append(sanitize_line(line))
+        if lines:
+            blocks.append("\n".join(lines))
+    return _tidy("\n\n".join(blocks))
 
 
+_REPORT_FIELD = re.compile(r"([^:\s]{1,100}):[ \t]*(.*)")
+
+
+def _serialized_body(part: Message) -> bytes:
+    try:
+        data = part.as_bytes(policy=policy.compat32)
+    except Exception:  # noqa: BLE001 - unserialisable structure: show nothing
+        return b""
+    return _after_headers(data)
+
+
+# Box drawing (U+2500–U+257F), dashes, bars and lines, then "part" — any
+# horizontal whitespace (also NBSP) before, between and after.
 _FAKE_SEPARATOR = re.compile(
-    r"^([ \t]*)(?=[─━—–=_-]{3,}[ \t]*part\b)", re.IGNORECASE | re.MULTILINE
+    r"^([^\S\n]*)(?=[\u2500-\u257f\u2010-\u2015\u2212\u23af\u2e3a\u2e3b\ufe58\ufe63"
+    r"\uff0d\u2014\u30fc=_~*#+-]{3,}[^\S\n]*part\b)",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -693,7 +746,7 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
             text = html_to_text(html, max_input_chars=html_budget)
             html_budget -= len(html)
         elif kind == "report":
-            text = _report_text(part)
+            text = _report_text(part, _raw_part_body(raw, msg, section))
         else:
             text = _tidy(_cached_text(part, cache))
         shown.add(id(part))
