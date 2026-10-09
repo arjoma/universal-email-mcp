@@ -385,6 +385,33 @@ def test_refresh_cannot_widen_the_scope(client):
 
 
 def test_access_token_cannot_be_used_as_refresh_token(client):
+async def test_refresh_with_a_narrower_scope_issues_a_narrower_token(client, store):
+    """RFC 6749 section 6: the new token has at most the requested scope; the narrowing
+    sticks for the refresh-token chain (a later refresh does not widen it back)."""
+    from universal_email_mcp.oauth.bearer import StoreTokenVerifier
+
+    verifier = StoreTokenVerifier(store, client.app.state.oauth_service.cfg)
+    a = Authz(client, register(client), scope="mail.read mail.organize")
+    first = a.exchange(a.code(grants=["primary:mail.organize"])).json()
+    assert first["scope"] == "mail.read mail.organize"
+    assert set((await verifier(first["access_token"])).scopes) == {"mail.read", "mail.organize"}
+
+    narrow = refresh(client, a.client_id, first["refresh_token"], scope="mail.read")
+    assert narrow.status_code == 200, narrow.text
+    assert narrow.json()["scope"] == "mail.read"
+    assert (await verifier(narrow.json()["access_token"])).scopes == ("mail.read",)
+
+    # no scope parameter: the scope of the presented token, not the grant's full scope
+    again = refresh(client, a.client_id, narrow.json()["refresh_token"])
+    assert again.json()["scope"] == "mail.read"
+    assert (await verifier(again.json()["access_token"])).scopes == ("mail.read",)
+    # widening back is refused
+    wide = refresh(
+        client, a.client_id, again.json()["refresh_token"], scope="mail.read mail.organize"
+    )
+    assert wide.json()["error"] == "invalid_scope"
+
+
     a, first = connect(client)
     r = refresh(client, a.client_id, first["access_token"])
     assert r.json()["error"] == "invalid_grant"

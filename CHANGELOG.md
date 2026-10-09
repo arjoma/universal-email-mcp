@@ -483,6 +483,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a message before.
 - The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
   both transfer decoders run in a worker thread instead of on the event loop.
+- OAuth: a refresh with a narrower `scope` now issues tokens with at most that scope (they used to carry the grant's full scope); the narrowing sticks for the refresh-token chain and `/mcp` honours the token scope.
+
 - A timed-out account no longer blocks the server until the read time-out, and
   retries against a stalling server share one connection attempt.
 - Paging no longer skips messages deleted between pages; cursors stop retrying

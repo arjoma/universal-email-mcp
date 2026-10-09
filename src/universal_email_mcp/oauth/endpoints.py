@@ -586,7 +586,7 @@ class OAuthEndpoints:
             "token_type": "Bearer",
             "expires_in": max(1, int((issued.access_expires_at - now).total_seconds())),
             "refresh_token": issued.refresh_token,
-            "scope": issued.grant.scope,
+            "scope": issued.scope,
         }
         return JSONResponse(body, headers={"cache-control": "no-store", "pragma": "no-cache"})
 
@@ -647,7 +647,9 @@ class OAuthEndpoints:
             if old is not None and not set(asked) <= set(old.scope.split()):
                 return oauth_error("invalid_scope", "scope exceeds the original grant")
         try:
-            issued = await svc.store.rotate_refresh_token(raw, client_id=client_id)
+            issued = await svc.store.rotate_refresh_token(
+                raw, client_id=client_id, scope=asked or None
+            )
         except InvalidToken as e:
             await svc.audit(
                 "auth.token",
