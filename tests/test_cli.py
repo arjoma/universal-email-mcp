@@ -94,3 +94,12 @@ def test_probe_public_only_blocks_loopback(
     args = ["probe", "--host", "127.0.0.1", "--user", "u", "--public-only", "--port", "1"]
     assert main(args) == 1
     assert "ADDRESS_NOT_ALLOWED" in capsys.readouterr().err
+
+
+def test_probe_report_neutralises_terminal_escapes_in_server_text():
+    from universal_email_mcp.probe import printable
+
+    assert printable("INBOX") == "INBOX" and printable("Rechnungen/Müller") == "Rechnungen/Müller"
+    out = printable("\x1b]0;pwned\x07evil‮gnp.exe\nnext​")
+    assert "\x1b" not in out and "\x07" not in out and "\n" not in out
+    assert "\\u001b" in out and "\\u202e" in out and "\\u200b" in out

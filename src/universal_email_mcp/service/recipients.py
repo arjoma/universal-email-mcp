@@ -101,6 +101,37 @@ def mixed_scripts(domain_unicode: str) -> list[str]:
     return []
 
 
+_LOOK_SCRIPTS = frozenset({"CYRILLIC", "GREEK"})
+
+
+def _word_risk(word: str) -> str | None:
+    """A word that mixes scripts (``Hubеr`` with a Cyrillic ``е``) or is written
+    entirely in letters that pass for Latin ones (Cyrillic ``раураl``)."""
+    letters = [c for c in word if c.isalpha()]
+    scripts = {s for c in letters if (s := _script(c))}
+    if len(scripts) > 1 and scripts & _LOOK_SCRIPTS:
+        return "mixed scripts"  # (Han + Kana in one word is normal Japanese)
+    non_latin = [c for c in letters if _script(c) in _LOOK_SCRIPTS]
+    if non_latin and all(c in _CONFUSABLES or c.isascii() for c in letters):
+        return "look-alike letters"
+    return None
+
+
+def sender_warning(name: str, email_addr: str) -> str | None:
+    """Why a sender's display name or address looks forged (mixed scripts, Latin
+    look-alike letters from another alphabet, in the name, local part or domain),
+    or ``None``. No counterpart is needed (unlike :func:`classify`): meant for
+    listings of received mail. Normal non-Latin names (all letters one script, not
+    mimicking Latin) are not flagged."""
+    local_part, _, dom = email_addr.rpartition("@")
+    words = [*name.replace(",", " ").split(), *local_part.replace(".", " ").split()]
+    words += unicode_domain(dom).casefold().replace("-", ".").split(".")
+    for w in words:
+        if (risk := _word_risk(w)) is not None:
+            return risk
+    return None
+
+
 def _split(email_addr: str) -> tuple[str, str]:
     local, _, domain = email_addr.lower().rpartition("@")
     return local, domain

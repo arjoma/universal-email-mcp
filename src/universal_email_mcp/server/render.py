@@ -26,8 +26,19 @@ _URL = re.compile(
 )
 _SCHEME = re.compile(r"(?i)([a-z][a-z0-9+.\-]*)://")
 # ``mailto:x``, ``xmpp:x``, ``javascript:x`` … (a word glued to a colon and more text)
-_SCHEME_COLON = re.compile(r"(?i)(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*):(?=[^\s:/\[\d])")
 _WWW = re.compile(r"(?i)www\.")
+# Bare domains (``evil.com``, no scheme/``www.``/path): GFM leaves them alone, but
+# renderers with fuzzy linkify (markdown-it) link them. Only well-known TLDs, so file
+# names (``report.pdf``, ``main.py``, ``notes.md``) stay readable.
+_TLDS = (
+    "com|org|net|edu|gov|int|info|biz|io|co|me|ly|app|dev|xyz|top|online|site|shop|store|tech|"
+    "cloud|club|live|link|click|work|support|email|eu|de|at|ch|li|uk|fr|it|es|nl|be|lu|dk|se|no|"
+    "fi|pl|cz|sk|hu|ro|bg|gr|pt|ie|ru|ua|tr|us|ca|au|nz|cn|jp|kr|in|br|mx|ar|za|ng|ke|ir|il|"
+    "tk|ml|ga|cf|gq|ws|su|cc|tv"
+)
+_BARE_DOMAIN = re.compile(rf"(?i)(?<![a-z0-9_\-])(?:[a-z0-9-]+\.)+(?:{_TLDS})(?![a-z0-9_\-])")
+# ``word:host.tld`` after the scheme prefix was broken up: the host's dots too.
+_SCHEME_REST = re.compile(r"(?i)(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*):(?=[^\s:/\[\d])([^\s|<>]*)")
 # Markdown characters that start links/images/emphasis/code/HTML/entities.
 _MD_SPECIAL = str.maketrans(
     {
@@ -63,15 +74,23 @@ def defang(text: str) -> str:
     """Make links in untrusted text inert and readable (no Markdown escaping).
 
     URL-like tokens get ``hxxp``, ``[:]//`` and ``[.]``; then, unconditionally,
-    every remaining ``://`` and ``www.``, every ``@`` (``＠``: no e-mail autolinks)
-    and every ``word:`` scheme prefix glued to more text (``mailto:``, ``xmpp:``,
-    ``javascript:`` …) is broken up, so no GFM autolink can form anywhere.
+    every remaining ``://`` and ``www.``, bare domains with a well-known top-level
+    domain (``evil.com``: fuzzy-linkifying renderers link them), every ``@``
+    (``＠``: no e-mail autolinks) and every ``word:`` scheme prefix glued to more
+    text (``mailto:``, ``xmpp:``, ``javascript:`` …, with the dots of the host that
+    follows) is broken up, so no autolink can form anywhere.
     """
     text = _URL.sub(lambda m: _defang_url(m.group(0)), text)
     text = text.replace("://", "[:]//")
     text = _WWW.sub(lambda m: m.group(0)[:3] + "[.]", text)
+    text = _BARE_DOMAIN.sub(lambda m: m.group(0).replace(".", "[.]"), text)
     text = text.replace("@", "＠")
-    return _SCHEME_COLON.sub(r"\1[:]", text)
+    return _SCHEME_REST.sub(lambda m: f"{m.group(1)}[:]{_dots(m.group(2))}", text)
+
+
+def _dots(rest: str) -> str:
+    """Dots between letters/digits become ``[.]`` (``attacker.test``, not ``1.5``)."""
+    return re.sub(r"(?<=[A-Za-z])\.(?=[A-Za-z0-9])", "[.]", rest)
 
 
 def escape_cell(value: object, max_chars: int = DEFAULT_CELL_CHARS) -> str:
@@ -94,6 +113,7 @@ def escape_cell(value: object, max_chars: int = DEFAULT_CELL_CHARS) -> str:
 _MD_IMAGE = re.compile(r"!\[([^\]\n]*)\]\s*(?:\([^)\n]*\)|\[[^\]\n]*\])")
 _MD_LINK = re.compile(r"\[([^\]\n]*)\]\(\s*<?([^)\s>]*)>?(?:\s+[\"'(][^)\n]*)?\)")
 _MD_REF_DEF = re.compile(r"(?m)^( {0,3})\[([^\]\n]+)\]:")
+_FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 _HTML_IMG = re.compile(r"(?is)<img\b[^>]*>")
 _HTML_ALT = re.compile(r"""(?is)\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""")
 
@@ -121,6 +141,7 @@ def defang_body(text: str) -> str:
         lambda m: f"{m.group(1)} ({m.group(2)})" if m.group(2) else m.group(1), text
     )
     text = _MD_REF_DEF.sub(r"\1[\2] :", text)
+    text = _FENCE_RUN.sub(lambda m: "ˋ" * len(m.group(0)), text)  # no fake code fences
     text = text.replace("](", "] (")  # whatever link syntax is left over
     text = text.replace("<", "‹").replace(">", "›")
     return defang(text)

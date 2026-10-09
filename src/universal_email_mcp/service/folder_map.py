@@ -59,6 +59,12 @@ def clean(name: str, cap: int = NAME_CHARS) -> str:
     return s if len(s) <= cap else s[: cap - 1].rstrip() + "…"
 
 
+def _item(name: str) -> str:
+    """A name inside the comma-separated map: quoted if it contains a comma, so
+    ``Müller, Hans`` cannot read as two folders."""
+    return f'"{name.replace(chr(34), chr(39))}"' if "," in name else name
+
+
 @dataclass(frozen=True, slots=True)
 class MapEntry:
     """One top-level folder; ``name`` is already cleaned."""
@@ -73,7 +79,7 @@ class MapEntry:
     """Archive folder only: scheme and year range, e.g. ``yearly: 2019 … 2026``."""
 
     def text(self) -> str:
-        out = self.name
+        out = _item(self.name)
         if self.role is not None and self.name.casefold() != self.role:
             out += f" ({self.role})"
         if self.subfolders:
@@ -82,9 +88,7 @@ class MapEntry:
                 out += f" ({self.archive})"
             elif self.examples:
                 more = self.subfolders > len(self.examples)
-                out += (
-                    f" ({'e.g. ' if more else ''}{', '.join(self.examples)}{' …' if more else ''})"
-                )
+                out += f" ({'e.g. ' if more else ''}{', '.join(_item(e) for e in self.examples)}{' …' if more else ''})"
         return out
 
 

@@ -8,6 +8,7 @@ password.
 from __future__ import annotations
 
 import time
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -152,11 +153,21 @@ def _wrap_caps(caps: tuple[str, ...], indent: str = "    ", width: int = 88) -> 
     return "\n".join(lines) or indent + "(none)"
 
 
+def printable(text: str) -> str:
+    """Server-supplied text made safe for a terminal: control characters (escape
+    sequences, newlines) and invisible/format characters (bidi overrides, zero-width)
+    become visible ``\\uXXXX`` escapes."""
+    return "".join(
+        f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp") else c
+        for c in text
+    )
+
+
 def format_report(r: ProbeReport) -> str:
     out: list[str] = []
     out.append(f"Server        {r.host}:{r.port} ({r.tls}, {r.login.auth_mechanism})")
     if r.login.greeting:
-        out.append(f"Greeting      {r.login.greeting}")
+        out.append(f"Greeting      {printable(r.login.greeting)}")
     out.append(
         f"Timing        connect+TLS {r.login.connect_seconds:.2f}s, "
         f"login {r.login.login_seconds:.2f}s, total {r.total_seconds:.2f}s"
@@ -192,7 +203,7 @@ def format_report(r: ProbeReport) -> str:
             ("shared", r.namespace.shared),
         ):
             if items:
-                desc = ", ".join(f"{p!r} (delimiter {d!r})" for p, d in items)
+                desc = printable(", ".join(f"{p!r} (delimiter {d!r})" for p, d in items))
                 out.append(f"Namespace     {label}: {desc}")
     out.append(f"Delimiter     {r.delimiter!r}")
     out.append(f"Folders       {len(r.folders)}")
@@ -203,17 +214,19 @@ def format_report(r: ProbeReport) -> str:
             counts = f"{folder.messages} messages, {folder.unseen} unseen"
         elif not folder.selectable:
             counts = "(not selectable)"
-        shown = folder.display_name
+        shown = printable(folder.display_name)
         if folder.display_name != folder.name:
-            shown += f"  (wire: {folder.name})"
+            shown += f"  (wire: {printable(folder.name)})"
         out.append(f"  {role:<10} {shown:<40} {counts}".rstrip())
     for w in r.role_warnings:
-        out.append(f"  warning: {w}")
+        out.append(f"  warning: {printable(w)}")
     if r.quota is None:
         out.append("Quota         (not available)")
     else:
         for q in r.quota:
-            out.append(f"Quota         {q.root or '(root)'} {q.resource}: {q.usage} of {q.limit}")
+            out.append(
+                f"Quota         {printable(q.root) or '(root)'} {q.resource}: {q.usage} of {q.limit}"
+            )
     out.append("Bridge plan:")
     for line in r.plan:
         out.append(f"  - {line}")

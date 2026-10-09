@@ -1,93 +1,69 @@
-# TODO — later (not v1)
+# TODO
 
-Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 scope.
+Open items by milestone / work package, then ideas parked for after 0.1.0 (see
+`docs/plans/2026-09-30-design.md` for the v1 scope and `docs/plans/2026-10-09-roadmap.md`
+for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup").
 
-## Attachments
-- [ ] Measure how Claude Code, Claude Desktop and claude.ai handle embedded blob
-      resources and image content (part of the client matrix) and tune the default
-      `limits.max_attachment_bytes` (now 2 MiB).
-- [ ] Portal download endpoint (3g): the same streaming (`service/downloads.py`:
-      `open_part` / `iter_part`) behind a portal session instead of a per-run token.
-- [ ] Downloads of 8bit/binary parts with NUL bytes or bare LF: plain `BODY[n]`
-      fetches may normalise them (Dovecot turns NUL into 0x80, LF into CRLF); the IMAP
-      `BINARY` extension (`BINARY.PEEK[n]`) would deliver them exactly.
-- [ ] Attachments of a forwarded `message/rfc822` are not addressable individually
-      (the whole .eml is one attachment); inner parts would be sections `2.1`, `2.2` …
-- [ ] `get_attachment` for ids is by section only; no lookup by file name. The
-      `──── part N` labels in bodies still use the parser's numbering, which can
-      differ from the server's on malformed messages (attachment ids never do).
-- [ ] Attachment sizes of base64 parts are exact only when the message was read
-      completely; otherwise estimated from the encoded size (76-column wrapping assumed).
-- [ ] Overview: no recent-mail or top-sender digest per account (the old
-      `mailbox_overview` idea); `find_contacts` and `find_messages` cover it.
-- [ ] Read and make sense of attachments: PDF text extraction (pypdf), then
-      office formats (docx, xlsx, odt), images via the AI client (embedded resource).
-- [ ] Bounded extraction (page/char limits, timeouts, zip-bomb/resource guards).
-- [ ] Attachment-aware search ("the PDF invoice from Huber") and summaries.
+## Open work
 
-## POP3
-- [ ] No download links for POP3 attachments (the loopback/portal download reads
-      IMAP sections): a link would need RETR + parse under the size cap per request.
-- [ ] POP3 header cache lives in process memory only; a persistent cache (remote mode,
-      store) would avoid re-reading `TOP` for the newest N after every restart.
-- [ ] POP3 `APOP` and SASL mechanisms other than `PLAIN` are not implemented (TLS is
-      mandatory, so `USER`/`PASS` is as safe as the rest).
-- [ ] A POP3 mailbox with more than `max_headers_scanned` messages is searched only in
-      its newest part; an optional "deep" mode (more headers per call, background
-      warm-up of the cache) is not built.
-- [ ] POP3 arrival time is the topmost `Received` header (no INTERNALDATE); a mail
-      server that adds none leaves the (forgeable) `Date` header as the only date.
-- [ ] POP3 servers that lock the mailbox per session: a reconnect while another client
-      holds the lock fails with a clear error but is not retried.
+### M1 read tools: review leftovers and sandbox findings
+- [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
+      `SINCE`/`BEFORE` compare the server's INTERNALDATE day (the zone stored with the
+      message), so mail near midnight can fall into the neighbouring day. A fix needs
+      the search widened by a day plus a client-side filter on `received` in both
+      `list_messages` (which pages by server position) and `query_search`; do it once a
+      real mailbox shows the effect (step 2h).
+- [ ] Cursor resume when the last returned message was expunged falls back to UID
+      order, which is only approximate for SORT (REVERSE ARRIVAL) listings.
+- [ ] Threads: `search_related` uses the first 30 ids only (most relevant first);
+      the same mail in two accounts is listed twice and marked as sharing a
+      Message-ID (identical copies are merged within an account only).
+- [ ] Watch CI for flakiness of `list_folders(counts=True)` on a slow Dovecot start (it
+      hit the account time-out once; counts are capped at 50 folders per call).
 
-## Folder map
-- [ ] Remote mode: the instructions are per user (WP 3e passes the signed-in user's
-      maps to `build_server(folder_maps=…)`); stale-instruction refresh is `account_info`.
-- [ ] A mail server that hangs during the TLS handshake keeps its worker thread until
-      `read_timeout` ends it, so the process exit after a startup timeout can take
-      that long; connecting with a cancellable socket would remove the wait.
-- [ ] `folder_list.build` recurses per level (fine for real mailboxes; a folder tree
-      thousands of levels deep would raise `RecursionError`, which the startup path
-      survives as "not read").
+- [ ] Threads: arrival order (INTERNALDATE) decides which claimant of a shared
+      Message-ID owns it (is followed, kept first); a forgery that arrived before
+      the genuine mail (or was APPENDed with an old date) wins, and any fetched
+      message competes, also one reached only through another claimant's links.
+- [ ] Threads: a flood of fake replies with distinct ids still fills the newest
+      part of the shown `limit` (the message and what it replies to stay; the
+      note counts the cut), and floods in all searched folders (each gets at least
+      `MIN_THREAD_SHARE` headers per round) can use up the header budget before
+      later rounds reach older ancestors.
+- [ ] Report parts (`message/delivery-status` …) are read from the original bytes
+      only when the MIME structure is well-formed; otherwise from Python's
+      re-serialised blocks (QP soft breaks across the inserted blank line can be
+      lost there).
+- [ ] Look-alike senders (listings now flag mixed-script and Latin-mimicking names and
+      addresses): a fuzzy search for a real contact still ranks a look-alike domain
+      or homoglyph name as high as the original, and listings do not compare against
+      known contacts (that is the send-time check in 2d). Rank/flag using the
+      confusables skeleton of `service/recipients.py`.
 
-## Accounts and auth
-- [ ] OIDC SSO for the portal (Entra ID, Keycloak, Authentik, Google, …).
-- [ ] Admin-managed shared mailboxes granted to several users.
-- [ ] OAUTHBEARER / XOAUTH2 to mail servers that offer it (Microsoft 365 only on demand).
+### WP 2a (organize)
+- [ ] Permanent deletion (empty Trash, delete from Trash/Junk) is deliberately not
+      offered; if ever added it needs its own tool, permission and confirmation.
+- [ ] `mark_messages` sets only `\Seen` and `\Flagged` (`\Answered` is set by
+      `send_message` only); custom keywords are not planned, `$Forwarded` after a forward could follow.
+- [ ] Folder management beyond `create_folder` (rename, move, delete, unsubscribe).
+- [ ] Moving between accounts is not supported (an id belongs to one account; the
+      destination is resolved per account). Copy-to-other-account would need APPEND.
+- [ ] Other users'/shared namespaces are refused for every write; the Dovecot test
+      image has none, so `is_foreign` is tested with injected prefixes only.
+- [ ] COPY fallback: if the copy worked but removing the original failed, the message
+      is in both folders (reported per message, the `\Deleted` flag is rolled back
+      on a best-effort basis). A connection lost mid-batch leaves the outcome of the
+      running group unknown (hint: search again before retrying).
+- [ ] The sent-to index is not invalidated when mail leaves Sent (moving a sent mail
+      away does not forget that the user wrote to the recipient - intended, but
+      deleting the Sent copy does not make the check stricter either).
+- [ ] No `UNSELECT`/`CLOSE` after a write: the session stays selected on the last
+      folder until the next EXAMINE/SELECT (harmless, but a pending `\Deleted` set
+      by another client is never expunged by us).
+- [ ] Sandbox corpus: hostile *folder* names exist (bidi override); add injection text
+      and very long names so `create_folder`/`move_messages` can be tried by hand.
 
-## Platform
-- [ ] SQLite store for single-VM / on-prem deployments (a `Backend` implementation:
-      `get`, atomic `commit`, `find`, `scan`; the contract tests in `tests/test_store.py` apply).
-- [ ] Store wiring after WP 3a: `STORE_KEYS` / `STORE_ACTIVE_KEY` / backend choice in the
-      operator config, `universal-email-mcp admin rotate-keys` (calls `store.rotate_keys`).
-- [ ] Store: activity feed is listed by a per-user query sorted in Python (no composite
-      index); fine for 30 days of events, add `order_by` + index or a per-user cap if feeds grow.
-- [ ] Store review leftovers: auth-code replay detection (consumed marker, revoke issued
-      tokens); `rotate_keys`/`export_user`
-      abort on one corrupt record (skip and report); expired records can still be `update`d;
-      `delete_user` is not atomic against concurrent writes (tombstone); transaction reads
-      one by one (`get_all`); portal session touch/reauth methods.
-- [ ] 3c: refresh reuse is strict (any concurrent double use revokes the grant); a short
-      configurable reuse interval for concurrent refreshes may be needed once real clients are
-      observed. Auth-code replay revocation also belongs to 3c.
-- [ ] Store: a pseudonym-key change needs a user-id migration; authorization-code replay
-      (second redeem) is not yet turned into a revocation of the tokens issued from it (3c).
-- [ ] More provider presets (IONOS, Strato, World4You, Hetzner, all-inkl, …),
-      each validated with `probe`.
-- [ ] JMAP backend.
-
-## Repository
-- [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,
-      bypass: repository admin) so only admins can trigger PyPI releases. The `pypi`
-      environment is already restricted to `v*` tags.
-
-## Targets from real use (planned for M2, see design §7.2)
-- [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
-- [ ] Label management: rename / move / delete folders later (list and create exist).
-- [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
-      raw headers, `.eml` and attachment downloads in the authenticated portal.
-
-## WP 2b (folders as labels) leftovers
+### WP 2b (folders as labels)
 - [ ] **Check the archive scheme against real `probe` output** of the united-domains
       hoster (and what its webmail's "archive" button does: flat, `Archive/2025`,
       `Archive/2025/10`?). Until then `auto` treats an empty archive as flat and
@@ -114,78 +90,7 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] The time budget of the conversation search is a share of `account_timeout`
       (`THREAD_TIME_SHARE`), not configurable.
 
-## Tool surface review leftovers (PR #7)
-- [ ] Fuzzy message score keys can shift between pages: the exact-match boost
-      covers only the first `limit*4` UIDs, and `limit` is not in the argument hash.
-- [ ] `list_messages` could reuse `paging.keyset_page` for its retry logic.
-- [ ] A fuzzy `query` is scored per header text (sender, recipients, subject
-      separately), so words spread over several fields ("rechnung huber") do not
-      add up — consider scoring the combined text too.
-
-## WP 2a (organize) leftovers
-- [ ] Permanent deletion (empty Trash, delete from Trash/Junk) is deliberately not
-      offered; if ever added it needs its own tool, permission and confirmation.
-- [ ] `mark_messages` sets only `\Seen` and `\Flagged` (`\Answered` is set by
-      `send_message` only); custom keywords are not planned, `$Forwarded` after a forward could follow.
-- [ ] Folder management beyond `create_folder` (rename, move, delete, unsubscribe).
-- [ ] Moving between accounts is not supported (an id belongs to one account; the
-      destination is resolved per account). Copy-to-other-account would need APPEND.
-- [ ] Other users'/shared namespaces are refused for every write; the Dovecot test
-      image has none, so `is_foreign` is tested with injected prefixes only.
-- [ ] COPY fallback: if the copy worked but removing the original failed, the message
-      is in both folders (reported per message, the `\Deleted` flag is rolled back
-      on a best-effort basis). A connection lost mid-batch leaves the outcome of the
-      running group unknown (hint: search again before retrying).
-- [ ] The sent-to index is not invalidated when mail leaves Sent (moving a sent mail
-      away does not forget that the user wrote to the recipient - intended, but
-      deleting the Sent copy does not make the check stricter either).
-- [ ] No `UNSELECT`/`CLOSE` after a write: the session stays selected on the last
-      folder until the next EXAMINE/SELECT (harmless, but a pending `\Deleted` set
-      by another client is never expunged by us).
-- [ ] Sandbox corpus: add hostile *folder* names (injection text, bidi, very long)
-      so `create_folder`/`move_messages` can be tried by hand against them.
-
-## M1 review leftovers
-- [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
-      `SINCE`/`BEFORE` compare the server's INTERNALDATE day (server time zone) —
-      mail near midnight can fall into the neighbouring day.
-- [ ] Fuzzy search results show flags from the header cache (up to the index TTL);
-      listings and threads refresh them.
-- [ ] Bare domains (`evil.com`, no scheme/`www.`/path) stay as they are: GFM does not
-      autolink them, but renderers with fuzzy linkify (markdown-it) do.
-- [ ] Cursor resume when the last returned message was expunged falls back to UID
-      order, which is only approximate for SORT (REVERSE ARRIVAL) listings.
-- [ ] Threads: `search_related` uses the first 30 ids only (most relevant first);
-      the same mail in two accounts is listed twice and marked as sharing a
-      Message-ID (identical copies are merged within an account only).
-- [ ] Observed once: an integration `list_folders(counts=True)` call (then: STATUS of
-      every folder) hit the account time-out on a slow container start — counts are
-      now capped at 50 folders per call; watch for flakiness in CI.
-
-## Known issues from the sandbox corpus
-- [ ] Threads: arrival order (INTERNALDATE) decides which claimant of a shared
-      Message-ID owns it (is followed, kept first); a forgery that arrived before
-      the genuine mail (or was APPENDed with an old date) wins, and any fetched
-      message competes, also one reached only through another claimant's links.
-- [ ] Threads: a flood of fake replies with distinct ids still fills the newest
-      part of the shown `limit` (the message and what it replies to stay; the
-      note counts the cut), and floods in all searched folders (each gets at least
-      `MIN_THREAD_SHARE` headers per round) can use up the header budget before
-      later rounds reach older ancestors.
-- [ ] Report parts (`message/delivery-status` …) are read from the original bytes
-      only when the MIME structure is well-formed; otherwise from Python's
-      re-serialised blocks (QP soft breaks across the inserted blank line can be
-      lost there).
-- [ ] Look-alike senders are hard to spot: tables show only the display name, and a
-      fuzzy search for a real contact ranks a look-alike domain or a homoglyph
-      name (Cyrillic letters) as high as the original. Flag mixed scripts and
-      look-alike domains (also needed for the send-time recipient check).
-- [ ] `probe` prints folder names to the terminal unsanitised (bidi overrides;
-      other servers may allow terminal escape sequences).
-- [ ] Defanging of folder names is uneven (`http\[:\]attacker.test` keeps the
-      dots); a fake code fence in a body is left as is.
-
-## WP 2c (drafts) leftovers
+### WP 2c (drafts)
 - [ ] Plain text only. An HTML alternative (signature with a logo, formatting) and
       `format=flowed` are out of scope for now.
 - [ ] `draft_id` replaces the whole draft: attachments of a forward draft are lost
@@ -198,7 +103,6 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       attachments of a forwarded `message/rfc822` are not offered individually.
 - [ ] Forwarded text attachments keep their declared type but travel as base64
       bytes (no charset guessing); `message/*` other than `rfc822` becomes `octet-stream`.
-- [ ] Non-ASCII local parts (SMTPUTF8) are refused; domains are IDNA-encoded.
 - [ ] Message-IDs of unusual syntax in an original are dropped from `References`
       (the thread link is lost rather than risking odd bytes in a header).
 - [ ] The quote's attribution line uses UTC; use the user's time zone and language.
@@ -207,7 +111,7 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Drafts: `max_recipients` of the policy also caps to+cc+bcc of a draft; a draft
       for a mailing list with more recipients needs the limit raised.
 
-## WP 2d (send) leftovers
+### WP 2d (send)
 - [ ] **Try it against a real SMTP server** (the united-domains hoster: 465/587, STARTTLS,
       AUTH mechanisms, SIZE, whether it files its own Sent copy -> `ServerProfile.smtp_saves_sent`
       is `False` for every preset until probe evidence exists) with a throw-away recipient.
@@ -228,7 +132,7 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       Latin letters), no full Unicode TR39 skeleton; short local parts (< 3) are not compared.
 - [ ] `confirm-external` / `internal_domains` match whole domains exactly (no wildcard);
       subdomain handling is only in `allowed_recipient_domains`.
-- [ ] SMTPUTF8 (non-ASCII local parts) is refused; 8-bit bodies need the server's 8BITMIME.
+- [ ] SMTPUTF8 (non-ASCII local parts, also in drafts) is refused; 8-bit bodies need the server's 8BITMIME.
       The EHLO name is the fixed `localhost`.
 - [ ] `\Answered` needs `organize` or `drafts` on the original's account; a forward does not set `$Forwarded`.
       The original of a plain `draft_id` reply is searched in at most 25 folders / 10 s of the
@@ -240,7 +144,29 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       in the error hint.
 - [ ] `SendOut.attachments` reports no content types (file names and sizes only).
 
-## Remote HTTP (3a follow-ups)
+### POP3
+- [ ] No download links for POP3 attachments (the loopback/portal download reads
+      IMAP sections): a link would need RETR + parse under the size cap per request.
+- [ ] POP3 header cache lives in process memory only; a persistent cache (remote mode,
+      store) would avoid re-reading `TOP` for the newest N after every restart.
+- [ ] POP3 `APOP` and SASL mechanisms other than `PLAIN` are not implemented (TLS is
+      mandatory, so `USER`/`PASS` is as safe as the rest).
+- [ ] A POP3 mailbox with more than `max_headers_scanned` messages is searched only in
+      its newest part; an optional "deep" mode (more headers per call, background
+      warm-up of the cache) is not built.
+- [ ] POP3 arrival time is the topmost `Received` header (no INTERNALDATE); a mail
+      server that adds none leaves the (forgeable) `Date` header as the only date.
+- [ ] POP3 servers that lock the mailbox per session: a reconnect while another client
+      holds the lock fails with a clear error but is not retried.
+
+### Folder map
+- [ ] Remote mode: the instructions are per user (WP 3e passes the signed-in user's
+      maps to `build_server(folder_maps=…)`); stale-instruction refresh is `account_info`.
+- [ ] `folder_list.build` recurses per level (fine for real mailboxes; a folder tree
+      thousands of levels deep would raise `RecursionError`, which the startup path
+      survives as "not read").
+
+### Remote HTTP and store (3a-3c follow-ups)
 - [ ] `serve` is dev-token only: replace `static_token_check` by the OAuth verifier (3c;
       `BearerAuthMiddleware` takes any `str -> bool` check - make it return a principal and
       add `resource_metadata` to `WWW-Authenticate`), and the TOML accounts by the per-user
@@ -254,3 +180,61 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] uvicorn re-raises SIGTERM after the graceful stop, so the process exits with status 143
       instead of 0 (harmless on Cloud Run). No CI image build yet (3i `cloudbuild.yaml`).
 - [ ] `Host` matching is exact on names (no wildcards such as `*.run.app`); list each name.
+
+- [ ] Store review leftovers: `rotate_keys`/`export_user` abort on one corrupt record
+      (skip and report); expired records can still be `update`d; `delete_user` is not
+      atomic against concurrent writes (tombstone); transactions read one by one
+      (`get_all`); portal session touch/reauth methods. A pseudonym-key change needs a
+      user-id migration.
+- [ ] 3c: authorization-code replay (a second redeem) should revoke the tokens issued
+      from it (consumed marker). Refresh reuse is strict (any concurrent double use
+      revokes the grant); a short configurable reuse interval may be needed once real
+      clients are observed.
+
+## Later (not v1)
+
+### Attachments
+- [ ] Measure how Claude Code, Claude Desktop and claude.ai handle embedded blob
+      resources and image content (part of the client matrix) and tune the default
+      `limits.max_attachment_bytes` (now 2 MiB).
+- [ ] Portal download endpoint (3g): the same streaming (`service/downloads.py`:
+      `open_part` / `iter_part`) behind a portal session instead of a per-run token.
+- [ ] Downloads of 8bit/binary parts with NUL bytes or bare LF: plain `BODY[n]`
+      fetches may normalise them (Dovecot turns NUL into 0x80, LF into CRLF); the IMAP
+      `BINARY` extension (`BINARY.PEEK[n]`) would deliver them exactly.
+- [ ] Attachments of a forwarded `message/rfc822` are not addressable individually
+      (the whole .eml is one attachment); inner parts would be sections `2.1`, `2.2` …
+- [ ] `get_attachment` for ids is by section only; no lookup by file name. The
+      `──── part N` labels in bodies still use the parser's numbering, which can
+      differ from the server's on malformed messages (attachment ids never do).
+- [ ] Attachment sizes of base64 parts are exact only when the message was read
+      completely; otherwise estimated from the encoded size (76-column wrapping assumed).
+- [ ] Overview: no recent-mail or top-sender digest per account (the old
+      `mailbox_overview` idea); `find_contacts` and `find_messages` cover it.
+- [ ] Read and make sense of attachments: PDF text extraction (pypdf), then
+      office formats (docx, xlsx, odt), images via the AI client (embedded resource).
+- [ ] Bounded extraction (page/char limits, timeouts, zip-bomb/resource guards).
+- [ ] Attachment-aware search ("the PDF invoice from Huber") and summaries.
+
+### Accounts, platform and targets from real use
+- [ ] OIDC SSO for the portal (Entra ID, Keycloak, Authentik, Google, …).
+- [ ] Admin-managed shared mailboxes granted to several users.
+- [ ] OAUTHBEARER / XOAUTH2 to mail servers that offer it (Microsoft 365 only on demand).
+- [ ] SQLite store for single-VM / on-prem deployments (a `Backend` implementation:
+      `get`, atomic `commit`, `find`, `scan`; the contract tests in `tests/test_store.py` apply).
+- [ ] Store wiring after WP 3a: `STORE_KEYS` / `STORE_ACTIVE_KEY` / backend choice in the
+      operator config, `universal-email-mcp admin rotate-keys` (calls `store.rotate_keys`).
+- [ ] Store: activity feed is listed by a per-user query sorted in Python (no composite
+      index); fine for 30 days of events, add `order_by` + index or a per-user cap if feeds grow.
+- [ ] More provider presets (IONOS, Strato, World4You, Hetzner, all-inkl, …),
+      each validated with `probe`.
+- [ ] JMAP backend.
+- [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
+- [ ] Label management: rename / move / delete folders later (list and create exist).
+- [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
+      raw headers, `.eml` and attachment downloads in the authenticated portal.
+
+### Repository
+- [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,
+      bypass: repository admin) so only admins can trigger PyPI releases. The `pypi`
+      environment is already restricted to `v*` tags.

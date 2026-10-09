@@ -211,6 +211,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Defanging of mail text is more complete: bare domains with a well-known top-level domain
+  (`evil.com`, also in e-mail addresses) get `[.]` so renderers with fuzzy link detection
+  cannot link them, the host after a `word:` scheme prefix is broken up too, and code
+  fences in message bodies are neutralised. File names such as `report.pdf` stay readable.
+- Fuzzy `find_messages`: a multi-word query also scores sender + subject and
+  recipients + subject together (`rechnung huber`), the exact-match boost no longer depends
+  on `limit` (scores and paging stay stable), and the flags shown are read fresh.
+- Listings flag senders whose name or address mixes alphabets or mimics Latin letters
+  (`⚠ look-alike sender`); `probe` prints folder names and server text with control and
+  bidi characters escaped; folder names containing a comma are quoted in the folder map.
+- A mail server that hangs no longer delays the exit of the process (worker threads are
+  daemon threads).
 - The conversation search (`get_message(thread=true)`) is limited by a time budget
   (half of `limits.account_timeout`) instead of 25 folders; later rounds look only in
   INBOX, Sent, the archive, the message's folder and folders that had hits.

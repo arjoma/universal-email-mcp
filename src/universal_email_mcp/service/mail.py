@@ -76,6 +76,9 @@ from universal_email_mcp.service.send import Sender
 from universal_email_mcp.service.trust import SentTo, SentToIndex
 
 DEFAULT_PAGE = 20
+MAX_EXACT_BOOST = 500
+"""Newest server-side ``TEXT`` hits per folder that score 100 in a fuzzy search. Fixed
+(not derived from ``limit``) so the score keys of a paged search do not shift."""
 MAX_THREAD_MESSAGES = 50
 THREAD_TIME_SHARE = 0.5
 """A conversation search spends at most this share of ``limits.account_timeout`` on
@@ -845,7 +848,7 @@ class MailService:
                     exact_res = session.search(f.name, exact_criteria)
                     if cand.uidvalidity != exact_res.uidvalidity:
                         raise UidValidityChanged("folder changed during the search; try again")
-                    exact_uids = list(exact_res.uids[: limit * 4])
+                    exact_uids = list(exact_res.uids[:MAX_EXACT_BOOST])
                 scan = list(cand.uids[:remaining])
                 if len(cand.uids) > remaining:
                     complete = False
@@ -882,8 +885,9 @@ class MailService:
             query=qh,
             problems=fan.problems,
         )
+        shown = await self._refresh_hit_flags(selected, [h for _acc, h in page.items])
         return MessagePage(
-            hits=[h for _acc, h in page.items],
+            hits=shown,
             total=page.total,
             offset=page.offset,
             cursor=page.cursor,
@@ -894,6 +898,41 @@ class MailService:
             mode=query.mode,
             exhausted=page.exhausted,
         )
+
+    async def _refresh_hit_flags(self, selected: Sequence[Account], hits: list[Hit]) -> list[Hit]:
+        """Current flags for the hits shown (the header cache may be older than the
+        index TTL): one ``FETCH FLAGS`` per folder. Best effort - a failure leaves
+        the cached flags; messages expunged meanwhile are kept as found."""
+        wanted: dict[str, dict[tuple[str, int], set[int]]] = {}
+        for h in hits:
+            r = h.summary.ref
+            if not r.is_pop3:
+                wanted.setdefault(r.account, {}).setdefault((r.folder, r.uidvalidity), set()).add(
+                    r.uid
+                )
+        if not wanted:
+            return hits
+
+        def work(session: ImapSession) -> dict[tuple[str, int], tuple[str, ...]]:
+            out: dict[tuple[str, int], tuple[str, ...]] = {}
+            for (folder, uv), uids in wanted.get(session.account_name, {}).items():
+                try:
+                    flags = session.fetch_flags(folder, sorted(uids), uidvalidity=uv)
+                except (UidValidityChanged, FolderNotFound, ProtocolError):
+                    continue
+                for uid, f in flags.items():
+                    out[(folder, uid)] = f
+            return out
+
+        fan = await self._fan([a for a in selected if a.name in wanted], work)
+        out: list[Hit] = []
+        for h in hits:
+            r = h.summary.ref
+            fresh = fan.results.get(r.account, {}).get((r.folder, r.uid))
+            if fresh is not None and fresh != h.summary.flags:
+                h = replace(h, summary=replace(h.summary, flags=fresh))
+            out.append(h)
+        return out
 
     # ------------------------------------------------------------ single message
 

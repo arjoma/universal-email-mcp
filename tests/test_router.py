@@ -200,3 +200,41 @@ def test_select_permissions_pop3_and_caps():
         router.account("A", "organize")
     accounts, problems = router.select(["a", "A"])
     assert [a.name for a in accounts] == ["A"] and problems == []
+
+
+def test_hanging_worker_does_not_delay_process_exit():
+    """A server that hangs keeps only a daemon thread: asyncio.run and the
+    interpreter exit do not wait for it (they join executor threads)."""
+    import subprocess
+    import sys
+    import time
+
+    code = (
+        "import asyncio, time\n"
+        "from universal_email_mcp.service.router import _run_daemon\n"
+        "async def main():\n"
+        "    fut = _run_daemon(asyncio.get_running_loop(), time.sleep, 60)\n"
+        "    try:\n"
+        "        await asyncio.wait_for(asyncio.shield(fut), 0.2)\n"
+        "    except TimeoutError:\n"
+        "        pass\n"
+        "asyncio.run(main())\n"
+    )
+    t0 = time.monotonic()
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=30)
+    assert time.monotonic() - t0 < 15
+
+
+async def test_run_daemon_delivers_results_and_errors():
+    import asyncio
+
+    from universal_email_mcp.service.router import _run_daemon
+
+    loop = asyncio.get_running_loop()
+    assert await _run_daemon(loop, lambda a, b: a + b, 1, b=2) == 3
+
+    def boom() -> None:
+        raise ValueError("x")
+
+    with pytest.raises(ValueError):
+        await _run_daemon(loop, boom)

@@ -109,11 +109,17 @@ def test_escape_cell_defangs_urls_readably():
     assert escape_cell("see https://evil.example/x") == "see hxxps\\[:\\]//evil\\[.\\]example/x"
     assert escape_cell("www.evil.example") == "www\\[.\\]evil\\[.\\]example"
     assert escape_cell("ftp://h.example") == "ftp\\[:\\]//h\\[.\\]example"
-    # e-mail addresses stay readable but cannot autolink; times are untouched
-    assert escape_cell("anna@huber-bau.at") == "anna＠huber-bau.at"
+    # e-mail addresses stay readable but cannot autolink (nor their bare domain);
+    # times, versions and file names are untouched
+    assert escape_cell("anna@huber-bau.at") == "anna＠huber-bau\\[.\\]at"
+    assert (
+        escape_cell("evil.com and report.pdf v1.5 main.py")
+        == "evil\\[.\\]com and report.pdf v1.5 main.py"
+    )
     assert escape_cell("Re: Termin 10:30") == "Re: Termin 10:30"
     assert escape_cell("_https://evil.com") == "\\_hxxps\\[:\\]//evil\\[.\\]com"
-    assert escape_cell("xmpp:foo@evil.com") == "xmpp\\[:\\]foo＠evil.com"
+    assert escape_cell("http:attacker.test/x") == "http\\[:\\]attacker\\[.\\]test/x"
+    assert escape_cell("xmpp:foo@evil.com") == "xmpp\\[:\\]foo＠evil\\[.\\]com"
 
 
 def test_escape_cell_length_cap_and_plain_text():
@@ -177,3 +183,12 @@ def test_error_result_text_is_escaped_and_details_structured():
     _renders_inert(text)
     assert r.is_error
     assert r.structured_content == {"error": err.to_dict()}
+
+
+def test_defang_body_bare_domains_and_fences():
+    out = defang_body(
+        "visit evil.com or http.attacker.org now, see report.pdf\n```\ncode\n```\n~~~"
+    )
+    assert "evil[.]com" in out and "http[.]attacker[.]org" in out
+    assert "report.pdf" in out
+    assert "```" not in out and "~~~" not in out

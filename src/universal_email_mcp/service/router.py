@@ -1,8 +1,7 @@
 """Account router: per-account sessions, locking, timeouts and parallel fan-out.
 
 Backends are synchronous and not thread-safe, so each account has one session and
-one :class:`asyncio.Lock`; calls run in worker threads via the event loop's
-executor. A dropped connection is reconnected once; a call that exceeds the
+one :class:`asyncio.Lock`; calls run in daemon worker threads (see :func:`_run_daemon`). A dropped connection is reconnected once; a call that exceeds the
 deadline is cancelled and its connection torn down (the worker thread then fails
 promptly instead of holding the session).
 
@@ -125,6 +124,39 @@ def _in_thread(fn: Callable[[Any], None], session: Any) -> None:
     """Run cleanup on its own daemon thread: never on the event loop, and not
     queued behind worker threads that may all be blocked on dead servers."""
     threading.Thread(target=fn, args=(session,), name="uem-cleanup", daemon=True).start()
+
+
+def _run_daemon[**P, T](
+    loop: asyncio.AbstractEventLoop, fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs
+) -> asyncio.Future[T]:
+    """Like ``loop.run_in_executor`` but on a daemon thread of its own: a mail server
+    that hangs (TLS handshake, dead connection) keeps its worker only until the
+    socket times out, and neither ``asyncio.run`` nor the interpreter waits for it
+    at exit. Callers serialise per account, so threads stay few."""
+    fut: asyncio.Future[T] = loop.create_future()
+
+    def deliver(result: T | None, error: BaseException | None) -> None:
+        if fut.cancelled():
+            return
+        if error is not None:
+            fut.set_exception(error)
+        else:
+            fut.set_result(result)  # pyright: ignore[reportArgumentType]
+
+    def run() -> None:
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as e:  # noqa: BLE001 - handed to the awaiting task
+            error, result = e, None
+        else:
+            error = None
+        try:
+            loop.call_soon_threadsafe(deliver, result, error)
+        except RuntimeError:  # the loop is closed: nobody is waiting any more
+            pass
+
+    threading.Thread(target=run, name="uem-worker", daemon=True).start()
+    return fut
 
 
 def _release_after(session: Any, fut: asyncio.Future[Any]) -> None:
@@ -257,7 +289,7 @@ class AccountRouter:
         fut = slot.connecting
         if fut is None:
             loop = asyncio.get_running_loop()
-            fut = loop.run_in_executor(None, connector, account, self.config)
+            fut = _run_daemon(loop, connector, account, self.config)
             slot.connecting = fut
             fut.add_done_callback(functools.partial(self._connected, slot))
         return await asyncio.shield(fut)
@@ -296,7 +328,7 @@ class AccountRouter:
         async with slot.lock:
             for attempt in (1, 2):
                 session, fresh = await self._ensure(slot)
-                fut = asyncio.get_running_loop().run_in_executor(None, fn, session)
+                fut = _run_daemon(asyncio.get_running_loop(), fn, session)
                 try:
                     result = await asyncio.shield(fut)
                 except asyncio.CancelledError:

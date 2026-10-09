@@ -92,6 +92,7 @@ from universal_email_mcp.service.mail import (
     MessagePage,
 )
 from universal_email_mcp.service.organize import BatchResult
+from universal_email_mcp.service.recipients import sender_warning
 from universal_email_mcp.service.router import AccountProblem
 from universal_email_mcp.service.send import (
     Decision,
@@ -398,6 +399,14 @@ def _overview_text(ov: Overview | None) -> str:
     return escape_cell(", ".join(parts), 120)
 
 
+def _sender_flag(sender: Sequence[AddressOut]) -> str:
+    """A warning for a sender whose name or address mimics Latin letters."""
+    for a in sender[:1]:
+        if (why := sender_warning(a.name, a.email)) is not None:
+            return f"⚠ look-alike sender ({why})"
+    return ""
+
+
 def _message_table(
     items: Sequence[MessageItem],
     *,
@@ -434,6 +443,7 @@ def _message_table(
                 "unread" if i.unread else "",
                 "★" if i.flagged else "",
                 "⚠ same Message-ID" if i.shared_message_id else "",
+                _sender_flag(i.from_),
             )
             if x
         )
