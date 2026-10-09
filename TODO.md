@@ -170,12 +170,41 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       survives as "not read").
 
 ### Remote HTTP and store (3a-3c follow-ups)
-- [ ] `serve` is dev-token only: replace `static_token_check` by the OAuth verifier (3c;
-      `BearerAuthMiddleware` takes any `str -> bool` check - make it return a principal and
-      add `resource_metadata` to `WWW-Authenticate`), and the TOML accounts by the per-user
-      service (3e). `OperatorConfig.mail_servers` / `login_domains` are parsed but unused until 3d.
-- [ ] `/ready` has only the `config` check; register the store check in 3b
-      (`HttpSettings.ready_checks`). Consider reporting not-ready after SIGTERM.
+- [ ] Refresh-token reuse is strict: any second use of a rotated token (also two truly
+      concurrent refreshes, e.g. a client retrying after a lost response) revokes the whole
+      grant. A short configurable reuse interval (return the same successor for a few
+      seconds) may be needed once real clients are observed.
+- [ ] Rate limiters (sign-in per address and IP, token, registration, client-document
+      fetch) are in memory per instance: N instances allow N times the limit, a restart
+      resets them. A shared counter in the store would fix it. The per-address limit also
+      lets an attacker lock a known address out of sign-in for 15 minutes.
+- [ ] Consent is per request: every authorization creates a new grant (a client that
+      reconnects shows up twice in the future "connected clients" list). Reuse or replace a
+      grant of the same client and user (3d), and show a "you already allowed this" shortcut.
+- [ ] Until 3d the consent page offers the sign-in mailbox as pseudo account/identity
+      `primary`; real `MailAccount` / `Identity` ids replace it (rows already come from the
+      store when records exist). Grants referencing `primary` need a migration or must be
+      treated as "the primary mailbox" by 3e.
+- [ ] Re-consent / scope step-up: a refresh cannot widen the scope; a client needing more
+      must run `/authorize` again. Incremental consent (`WWW-Authenticate` `scope=` on 403)
+      is not implemented.
+- [ ] The `uem_lang` cookie is read but nothing sets it yet (language switch UI, 3d); only
+      English ships (German in M4). `/authorize` ignores `ui_locales`.
+- [ ] DCR: no `/register` management (RFC 7592), no software statements; a client asking for
+      `client_secret_*` or non-`none` auth is refused. CIMD documents are cached for a fixed
+      hour (HTTP cache headers are ignored) and fetched without a conditional request.
+- [ ] CIMD: only `https` documents on any port; there is no operator allow/deny list of client
+      hosts, and no display of a verified publisher. A trusted-client list (e.g. for the
+      Claude and ChatGPT connector identities) could skip the "name not verified" hint.
+- [ ] Portal sessions are not bound to IP or user agent; sign-in has no CAPTCHA or MFA
+      (MFA comes with OIDC SSO). A password change at the mail server does not end existing
+      portal sessions or grants until their lifetime ends.
+- [ ] Audit events still go to stderr without a `session` field (3h).
+
+- [ ] Dev mode still serves the TOML accounts; the per-user service (3e) replaces them (in
+      OAuth mode `/mcp` offers only `account_info` until then).
+      `OperatorConfig.mail_servers` is parsed but unused until 3d.
+- [ ] Consider reporting not-ready after SIGTERM.
 - [ ] Wire the operator limits (`UEM_MAX_*`) and policy (`UEM_*`) per user in 3e; today they
       overlay the TOML config of the dev mode only.
 - [ ] Audit events (`audit.py`) still go to stderr; 3h moves them to stdout JSON with pseudonyms.
