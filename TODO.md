@@ -230,6 +230,12 @@ from time to time (AGENTS.md, "Regular cleanup").
       odd seconds down; make the `user_id` export drop an explicit constant; tests for a write
       racing the delete and casefold edge cases.
 
+- [ ] German leftovers (4d): file sizes still show a decimal point (`1.5 KB`, `fmt_size` is shared
+      with the tool output); service-generated notes that no pattern in `portal/dynamic.py`
+      covers stay English (thread search budget notes, lookalike "you have written to ... and to"
+      sentence, `body_notes` variants, folder/quota notes); the plain-text `Not found.` /
+      `Too many requests.` answers of the content origin are not translated (no UI).
+
 ## Store
 
 - [ ] `Store.delete_user` is not atomic against concurrent writes: a tool call in flight can
