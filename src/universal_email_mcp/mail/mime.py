@@ -123,6 +123,26 @@ def _decode_bytes(data: bytes, charset: str | None) -> str:
     return data.decode("latin-1", errors="replace")  # pragma: no cover - latin-1 never fails
 
 
+def decode_text(data: bytes, charset: str | None = None) -> str:
+    """Decode bytes as text: declared charset, else UTF-8, else Windows-1252."""
+    return _decode_bytes(data, charset)
+
+
+def decode_transfer(data: bytes, encoding: str) -> bytes:
+    """Undo a Content-Transfer-Encoding. Tolerant: garbage inside base64 is skipped,
+    a dangling character is dropped, unknown encodings are returned as they are.
+    The output is never larger than the input."""
+    enc = encoding.strip().lower()
+    if enc == "base64":
+        chars = re.sub(rb"[^A-Za-z0-9+/]", b"", data)
+        if len(chars) % 4 == 1:
+            chars = chars[:-1]
+        return binascii.a2b_base64(chars + b"=" * (-len(chars) % 4))
+    if enc == "quoted-printable":
+        return quopri.decodestring(data)
+    return data
+
+
 def _fix_surrogates(s: str) -> str:
     """Raw 8-bit header bytes arrive as surrogate escapes; decode them properly."""
     if not any("\udc80" <= c <= "\udcff" for c in s):
@@ -435,6 +455,9 @@ class ParsedMessage:
     attachments: tuple[Attachment, ...]
     notes: tuple[str, ...] = ()
     """What the body leaves out or shortens (limits); safe, server-generated text."""
+    leaves: tuple[tuple[str, str], ...] = ()
+    """``(section, content type)`` of every leaf part as Python numbered them, to
+    compare with the server's BODYSTRUCTURE (see :mod:`mail.bodystructure`)."""
 
 
 def _part_bytes(part: Message) -> bytes:
@@ -486,6 +509,27 @@ def _children(part: Message, prefix: str) -> list[tuple[str, Message]]:
     ]
 
 
+MAX_FILENAME_CHARS = 120
+
+
+def display_filename(name: str) -> str | None:
+    """A file name safe to show (still untrusted text: escape it in Markdown).
+
+    Keeps only the last path component (``../../x`` and ``C:\\dir\\x`` → ``x``),
+    removes control, invisible and bidi characters, and shortens very long names in
+    the middle so the extension stays visible. Double extensions are shown as they
+    are. Nothing here is ever used as a path."""
+    name = sanitize_line(name)
+    name = re.split(r"[\\/]", name)[-1].strip()
+    if len(name) > MAX_FILENAME_CHARS:
+        stem, dot, ext = name.rpartition(".")
+        ext = ext[:16] if dot else ""
+        keep = MAX_FILENAME_CHARS - len(ext) - 2
+        base = stem if dot else name
+        name = base[:keep] + "…" + (f".{ext}" if dot else "")
+    return name or None
+
+
 def _filename(part: Message) -> str | None:
     name: str | None
     try:
@@ -496,8 +540,7 @@ def _filename(part: Message) -> str | None:
         name = email.utils.collapse_rfc2231_value(name)
     if not name:
         return None
-    decoded = decode_header(str(name)).replace("/", "_").replace("\\", "_")
-    return decoded[:255] or None
+    return display_filename(decode_header(str(name)))
 
 
 def _disposition(part: Message) -> str | None:
@@ -805,4 +848,5 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
         text_source=source,
         attachments=tuple(attachments),
         notes=tuple(notes),
+        leaves=tuple((sec, p.get_content_type()) for sec, p in iter_parts(msg)),
     )

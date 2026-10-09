@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from universal_email_mcp.config import Config, Limits
 from universal_email_mcp.errors import (
@@ -24,11 +24,14 @@ from universal_email_mcp.errors import (
     MailError,
     ProtocolError,
     StaleCursor,
+    TooLarge,
     UidValidityChanged,
 )
+from universal_email_mcp.mail.bodystructure import BodyLeaf, is_text_like
 from universal_email_mcp.mail.folders import decode_folder_name
 from universal_email_mcp.mail.imap import (
     MAX_RELATED_IDS,
+    AttachmentData,
     ImapSession,
     Namespace,
     QuotaInfo,
@@ -36,6 +39,7 @@ from universal_email_mcp.mail.imap import (
     SearchResult,
     ServerFeatures,
 )
+from universal_email_mcp.mail.mime import decode_text, sanitize_text, slice_text
 from universal_email_mcp.models import (
     Account,
     Address,
@@ -44,6 +48,7 @@ from universal_email_mcp.models import (
     Message,
     MessageRef,
     MessageSummary,
+    TextSlice,
 )
 from universal_email_mcp.service import folder_list, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourcePos, query_hash
@@ -82,6 +87,8 @@ OVERVIEW_HEADERS = 150
 OVERVIEW_CONTACTS = 20
 OVERVIEW_SENT_UPDATE = 500
 """The overview tops up an existing sent-to set by at most this many headers."""
+OVERVIEW_ROLES: tuple[FolderRole, ...] = ("inbox", "drafts", "junk")
+"""Special folders whose STATUS the account overview reads (three round trips)."""
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
 _THREAD_ROLES: tuple[FolderRole, ...] = ("inbox", "sent")
 _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "drafts"})
@@ -133,6 +140,33 @@ class MessagePage:
     """A cursor was given but nothing was left (the list changed)."""
 
 
+class DownloadLinks(Protocol):
+    """Hands out authenticated download links for attachments (remote mode: the
+    portal, WP 3g; local mode: a loopback listener with a token, later). The link
+    target streams the part from IMAP after the same verified section lookup as
+    :meth:`ImapSession.locate_part`. Links are server-generated and trusted."""
+
+    def attachment_url(self, ref: MessageRef, section: str) -> str | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialFolderStatus:
+    role: FolderRole
+    name: str
+    messages: int
+    unseen: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccountOverview:
+    """Cheap per-account numbers: the folder count from the cached LIST and STATUS
+    of a few special folders only (never a scan)."""
+
+    folders: int
+    selectable: int
+    special: tuple[SpecialFolderStatus, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class AccountDetails:
     account: Account
@@ -142,6 +176,23 @@ class AccountDetails:
     roles: dict[FolderRole, str]
     """Role → decoded folder name."""
     notes: tuple[str, ...] = ()
+    overview: AccountOverview | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentResult:
+    """``kind``: ``text`` (``text`` is a window of the decoded text), ``blob``
+    (``data`` are the decoded bytes) or ``link`` (over the cap, only
+    ``download_url``). ``download_url`` may accompany the other kinds."""
+
+    ref: MessageRef
+    leaf: BodyLeaf
+    kind: Literal["text", "blob", "link"]
+    size: int
+    size_exact: bool
+    text: TextSlice | None = None
+    data: bytes | None = None
+    download_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -287,12 +338,14 @@ class MailService:
         index: HeaderIndex | None = None,
         cursors: CursorCodec | None = None,
         viewer_base: str | None = None,
+        download_links: DownloadLinks | None = None,
     ) -> None:
         self.config = config
         self.router = router or AccountRouter(config)
         self.index = index or HeaderIndex()
         self.cursors = cursors or CursorCodec()
         self._viewer_base = viewer_base
+        self._download_links = download_links
         self._prefixes: dict[str, str] = {}
         self.sent_to = SentToIndex()
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
@@ -306,6 +359,10 @@ class MailService:
         if not self._viewer_base:
             return None
         return f"{self._viewer_base.rstrip('/')}/m/{ref.encode()}"
+
+    def attachment_url(self, ref: MessageRef, section: str) -> str | None:
+        """Download link for one attachment when a provider is configured."""
+        return self._download_links.attachment_url(ref, section) if self._download_links else None
 
     async def aclose(self) -> None:
         await self.router.aclose()
@@ -334,7 +391,7 @@ class MailService:
     # ------------------------------------------------------------ account_info
 
     async def account_info(
-        self, accounts: Sequence[str] | None
+        self, accounts: Sequence[str] | None, *, overview: bool = True
     ) -> tuple[list[AccountDetails], list[AccountProblem]]:
         selected, problems = self.router.select(accounts)
 
@@ -351,6 +408,24 @@ class MailService:
                 f.role: f.display_name for f in folders if f.role is not None
             }
             notes += session.role_warnings
+            summary: AccountOverview | None = None
+            if overview:
+                special: list[SpecialFolderStatus] = []
+                for role in OVERVIEW_ROLES:
+                    folder = next((f for f in folders if f.role == role and f.selectable), None)
+                    if folder is None:
+                        continue
+                    try:
+                        st = session.folder_status(folder.name)
+                    except MailError as e:
+                        notes.append(f"{folder.display_name}: status unavailable: {e.message}")
+                        continue
+                    special.append(
+                        SpecialFolderStatus(role, folder.display_name, st.messages, st.unseen)
+                    )
+                summary = AccountOverview(
+                    len(folders), sum(1 for f in folders if f.selectable), tuple(special)
+                )
             return AccountDetails(
                 account=acc,
                 features=session.features,
@@ -358,6 +433,7 @@ class MailService:
                 quota=quota,
                 roles=roles,
                 notes=tuple(notes),
+                overview=summary,
             )
 
         fan = await self._fan(selected, work)
@@ -761,6 +837,55 @@ class MailService:
             return await self.router.call(a, fn)
 
         return await self.router.run_one(acc, work)
+
+    # ------------------------------------------------------------ attachments
+
+    async def get_attachment(
+        self, message_id: str, attachment: str, *, offset: int, max_chars: int | None
+    ) -> AttachmentResult:
+        """One attachment of a message: text-like files as a window of decoded text,
+        other files as bytes, bigger than ``limits.max_attachment_bytes`` as a
+        download link (provider configured) or a :class:`TooLarge` error."""
+        ref, acc = self._ref(message_id)
+        if offset < 0:
+            raise InvalidArgument("offset must be ≥ 0")
+        chars = max(1, min(max_chars or self.limits.max_body_chars, self.limits.max_body_chars))
+        cap = self.limits.max_attachment_bytes
+
+        def fn(session: ImapSession) -> AttachmentData:
+            return session.fetch_attachment(ref, attachment, max_bytes=cap)
+
+        async def work(a: Account) -> AttachmentData:
+            return await self.router.call(a, fn)
+
+        got = await self.router.run_one(acc, work)
+        url = self.attachment_url(ref, got.leaf.section)
+        if got.data is None:
+            if url:
+                return AttachmentResult(
+                    ref, got.leaf, "link", got.size, got.exact, download_url=url
+                )
+            approx = "" if got.exact else "about "
+            raise TooLarge(
+                f"the attachment is {approx}{got.size} bytes; the limit is {cap} bytes "
+                "(limits.max_attachment_bytes)",
+                hint="Nothing was returned. Ask the user to open the attachment in their "
+                "mail client.",
+            )
+        if is_text_like(got.leaf, got.data):
+            text = sanitize_text(decode_text(got.data, got.leaf.charset))
+            return AttachmentResult(
+                ref,
+                got.leaf,
+                "text",
+                got.size,
+                True,
+                text=slice_text(text, chars, offset),
+                download_url=url,
+            )
+        return AttachmentResult(
+            ref, got.leaf, "blob", got.size, True, data=got.data, download_url=url
+        )
 
     # ------------------------------------------------------------ threads
 

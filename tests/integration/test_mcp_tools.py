@@ -241,6 +241,7 @@ async def test_tools_are_read_only_with_schemas(seeded: Seeded):
             "list_folders",
             "find_messages",
             "get_message",
+            "get_attachment",
             "find_contacts",
         }
         for t in tools.values():

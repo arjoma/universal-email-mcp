@@ -149,3 +149,8 @@ class AmbiguousFolder(MailError):
 class InvalidArgument(MailError):
     code = "INVALID_ARGUMENT"
     default_hint = "Check the tool arguments."
+
+
+class AttachmentNotFound(MailError):
+    code = "ATTACHMENT_NOT_FOUND"
+    default_hint = "Use an attachment id exactly as listed by get_message for this message."

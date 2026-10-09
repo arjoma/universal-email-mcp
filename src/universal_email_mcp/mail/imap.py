@@ -37,6 +37,7 @@ from imapclient.imapclient import SocketTimeout
 from imapclient.response_parser import parse_message_list
 
 from universal_email_mcp.errors import (
+    AttachmentNotFound,
     AuthFailed,
     FolderNotFound,
     InvalidRef,
@@ -47,10 +48,19 @@ from universal_email_mcp.errors import (
     TlsError,
     UidValidityChanged,
 )
+from universal_email_mcp.mail.bodystructure import (
+    SECTION_RE,
+    BodyLeaf,
+    attachments_for,
+    decoded_size,
+    find,
+    leaves,
+)
 from universal_email_mcp.mail.folders import RawFolder, assign_roles, decode_folder_name
 from universal_email_mcp.mail.mime import (
     SUMMARY_HEADERS,
     HeaderFields,
+    decode_transfer,
     parse_header_block,
     parse_message,
     sanitize_line,
@@ -373,6 +383,17 @@ def bodystructure_has_attachments(bs: Any, depth: int = 0) -> bool:
     if ctype == "image" and (disp_type == "inline" or (not disp_type and content_id)):
         return False
     return True
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentData:
+    """A fetched part. ``data`` is ``None`` when the part is over the size cap; ``size``
+    is then the (estimated unless ``exact``) decoded size."""
+
+    leaf: BodyLeaf
+    data: bytes | None
+    size: int
+    exact: bool
 
 
 # =========================================================================== session
@@ -1059,12 +1080,10 @@ class ImapSession:
     ) -> Message:
         """Full message (never sets ``\\Seen``). Messages larger than ``max_bytes``
         are fetched partially and parsed as far as possible (``source_truncated``)."""
-        if self.account_name and ref.account != self.account_name:
-            raise InvalidRef("message reference belongs to a different account")
-        wire, current, _exists = self._examine(ref.folder)
-        if ref.uidvalidity != current:
-            raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")
-        meta = self._fetch_raw([ref.uid], ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE"])
+        wire, current = self._open_message(ref)
+        meta = self._fetch_raw(
+            [ref.uid], ["UID", "FLAGS", "INTERNALDATE", "RFC822.SIZE", "BODYSTRUCTURE"]
+        )
         fields = meta.get(ref.uid)
         if fields is None:
             raise MessageNotFound(f"message {ref.uid} not found in {decode_folder_name(wire)!r}")
@@ -1080,20 +1099,90 @@ class ImapSession:
                 raw = value
                 break
         parsed = parse_message(raw)
+        attachments, att_notes = attachments_for(
+            parsed, leaves(fields.get(b"BODYSTRUCTURE")), truncated=truncated
+        )
         summary = _summary(
             MessageRef(ref.account, wire, current, ref.uid),
             fields,
             parsed.headers,
-            has_attachments=any(not a.inline for a in parsed.attachments),
+            has_attachments=any(not a.inline for a in attachments),
         )
         return Message(
             summary=summary,
             body=slice_text(parsed.text, max(1, max_body_chars), body_offset),
             body_source=parsed.text_source,
-            attachments=parsed.attachments,
+            attachments=attachments,
             source_truncated=truncated,
-            body_notes=parsed.notes,
+            body_notes=(*parsed.notes, *att_notes),
         )
+
+    def _open_message(self, ref: MessageRef) -> tuple[str, int]:
+        """EXAMINE the reference's folder and check account and UIDVALIDITY.
+        Returns ``(wire_name, uidvalidity)``."""
+        if self.account_name and ref.account != self.account_name:
+            raise InvalidRef("message reference belongs to a different account")
+        wire, current, _exists = self._examine(ref.folder)
+        if ref.uidvalidity != current:
+            raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")
+        return wire, current
+
+    # ------------------------------------------------------------ attachments
+
+    def locate_part(self, ref: MessageRef, section: str) -> BodyLeaf:
+        """The verified lookup shared by every way of reading an attachment (tool
+        result today, streamed download later): ``section`` must be a plain part
+        number and a leaf of the **server's** BODYSTRUCTURE of this very message;
+        type, encoding, size and name come from that same answer. Leaves the folder
+        selected (read-only) for :meth:`read_part_range`."""
+        if not SECTION_RE.match(section):
+            raise AttachmentNotFound(f"{section[:40]!r} is not an attachment id")
+        wire, _current = self._open_message(ref)
+        got = self._fetch_raw([ref.uid], ["UID", "BODYSTRUCTURE"]).get(ref.uid)
+        if got is None:
+            raise MessageNotFound(f"message {ref.uid} not found in {decode_folder_name(wire)!r}")
+        parts = leaves(got.get(b"BODYSTRUCTURE"))
+        if parts is None:
+            raise AttachmentNotFound("the server's message structure is unusable")
+        leaf = find(parts, section)
+        if leaf is None:
+            raise AttachmentNotFound(f"this message has no part {section}")
+        return leaf
+
+    def read_part_range(self, ref: MessageRef, section: str, offset: int, length: int) -> bytes:
+        """Raw (still transfer-encoded) bytes ``offset``..``offset+length`` of a part
+        of the selected folder (``BODY.PEEK``: never sets ``\\Seen``). Call
+        :meth:`locate_part` first and pass its ``section``; ranged so a streaming
+        download can read in chunks."""
+        if not SECTION_RE.match(section) or offset < 0 or length < 1:
+            raise AttachmentNotFound("invalid part range")
+        item = f"BODY.PEEK[{section}]<{offset}.{length}>"
+        got = self._fetch_raw([ref.uid], ["UID", item]).get(ref.uid)
+        if got is None:
+            raise MessageNotFound(f"message {ref.uid} vanished")
+        for key, value in got.items():
+            if key.startswith(b"BODY[") and isinstance(value, bytes):
+                return value
+        return b""
+
+    def fetch_attachment(self, ref: MessageRef, section: str, *, max_bytes: int) -> AttachmentData:
+        """Decoded bytes of one part, or only its metadata when it is bigger than
+        ``max_bytes`` (nothing is fetched then). Memory is bounded: the encoded
+        read never exceeds ``3 × max_bytes`` whatever the part claims."""
+        leaf = self.locate_part(ref, section)
+        est = decoded_size(leaf.encoding, leaf.size)
+        too_big = (
+            leaf.size > 3 * max_bytes if leaf.encoding == "quoted-printable" else est > max_bytes
+        )
+        if too_big:
+            return AttachmentData(leaf, None, est, exact=False)
+        if leaf.size == 0:
+            return AttachmentData(leaf, b"", 0, exact=True)
+        raw = self.read_part_range(ref, section, 0, min(leaf.size, 3 * max_bytes) + 1024)
+        data = decode_transfer(raw, leaf.encoding)
+        if len(data) > max_bytes:
+            return AttachmentData(leaf, None, len(data), exact=True)
+        return AttachmentData(leaf, data, len(data), exact=True)
 
 
 # =========================================================================== helpers

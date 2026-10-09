@@ -3,6 +3,20 @@
 Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 scope.
 
 ## Attachments
+- [ ] Attachment download endpoint behind `DownloadLinks` (portal in 3g, loopback
+      listener with token locally): stream the part in ranged
+      `BODY.PEEK[n]<offset.len>` reads (`ImapSession.locate_part` +
+      `read_part_range` exist; incremental transfer decoding is still missing —
+      `get_attachment` decodes a bounded part in memory).
+- [ ] Attachments of a forwarded `message/rfc822` are not addressable individually
+      (the whole .eml is one attachment); inner parts would be sections `2.1`, `2.2` …
+- [ ] `get_attachment` for ids is by section only; no lookup by file name. The
+      `──── part N` labels in bodies still use the parser's numbering, which can
+      differ from the server's on malformed messages (attachment ids never do).
+- [ ] Attachment sizes of base64 parts are exact only when the message was read
+      completely; otherwise estimated from the encoded size (76-column wrapping assumed).
+- [ ] Overview: no recent-mail or top-sender digest per account (the old
+      `mailbox_overview` idea); `find_contacts` and `find_messages` cover it.
 - [ ] Read and make sense of attachments: PDF text extraction (pypdf), then
       office formats (docx, xlsx, odt), images via the AI client (embedded resource).
 - [ ] Bounded extraction (page/char limits, timeouts, zip-bomb/resource guards).
@@ -67,11 +81,6 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       now capped at 50 folders per call; watch for flakiness in CI.
 
 ## Known issues from the sandbox corpus
-- [ ] Before attachment download ships: Python's MIME parser and Dovecot disagree
-      on malformed structures (multipart without boundary or with no parts → Dovecot
-      `1` text/plain, Python a multipart leaf; a child reusing its parent's
-      boundary → PDF `3` vs Dovecot `2.1`). Derive part sections from IMAP
-      BODYSTRUCTURE, or verify `BODY[n.MIME]` type/filename before returning bytes.
 - [ ] Threads: arrival order (INTERNALDATE) decides which claimant of a shared
       Message-ID owns it (is followed, kept first); a forgery that arrived before
       the genuine mail (or was APPENDed with an old date) wins, and any fetched
@@ -91,6 +100,5 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       look-alike domains (also needed for the send-time recipient check).
 - [ ] `probe` prints folder names to the terminal unsanitised (bidi overrides;
       other servers may allow terminal escape sequences).
-- [ ] After a partial fetch an attachment's size is reported as the truncated size.
 - [ ] Defanging of folder names is uneven (`http\[:\]attacker.test` keeps the
       dots); a fake code fence in a body is left as is.
