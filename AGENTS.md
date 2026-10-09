@@ -83,8 +83,10 @@ Code must treat it that way everywhere:
   locks, worker threads, deadlines, reconnect, parallel fan-out with partial
   results; backends per account kind), `mail.py` (`MailService`: the read
   operations), `index.py` (header cache per folder + UIDVALIDITY), `fuzzy.py`
-  (rapidfuzz matching, umlaut variants, folder resolution), `cursor.py` (signed
-  paging cursors), `timewindow.py` (`today`, `this_week` …).
+  (rapidfuzz matching, umlaut variants, folder resolution), `query.py` (**the one
+  `query` parameter of all list tools: wildcard pattern or fuzzy**),
+  `folder_list.py` (folder tree, drill-down and search for `list_folders`),
+  `cursor.py` (signed paging cursors), `timewindow.py` (`today`, `this_week` …).
 - `server/` — MCP layer: `app.py` (`build_server()`: tools, instructions, error
   results), `schemas.py` (output schemas), `render.py` (**`escape_cell()` — the one
   place that makes mail text safe in Markdown**), `local.py` (stdio mode).

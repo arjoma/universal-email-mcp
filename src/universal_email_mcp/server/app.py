@@ -515,15 +515,18 @@ def build_server(service: MailService) -> MCPServer:
             if show_score:
                 row.append(f"{e.score:.0f}" if e.score is not None else "–")
             rows.append(row)
-        where = (
-            "matching " + escape_cell(q.text, 60)
-            if q
-            else ("in " + escape_cell("; ".join(page.parent), 80) if page.parent else "top level")
-        )
+        if q:
+            where = "matching " + escape_cell(q.text, 60)
+        elif page.parent:
+            where = "in " + escape_cell("; ".join(page.parent), 80)
+        else:
+            where = "at the top level"
+        if not q and page.depth > 1:
+            where += f" ({page.depth} levels)"
         foot = [
             f"{page.offset + 1}–{page.offset + len(entries)} of {page.total} folders {where}"
             if entries
-            else f"no folders {where}"
+            else f"no {'sub' if page.parent and not q else ''}folders {where}"
         ]
         if page.cursor:
             foot.append(f"more: cursor=`{page.cursor}`")
@@ -794,7 +797,8 @@ def build_server(service: MailService) -> MCPServer:
             f"{MAX_CONTACT_DAYS}) on name and address: "
             + QUERY_RULES
             + " Ranked by match, then frequency × recency. sent_to=true means the "
-            "user has written to them. Paged: limit and next_cursor."
+            "user has written to them; sent/received/sent_to count only the mail read "
+            "(the overview: the last 7 days). Paged: limit and next_cursor."
         ),
         annotations=READ_ONLY,
     )

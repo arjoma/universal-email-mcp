@@ -420,10 +420,11 @@ class MailService:
         rows: list[FolderRow] = []
         near: list[str] = []
         parents: list[str] = []
+        missing = [name for name, r in fan.results.items() if r.missing]
+        if missing:
+            notes.append(f"{parent!r} not found in: {', '.join(missing)}")
         for name, r in fan.results.items():
             notes += r.notes
-            if r.missing:
-                notes.append(f"{name}: no folder matches {parent!r}")
             if r.ambiguous:
                 notes.append(f"{name}: {r.ambiguous.message}")
             if r.parent:
