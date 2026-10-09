@@ -89,7 +89,7 @@ def test_portal_pages_need_a_session(app):
 
 def test_sign_in_creates_the_main_account_and_identity(alice, store):
     page = alice.page("/portal/accounts")
-    assert "Main" in page and "imap.example.org" in page
+    assert "Main" in page and "<code>imap.example.org</code>" in page
     assert "<h1>Mail accounts</h1>" in page
     ident = alice.page("/portal/identities")
     assert "alice@example.org" in ident
@@ -170,7 +170,7 @@ def test_add_an_account_with_free_entry(alice, tester, store):
     (call,) = tester.calls
     assert call[0] == "imap" and call[1].host == "mail.example.net" and call[1].port == 993
     page = alice.page("/portal/accounts")
-    assert "Work" in page and "mail.example.net" in page
+    assert "Work" in page and "<code>mail.example.net</code>" in page
     assert "work-secret" not in page
 
 
@@ -254,7 +254,7 @@ def test_the_add_form_for_one_fixed_server(store, tester):
         b.signed_in()
         page = b.page("/portal/accounts/new")
         assert 'name="host"' not in page and 'name="server"' not in page
-        assert "imap.provider.example" in page
+        assert "<strong>Mail server</strong>: imap.provider.example" in page
         # a host posted anyway is ignored: the operator's server is used
         r = add_account(b, host="evil.example")
         assert r.status_code == 303
