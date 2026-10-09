@@ -4,11 +4,11 @@
 {% block body %}
 <p class="actions"><a href="/m/{{ mid }}">{{ _("Back to the message") }}</a></p>
 {% if partial %}<p class="note">{{ _("Some mail accounts did not answer, so the conversation may be incomplete.") }}</p>{% endif %}
-{% for n in notes %}<p class="hint">{{ n }}</p>{% endfor %}
+{% for n in notes %}<p class="hint">{{ n|tr }}</p>{% endfor %}
 {% for it in items %}
 <details class="thread-item"{% if it.current %} open{% endif %}>
   <summary>
-    {{ it.date }} - {{ m.people(it.sender) }}{% if it.subject %} - {{ it.subject }}{% endif %}
+    {{ it.date|when }} - {{ m.people(it.sender) }}{% if it.subject %} - {{ it.subject }}{% endif %}
     {% if it.current %}<span class="badge">{{ _("this message") }}</span>{% endif %}
   </summary>
   {% if it.text %}

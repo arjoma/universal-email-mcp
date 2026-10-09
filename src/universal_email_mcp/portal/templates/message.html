@@ -55,7 +55,7 @@
 {% else %}
   {% if html_failed %}<p class="note">{{ _("The formatted version cannot be shown (it is too complex). This is the plain text.") }}</p>{% endif %}
   <h2>{{ _("Message text") }}</h2>
-  {% for n in msg.notes %}<p class="hint">{{ n }}</p>{% endfor %}
+  {% for n in msg.notes %}<p class="hint">{{ n|tr }}</p>{% endfor %}
   <pre class="mailtext" dir="auto">{{ msg.text }}</pre>
   {% if msg.more %}<p class="note">{{ _("The text is shortened. Download the message (.eml) to get everything.") }}</p>{% endif %}
 {% endif %}

@@ -17,7 +17,7 @@
     {% set account = e.account if e.account else _("a mail account that no longer exists") %}
     {% set n = e.counts.succeeded|default(0) %}
     <tr>
-      <td>{{ e.when }}</td>
+      <td>{{ e.when|when }}</td>
       <td>
         {%- if e.event == "auth.sign_in" %}{{ _("You signed in to the portal.") }}
         {%- elif e.event == "auth.consent" %}{% trans client=client %}You connected {{ client }}.{% endtrans %}

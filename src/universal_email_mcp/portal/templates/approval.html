@@ -2,7 +2,7 @@
 {% block title %}{{ _("Approve this message?") }}{% endblock %}
 {% block heading %}{{ _("Approve this message?") }}{% endblock %}
 {% block body %}
-<p class="hint">{{ _("Requested by") }} <strong>{% if approval.client %}{{ approval.client }}{% else %}{{ _("an application") }}{% endif %}</strong>, {{ approval.created }}.</p>
+<p class="hint">{% trans who=approval.client or _("an application"), created=approval.created|when %}Requested by <strong>{{ who }}</strong>, {{ created }}.{% endtrans %}</p>
 {% if approval.state == "expired" %}
 <p class="note" role="alert">{{ _("This request has expired. Nothing was sent. The message is still in your Drafts folder; ask the application to send it again if you want it to go out.") }}</p>
 {% elif approval.state == "rejected" %}
@@ -28,8 +28,8 @@
     <dd>
       <ul class="plain">
         {% for r in view.recipients %}
-        <li>{{ r.label }}: {{ r.address }} <span class="badge{% if r.flagged %} danger{% endif %}">{{ r.tag }}</span>
-          {% for n in r.notes %}<br><span class="error">! {{ n }}</span>{% endfor %}</li>
+        <li>{% if r.field == "to" %}{{ _("To") }}{% elif r.field == "cc" %}{{ _("Cc") }}{% else %}{{ _("Bcc") }}{% endif %}: {{ r.address }} <span class="badge{% if r.flagged %} danger{% endif %}">{{ r.tag|tr }}</span>
+          {% for n in r.notes %}<br><span class="error">! {{ n|tr }}</span>{% endfor %}</li>
         {% endfor %}
       </ul>
       {% if view.has_bcc %}<span class="hint">{{ _("Bcc recipients are hidden from the others.") }}</span>{% endif %}
@@ -43,42 +43,42 @@
     </dd>
     {% endif %}
     {% if view.reasons %}
-    <dt>{{ _("Why you are asked") }}</dt><dd>{% for r in view.reasons %}{{ r }}{% if not loop.last %}; {% endif %}{% endfor %}</dd>
+    <dt>{{ _("Why you are asked") }}</dt><dd>{% for r in view.reasons %}{{ r|tr }}{% if not loop.last %}; {% endif %}{% endfor %}</dd>
     {% endif %}
   </dl>
   <h2>{{ _("Text") }}</h2>
   {% if view.text %}
   <pre class="mailtext">{% for line in view.text %}{{ line }}
 {% endfor %}</pre>
-  {% if view.text_note %}<p class="error">{{ view.text_note }}</p>{% endif %}
+  {% if view.text_note %}<p class="error">{{ view.text_note|tr }}</p>{% endif %}
   {% elif view.has_text %}<p class="note">{{ _("(empty)") }}</p>
   {% else %}<p class="note">{{ _("(no plain text)") }}</p>{% endif %}
-  {% if view.preview_note %}<p class="error">{{ view.preview_note }}</p>{% endif %}
+  {% if view.preview_note %}<p class="error">{{ view.preview_note|tr }}</p>{% endif %}
   {% if view.html %}
-  <h2>{{ view.html_heading }}</h2>
+  <h2>{{ view.html_heading|tr }}</h2>
   <pre class="mailtext">{% for line in view.html %}{{ line }}
 {% endfor %}</pre>
-  {% if view.html_note %}<p class="error">{{ view.html_note }}</p>{% endif %}
+  {% if view.html_note %}<p class="error">{{ view.html_note|tr }}</p>{% endif %}
   {% endif %}
   {% for part in view.extra_parts %}
-  <h2>{{ part.heading }}</h2>
+  <h2>{{ part.heading|tr }}</h2>
   {% if part.lines %}<pre class="mailtext">{% for line in part.lines %}{{ line }}
 {% endfor %}</pre>{% endif %}
-  {% if part.note %}<p class="error">{{ part.note }}</p>{% endif %}
+  {% if part.note %}<p class="error">{{ part.note|tr }}</p>{% endif %}
   {% endfor %}
-  {% if view.images_warning %}<p class="error">{{ view.images_warning }}</p>{% endif %}
+  {% if view.images_warning %}<p class="error">{{ view.images_warning|tr }}</p>{% endif %}
   {% if view.quoted %}
   <details>
     <summary>{% trans count=view.quoted|length %}Quoted text: {{ count }} line (not part of what the application wrote; expand to read){% pluralize %}Quoted text: {{ count }} lines (not part of what the application wrote; expand to read){% endtrans %}</summary>
     <pre class="mailtext">{% for line in view.quoted %}{{ line }}
 {% endfor %}</pre>
-    {% if view.quoted_note %}<p class="error">{{ view.quoted_note }}</p>{% endif %}
+    {% if view.quoted_note %}<p class="error">{{ view.quoted_note|tr }}</p>{% endif %}
   </details>
   {% endif %}
-  {% for w in view.warnings %}<p class="hint">{{ w }}</p>{% endfor %}
+  {% for w in view.warnings %}<p class="hint">{{ w|tr }}</p>{% endfor %}
 </section>
 {% if approval.state == "pending" and not problem %}
-<p class="hint">{{ _("Sending cannot be taken back. This request is valid until") }} {{ approval.expires }}. {{ _("Approving needs your password again if you have not typed it in the last minutes.") }}</p>
+<p class="hint">{% trans expires=approval.expires|when %}Sending cannot be taken back. This request is valid until {{ expires }}. Approving needs your password again if you have not typed it in the last minutes.{% endtrans %}</p>
 <form method="post" action="/portal/approvals/{{ approval.id }}">
   {{ m.csrf() }}
   <div class="buttons">

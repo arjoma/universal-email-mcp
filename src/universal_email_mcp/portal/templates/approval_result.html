@@ -10,6 +10,6 @@
 {% else %}
 <p class="note" role="alert">{{ _("The message was not sent. It stays in your Drafts folder.") }}</p>
 {% endif %}
-{% if steps %}<ul>{% for s in steps %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}
+{% if steps %}<ul>{% for s in steps %}<li>{{ s|tr }}</li>{% endfor %}</ul>{% endif %}
 <p><a class="button" href="/portal/approvals">{{ _("Back to pending approvals") }}</a></p>
 {% endblock %}

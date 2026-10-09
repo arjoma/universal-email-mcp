@@ -34,7 +34,7 @@ from universal_email_mcp.oauth.redirects import display_host
 from universal_email_mcp.portal import ops
 from universal_email_mcp.portal.activity import ActivityPages
 from universal_email_mcp.portal.approvals import ApprovalPages
-from universal_email_mcp.portal.i18n import LANG_COOKIE, language_name
+from universal_email_mcp.portal.i18n import LANG_COOKIE, TIME_FORMAT, language_name
 from universal_email_mcp.portal.privacy import PrivacyPages
 from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.portal.web import client_ip, security_headers
@@ -92,7 +92,7 @@ def safe_next(value: object, default: str = "/portal/accounts") -> str:
 
 
 def fmt_time(dt: datetime | None) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else ""
+    return dt.strftime(TIME_FORMAT) if dt else ""
 
 
 def single_line(value: object, limit: int) -> str:
