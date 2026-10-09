@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Documentation: administrator guide, user guide, GDPR notes for operators and a DPIA template
+  (`docs/admin-guide.md`, `docs/user-guide.md`, `docs/gdpr.md`, `docs/dpia-template.md`), linked
+  from the README.
+
 - Rate limits (`docs/operator-env.md#rate-limits`): every in-memory limit is now one `RateLimits`
   inventory with `UEM_RATE_*` variables (`COUNT/WINDOW`, validated). New: MCP tool calls per user
   and per grant (burst and sustained windows, tighter for tools that change something; the

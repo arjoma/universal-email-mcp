@@ -269,6 +269,16 @@ Remote mode keeps users, accounts, sessions and tokens in a store (memory or Fir
 secrets encrypted with a rotatable key ring, no mail content): see
 [docs/stored-data.md](https://github.com/arjoma/universal-email-mcp/blob/main/docs/stored-data.md).
 
+## Documentation
+
+| For | Document |
+|---|---|
+| Operators: local and remote setup, policy, keys, backups, monitoring, incidents, troubleshooting | [`docs/admin-guide.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/admin-guide.md) |
+| End users: connecting a client, the portal, sending and approvals, safety tips | [`docs/user-guide.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/user-guide.md) |
+| Data protection: GDPR notes and a fill-in DPIA | [`docs/gdpr.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/gdpr.md), [`docs/dpia-template.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/dpia-template.md) |
+| Reference (remote mode) | [`operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md), [`deploy-gcp.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/deploy-gcp.md), [`oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md), [`portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md), [`stored-data.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/stored-data.md), [`audit.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/audit.md) |
+| Design and roadmap | [`docs/plans/`](https://github.com/arjoma/universal-email-mcp/tree/main/docs/plans) |
+
 ## Development
 
 To try the server without a real mailbox, start the sandbox: a throw-away local
