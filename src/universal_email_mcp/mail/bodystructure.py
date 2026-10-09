@@ -120,19 +120,22 @@ def _rfc2231(params: dict[str, str], name: str) -> str | None:
             m = re.match(r"([^']*)'[^']*'(.*)", v, re.S)
             if m:
                 charset_prefix, v = m[1], m[2]
-        parts.append(
-            urllib.parse.unquote(v, charset_prefix or "utf-8", "replace") if encoded else v
-        )
+        parts.append(_unquote(v, charset_prefix) if encoded else v)
     return "".join(parts)
 
 
 def _percent(value: str, *, extended: bool) -> str:
     m = re.match(r"([^']*)'[^']*'(.*)", value, re.S) if extended else None
     charset, rest = (m[1], m[2]) if m else ("", value)
+    return _unquote(rest, charset)
+
+
+def _unquote(value: str, charset: str) -> str:
+    """Percent-decode; an unknown charset (attacker-chosen) falls back to UTF-8."""
     try:
-        return urllib.parse.unquote(rest, charset or "utf-8", "replace")
-    except LookupError:
-        return urllib.parse.unquote(rest, "utf-8", "replace")
+        return urllib.parse.unquote(value, charset or "utf-8", "replace")
+    except (LookupError, UnicodeError):
+        return urllib.parse.unquote(value, "utf-8", "replace")
 
 
 def _leaf(section: str, part: Sequence[Any], in_alternative: bool) -> BodyLeaf:
@@ -197,7 +200,7 @@ def leaves(bs: Any) -> list[BodyLeaf] | None:
 
     try:
         return out if walk(bs, "", 0, False) else None
-    except (TypeError, ValueError, IndexError, RecursionError):
+    except (TypeError, ValueError, IndexError, LookupError, RecursionError):
         return None
 
 
@@ -291,3 +294,22 @@ def is_text_like(leaf: BodyLeaf, data: bytes) -> bool:
     if (leaf.charset or "").lower().replace("-", "").startswith(("utf16", "utf32", "ucs")):
         return True
     return b"\x00" not in data[:8192]
+
+
+_IMAGE_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def sniff_image(data: bytes) -> str | None:
+    """Raster image type by magic bytes (never by the declared type), else ``None``.
+    SVG is deliberately not included: it is text."""
+    for magic, mime in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None

@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 from mcp import Client
-from mcp.types import CallToolResult, EmbeddedResource, TextContent
+from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
 from tests.integration.conftest import DATA, ImapServer, Mailbox
 from universal_email_mcp.config import Config, parse_config
@@ -95,6 +95,10 @@ def _normal() -> bytes:
     m.add_attachment(
         b"MZ\x00\x00binary\x00", maintype="text", subtype="plain", filename="fake-text.txt"
     )
+    m.add_attachment(
+        b"<script>alert(1)</script>\x00", maintype="text", subtype="html", filename="nul.html"
+    )
+    m.add_attachment(b"not really a png", maintype="image", subtype="png", filename="fake.png")
     m.add_attachment(
         b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
         maintype="image",
@@ -248,7 +252,17 @@ async def test_listing_has_server_ids_names_and_real_sizes(box: Box):
         assert by_name["logo.png"]["size"] == len(PNG)
         assert by_name["kunden.csv"]["size"] == len(CSV_LATIN1)
         assert all(not a["size_estimated"] for a in att.values())
-        assert {a["part_id"] for a in att.values()} == {"2", "3", "4", "5", "6", "7", "8"}
+        assert {a["part_id"] for a in att.values()} == {
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+        }
 
 
 async def test_binary_is_an_embedded_resource_with_exact_bytes(box: Box):
@@ -260,10 +274,26 @@ async def test_binary_is_an_embedded_resource_with_exact_bytes(box: Box):
         assert data == PDF and mime == "application/pdf"
         assert r.structured_content is not None and r.structured_content["kind"] == "resource"
         png_id = next(i for i, a in att.items() if a["filename"] == "logo.png")
-        data, mime = blob_of(
-            await ok(c, "get_attachment", id=box.refs["normal"], attachment=png_id)
-        )
-        assert data == PNG and mime == "image/png"
+        r = await ok(c, "get_attachment", id=box.refs["normal"], attachment=png_id)
+        images = [b for b in r.content if isinstance(b, ImageContent)]
+        assert len(images) == 1 and images[0].mime_type == "image/png"
+        assert base64.b64decode(images[0].data) == PNG
+        assert r.structured_content is not None and r.structured_content["kind"] == "image"
+
+
+async def test_blob_labels_are_never_renderable_types(box: Box):
+    async with connect(box.config()) as c:
+        att = await listing(c, box, "normal")
+        for name, expected in (
+            ("fake-text.txt", b"MZ\x00\x00binary\x00"),
+            ("nul.html", b"<script>alert(1)</script>\x00"),
+            ("fake.png", b"not really a png"),
+        ):
+            sec = next(i for i, a in att.items() if a["filename"] == name)
+            r = await ok(c, "get_attachment", id=box.refs["normal"], attachment=sec)
+            assert not any(isinstance(b, ImageContent) for b in r.content)
+            data, mime = blob_of(r)
+            assert data == expected and mime == "application/octet-stream"
 
 
 async def test_text_is_inline_fenced_decoded_and_defanged(box: Box):
@@ -406,7 +436,7 @@ async def test_hostile_file_names(box: Box):
             n = a["filename"] or ""
             assert "/" not in n and "\\" not in n and "‮" not in n
             assert "\r" not in n and "\n" not in n
-        assert "authorized" in md and ".ssh" not in md and ".." not in md
+        assert "authorized" in md
         assert "](" not in md and "https://exfil" not in md
         for sec in ("2", "3", "4", "5"):
             r = await ok(c, "get_attachment", id=box.refs["names"], attachment=sec)

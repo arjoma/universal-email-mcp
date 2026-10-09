@@ -3,6 +3,9 @@
 Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 scope.
 
 ## Attachments
+- [ ] Measure how Claude Code, Claude Desktop and claude.ai handle embedded blob
+      resources and image content (part of the client matrix) and tune the default
+      `limits.max_attachment_bytes` (now 2 MiB).
 - [ ] Attachment download endpoint behind `DownloadLinks` (portal in 3g, loopback
       listener with token locally): stream the part in ranged
       `BODY.PEEK[n]<offset.len>` reads (`ImapSession.locate_part` +

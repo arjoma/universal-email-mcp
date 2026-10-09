@@ -156,9 +156,10 @@ class AttachmentContent(_Model):
     content_type: str = Field(description="As declared by the sender (untrusted).")
     size: int = Field(description="Decoded size in bytes (estimated when size_exact is false).")
     size_exact: bool
-    kind: Literal["text", "resource", "link"] = Field(
+    kind: Literal["text", "resource", "image", "link"] = Field(
         description=(
             "text: 'text' holds a window of the decoded file, fenced as untrusted; "
+            "image: a raster image (checked by its magic bytes) as image content; "
             "resource: the file is attached as an embedded resource (base64 blob) "
             "in the result's content; link: too large to return, use download_url."
         )
