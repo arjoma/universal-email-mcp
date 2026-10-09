@@ -364,6 +364,8 @@ class Sender:
         """Re-read an existing draft from the server and work out the send."""
         self._allowed()
         ref = MessageRef.decode(draft_id)
+        if ref.is_pop3:
+            raise NotPermitted("POP3 accounts are read-only: that is not a draft id")
         acc = self.drafter.account_for(ref.account, "drafts")
         max_bytes = self.config.limits.max_send_bytes
 
