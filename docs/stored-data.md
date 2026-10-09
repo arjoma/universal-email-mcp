@@ -58,11 +58,34 @@ entries with event `send` (one per completed send, written with the send itself)
 
 ### Privacy: export and delete
 
-`Store.export_user(user_id)` returns everything stored about a user as plain data (passwords,
-token digests, draft references and keys left out). `Store.delete_user(user_id)` removes every record of the
-user (accounts, identities, sessions, grants, tokens, codes, approvals, activity, the user
-itself) and returns counts; run it again if it was interrupted. OAuth clients are shared
-across users and not personal data.
+The portal's Privacy page (`/portal/privacy`, see [portal.md](portal.md)) uses two store
+methods.
+
+**Export.** `Store.export_user(user_id)` returns the user's records as plain data, and the portal
+builds the download from it (format `universal-email-mcp-export`, field `version`, currently 1):
+the user (primary address, created, default identity, the 14-character pseudonym that appears
+in the operator's logs), mail accounts (name, protocol, host, port, TLS, login name, preset,
+permissions, created, `auth_failed_at`), sender identities (addresses, display name, signature,
+SMTP host/port/login, flags), connected applications (grants: client name and id, accounts,
+scopes, created, last used, expiry), the activity feed and pending approvals (identity, grant,
+status, times). Left out by design: passwords (incoming and SMTP), the `auth_failed_mark`
+digest, token, session and authorization-code records (only counts appear under
+`not_exported`), digests and record ids that are derived from a secret, draft references, the
+content hash of an approval, send markers, the full user pseudonym (`user_id` of every
+record), unknown fields written by a newer version, key material and CSRF values. Mail content
+is not stored, so it is not exported. What a record excludes is declared on its class
+(`EXPORT_EXCLUDE`); a record whose id is a digest of a bearer secret must list `id`.
+
+**Delete.** `Store.delete_user(user_id)` removes every record keyed to the user, also expired
+ones, in the order of `records.DELETE_ORDER`: grants first (an access or refresh token is only
+valid while its grant exists, so every token of the user is dead after the first step), then
+tokens, authorization codes, approvals and send markers, sign-in sessions, mail accounts,
+identities, activity, and the user record last; a final sweep removes what a request in flight
+wrote meanwhile. It returns counts per kind. Every step is a delete by id, so a crash midway
+leaves a user who can sign in again and repeat the deletion; the second run finishes the job.
+OAuth clients are shared across users and not personal data (they expire when unused). The
+tests fail when a record type is added without deciding whether it is per-user and where it
+goes in `DELETE_ORDER`.
 
 ## Encryption
 

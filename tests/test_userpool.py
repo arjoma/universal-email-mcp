@@ -419,6 +419,24 @@ async def test_viewer_context_is_rebuilt_when_an_account_changes():
     await h.pool.aclose()
 
 
+async def test_forget_user_retires_only_that_users_contexts():
+    h = Harness(PoolSettings(), [0.0])
+    await h.store.create(record("alice", "Mine"))
+    await h.store.create(record("bob", "Mine"))
+    a = await h.pool.lease_viewer("alice")
+    b = await h.pool.lease_viewer("bob")
+    assert h.pool.forget_user("alice") == 1
+    assert a.retired and not b.retired
+    h.pool.release(a)  # the lease in flight finishes, then the context closes
+    await asyncio.sleep(0)
+    assert h.pool.forget_user("alice") == 0
+    fresh = await h.pool.lease_viewer("alice")
+    assert fresh is not a  # nothing of the old context is reused
+    h.pool.release(fresh)
+    h.pool.release(b)
+    await h.pool.aclose()
+
+
 async def test_mcp_contexts_carry_portal_links():
     from universal_email_mcp.models import MessageRef
 

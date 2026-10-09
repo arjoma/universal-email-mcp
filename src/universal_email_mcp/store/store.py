@@ -798,7 +798,7 @@ def _when(rec: Record) -> datetime:
 def _export(rec: Record) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for f in dataclasses.fields(rec):
-        if f.name in rec.EXPORT_EXCLUDE or f.name in _META_FIELDS - {"id"}:
+        if f.name in rec.EXPORT_EXCLUDE or f.name == "user_id" or f.name in _META_FIELDS - {"id"}:
             continue
         value = getattr(rec, f.name)
         out[f.name] = value.isoformat() if isinstance(value, datetime) else _plain(value)
