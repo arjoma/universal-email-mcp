@@ -678,7 +678,7 @@ class Sender:
         """Do what was decided. A new message is stored as a draft first, so every
         outcome but a clean send leaves it behind."""
         out = p.out
-        base = dict(
+        base: dict[str, Any] = dict(
             account=p.smtp_account.name,
             recipients=count_by_class(p.classified),
             attachments=len(out.attachments),
@@ -686,7 +686,7 @@ class Sender:
             mode=self.config.policy.send,
             **(self.remote.audit_fields() if self.remote else {}),
         )
-        audit.event("send.requested", **base)
+        await audit.record("send.requested", **base)
         result = SendResult(
             status="draft_kept",
             account=p.smtp_account.name,
@@ -711,17 +711,17 @@ class Sender:
         result.draft_id = p.ref.encode() if p.ref else None
         if p.keep_reason is not None:
             result.reasons = [p.keep_reason]
-            audit.event("send.draft_kept", **base, reason="policy")
+            await audit.record("send.draft_kept", **base, reason="policy")
             return result
         if p.needs_confirmation:
             if decision == "accepted":
                 result.confirmation = "asked"
-                audit.event("send.confirmed", **base)
+                await audit.record("send.confirmed", **base)
             elif decision in ("declined", "cancelled"):
                 result.confirmation = "asked"
                 result.status = "declined"
                 result.reasons = [*p.reasons, f"the user {decision} the confirmation"]
-                audit.event("send.declined", **base, outcome=decision)
+                await audit.record("send.declined", **base, outcome=decision)
                 return result
             else:
                 return await self._fallback(p, result, base)
@@ -736,7 +736,7 @@ class Sender:
         mode = self.config.policy.send_fallback if self.remote is not None else "draft"
         if mode == "send-unless-flagged" and not is_flagged(p.classified):
             result.confirmation = "fallback"
-            audit.event("send.fallback_send", **base)
+            await audit.record("send.fallback_send", **base)
             return await self._deliver(p, result, base)
         result.confirmation = "unavailable"
         if mode != "draft" and self.remote is not None and p.ref is not None:
@@ -750,13 +750,13 @@ class Sender:
                 "the client cannot ask the user for confirmation here, so the user has to "
                 "approve this message in the portal first",
             ]
-            audit.event("send.approval_requested", **base, approval=ticket.id)
+            await audit.record("send.approval_requested", **base, approval=ticket.id)
             return result
         result.reasons = [
             *p.reasons,
             "the client cannot ask the user for confirmation, so the mail stays a draft",
         ]
-        audit.event("send.draft_kept", **base, reason="no_confirmation")
+        await audit.record("send.draft_kept", **base, reason="no_confirmation")
         return result
 
     async def _deliver(
@@ -774,7 +774,7 @@ class Sender:
                 await self.remote.check_rate()
                 claimed = content_hash(out.raw)
                 if not await self.remote.claim(claimed):
-                    audit.event("send.replay_refused", **base)
+                    await audit.record("send.replay_refused", **base)
                     raise AlreadySent(
                         "this exact message was sent a moment ago (or is being sent)",
                         hint="Nothing was sent again. Change the message if a second copy "
@@ -804,7 +804,7 @@ class Sender:
                 try:
                     receipt = await asyncio.to_thread(run)
                 except MailError as e:
-                    audit.event("send.failed", **base, code=e.code)
+                    await audit.record("send.failed", **base, code=e.code)
                     if not isinstance(e, SendOutcomeUnknown):
                         # unknown outcome: the mail may be out, so the claim stays (no resend)
                         await self._unclaim(claimed)
@@ -814,7 +814,7 @@ class Sender:
                         )
                     raise
                 except Exception:
-                    audit.event("send.failed", **base, code="UNEXPECTED")
+                    await audit.record("send.failed", **base, code="UNEXPECTED")
                     await self._unclaim(claimed)
                     raise
                 if mid:
@@ -824,7 +824,7 @@ class Sender:
                     await self._record_remote()
             finally:
                 self._in_flight.discard(mid)
-        audit.event("send.sent", **base)
+        await audit.record("send.sent", **base)
         result.status = "sent"
         result.receipt = receipt.reply
         result.draft_id = None

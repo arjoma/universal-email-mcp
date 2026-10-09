@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -28,6 +30,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import BaseRoute
 
+from universal_email_mcp import audit
 from universal_email_mcp.config import Config, Downloads
 from universal_email_mcp.jsonlog import setup_json_logging
 from universal_email_mcp.operator import OperatorConfig
@@ -140,10 +143,21 @@ def uvicorn_config(app: Any, op: OperatorConfig, **extra: Any) -> uvicorn.Config
     )
 
 
+def setup_audit(op: OperatorConfig) -> None:
+    """Audit events as JSON lines on stdout (Cloud Logging), keyed by the pseudonym key."""
+    audit.setup(sys.stdout)
+    audit.configure(
+        key=op.pseudonym_key or None,
+        instance=os.environ.get("K_REVISION", ""),
+        log_ip=op.audit_log_client_ip,
+    )
+
+
 async def serve_oauth(op: OperatorConfig) -> None:
     from universal_email_mcp.oauth.app import build_oauth_app
 
     setup_json_logging(op.log_level)
+    setup_audit(op)
     assert op.store is not None
     if op.store.ephemeral_keys:
         log.warning("STORE_BACKEND=memory without STORE_KEYS: state and keys are lost on restart")
@@ -163,6 +177,7 @@ def run_serve_oauth(op: OperatorConfig) -> None:
 
 async def serve(op: OperatorConfig, config: Config) -> None:
     setup_json_logging(op.log_level)
+    setup_audit(op)
     if op.dev_token is None:
         log.warning("INSECURE dev mode: /mcp is open; listening on %s only", op.host)
     else:

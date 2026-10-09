@@ -57,7 +57,6 @@ from universal_email_mcp.errors import (
 )
 from universal_email_mcp.mail.htmlview import TooComplex, csp
 from universal_email_mcp.models import Message
-from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.portal.pages import Auth, PortalEndpoints
 from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.server import render
@@ -269,9 +268,9 @@ class ViewerEndpoints(PortalEndpoints):
                 if view and view.document
                 else ""
             )
-            self.svc.audit(
+            await self.svc.audit(
                 "viewer.open",
-                user=short_id(auth.user.id),
+                user=auth.user.id,
                 kind="message",
                 html=bool(frame),
                 attachments=len(msg.attachments),
@@ -318,8 +317,8 @@ class ViewerEndpoints(PortalEndpoints):
                 )
                 item["current"] = e.summary_id == mid
                 items.append(item)
-            self.svc.audit(
-                "viewer.open", user=short_id(auth.user.id), kind="thread", messages=len(items)
+            await self.svc.audit(
+                "viewer.open", user=auth.user.id, kind="thread", messages=len(items)
             )
             return self._page(
                 request,
@@ -340,9 +339,7 @@ class ViewerEndpoints(PortalEndpoints):
         async def handler(auth: Auth, viewer: Viewer, mid: str) -> Response:
             viewer.resolve(mid)
             lines = await viewer.headers(mid)
-            self.svc.audit(
-                "viewer.raw", user=short_id(auth.user.id), kind="headers", lines=len(lines)
-            )
+            await self.svc.audit("viewer.raw", user=auth.user.id, kind="headers", lines=len(lines))
             return self._page(
                 request,
                 "headers.html",
@@ -452,7 +449,7 @@ class ViewerEndpoints(PortalEndpoints):
         if dl.length is not None:
             headers["content-length"] = str(dl.length)
         kind = "eml" if not section else "attachment"
-        user = short_id(auth.user.id)
+        user = auth.user.id
         if request.method == "HEAD":
             await dl.chunks.aclose()
             await stack.aclose()
@@ -471,7 +468,7 @@ class ViewerEndpoints(PortalEndpoints):
                 complete = True
             finally:
                 await stack.aclose()
-                self.svc.audit(
+                await self.svc.audit(
                     "viewer.raw" if kind == "eml" else "attachment.download",
                     user=user,
                     kind=kind,

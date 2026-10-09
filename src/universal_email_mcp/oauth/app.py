@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from starlette.applications import Starlette
 
+from universal_email_mcp import audit
 from universal_email_mcp.config import Policy
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import TlsSettings
@@ -142,6 +143,8 @@ async def build_oauth_app(
     from universal_email_mcp.server.serve import http_settings, mcp_group
 
     store = store or make_store(op)
+    audit.configure(key=op.pseudonym_key or None, log_ip=op.audit_log_client_ip)
+    audit.configure_feed(store.record_activity)
     cfg = make_config(op, rate_limits=rate_limits)
     svc = build_service(op, store, cfg, fetch_policy=fetch_policy, login=login)
     pool = UserPool(store, op, build_server, tls=mail_tls or TlsSettings())
@@ -178,6 +181,7 @@ async def build_oauth_app(
         try:
             yield
         finally:
+            audit.configure_feed(None)
             await pool.aclose()
             if purger is not None:
                 purger.cancel()

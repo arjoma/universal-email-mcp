@@ -178,8 +178,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 
 
 def _cmd_local(args: argparse.Namespace) -> int:
+    from universal_email_mcp import audit
     from universal_email_mcp.server.local import run_local
 
+    audit.configure(key=audit.local_key())  # per-install pseudonym key; events go to stderr
     run_local(_load_config(args.config))
     return 0
 

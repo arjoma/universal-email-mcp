@@ -42,7 +42,6 @@ from universal_email_mcp.oauth.config import (
     SCOPE_SEND,
     permission_of,
 )
-from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.oauth.redirects import (
     RedirectError,
     csp_form_target,
@@ -209,7 +208,7 @@ class OAuthEndpoints:
             return parsed
         session = await self._session(request)
         if not self.svc.portal.check_csrf(request, form):
-            self.svc.audit("auth.csrf_failed")
+            await self.svc.audit("auth.csrf_failed")
             if session is None:
                 return self._signin_page(request, parsed, error="csrf", status=403)
             return await self._consent_page(request, parsed, session, error="csrf", status=403)
@@ -221,7 +220,7 @@ class OAuthEndpoints:
         if session is None:
             return self._back_to_authorize(request, parsed)
         if action == "deny":
-            self.svc.audit("auth.consent", outcome="denied", client=_clip(parsed.client.id))
+            await self.svc.audit("auth.consent", outcome="denied", client=parsed.client.id)
             return self._redirect_back(parsed, error="access_denied")
         if action == "approve":
             return await self._approve(request, form, parsed, session)
@@ -239,7 +238,7 @@ class OAuthEndpoints:
             client = await svc.clients.resolve(client_id, ip=ip)
         except ClientError as e:
             log_event(log, logging.INFO, "client refused", event="auth.client", reason=e.detail)
-            svc.audit("auth.client_refused", client=_clip(client_id))
+            await svc.audit("auth.client_refused", client=client_id)
             busy = "Too many requests" in str(e)
             return _error_page(svc, request, "busy" if busy else "client", 429 if busy else 400)
         redirect_uri = params.get("redirect_uri", "")
@@ -252,7 +251,7 @@ class OAuthEndpoints:
         except RedirectError:
             return _error_page(svc, request, "redirect")
         if not redirect_matches(client.redirect_uris, redirect_uri):
-            svc.audit("auth.redirect_refused", client=_clip(client_id))
+            await svc.audit("auth.redirect_refused", client=client_id)
             return _error_page(svc, request, "redirect")
 
         state = params.get("state", "")
@@ -462,7 +461,7 @@ class OAuthEndpoints:
                 status = 401 if error == signin.BAD_CREDENTIALS else 429
                 return self._reauth_page(request, req, form, user, error=error, status=status)
             session = await svc.store.mark_reauth(session)
-            svc.audit("portal.reauth", outcome="ok", user=short_id(user.id), reason="consent_send")
+            await svc.audit("portal.reauth", outcome="ok", user=user.id, reason="consent_send")
         scope = ops.compute_scope(svc.cfg.offered_scopes, account_scopes, identity_ids)
         grant = await svc.store.create_grant(
             user_id=user.id,
@@ -484,11 +483,11 @@ class OAuthEndpoints:
             resource=req.resource,
             scope=scope,
         )
-        svc.audit(
+        await svc.audit(
             "auth.consent",
             outcome="approved",
-            user=short_id(user.id),
-            client=_clip(req.client.id),
+            user=user.id,
+            client=req.client.id,
             grant=grant.id,
             scope=scope,
             accounts=len(account_scopes),
@@ -539,7 +538,7 @@ class OAuthEndpoints:
         svc = self.svc
         ip = client_ip(request, svc.cfg.trusted_proxy_hops)
         if not svc.limits.token_ip.allow(ip or "-"):
-            svc.audit("ratelimit.hit", scope="token_ip")
+            await svc.audit("ratelimit.hit", scope="token_ip")
             return oauth_error("invalid_request", "too many requests", status=429)
         if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
             return oauth_error("invalid_request", "send application/x-www-form-urlencoded")
@@ -585,10 +584,10 @@ class OAuthEndpoints:
         try:
             code = await svc.store.redeem_auth_code(raw)
         except InvalidToken:
-            svc.audit("auth.code_replay", client=_clip(client_id))
+            await svc.audit("auth.code_replay", client=client_id)
             return oauth_error("invalid_grant", "the authorization code is not valid")
         if code is None:
-            svc.audit("auth.token", grant_type="authorization_code", outcome="invalid_code")
+            await svc.audit("auth.token", grant_type="authorization_code", outcome="invalid_code")
             return oauth_error("invalid_grant", "the authorization code is not valid")
         ok = (
             code.client_id == client_id
@@ -598,7 +597,7 @@ class OAuthEndpoints:
         if not ok:
             # The code is spent either way; take the pending grant with it.
             await svc.store.revoke_grant(code.grant_id)
-            svc.audit(
+            await svc.audit(
                 "auth.token",
                 grant_type="authorization_code",
                 outcome="mismatch",
@@ -613,12 +612,12 @@ class OAuthEndpoints:
         except (InvalidToken, MailError):
             return oauth_error("invalid_grant", "the authorization code is not valid")
         await self._keep_client(client_id)
-        svc.audit(
+        await svc.audit(
             "auth.token",
             grant_type="authorization_code",
             outcome="ok",
             grant=grant.id,
-            client=_clip(client_id),
+            client=client_id,
         )
         return self._token_response(issued)
 
@@ -635,20 +634,20 @@ class OAuthEndpoints:
         try:
             issued = await svc.store.rotate_refresh_token(raw, client_id=client_id)
         except InvalidToken as e:
-            svc.audit(
+            await svc.audit(
                 "auth.token",
                 grant_type="refresh_token",
                 outcome=type(e).__name__.lower(),
-                client=_clip(client_id),
+                client=client_id,
             )
             return oauth_error("invalid_grant", "the refresh token is not valid")
         await self._keep_client(client_id)
-        svc.audit(
+        await svc.audit(
             "auth.token",
             grant_type="refresh_token",
             outcome="ok",
             grant=issued.grant.id,
-            client=_clip(client_id),
+            client=client_id,
         )
         return self._token_response(issued)
 
@@ -675,7 +674,7 @@ class OAuthEndpoints:
         # RFC 7009: unknown tokens are not an error; another client's token is left alone.
         if tok is not None and (not isinstance(client_id, str) or client_id == tok.client_id):
             await svc.store.revoke_token(raw)
-            svc.audit("auth.revoke", token_type=tok.token_type, grant=tok.grant_id)
+            await svc.audit("auth.revoke", token_type=tok.token_type, grant=tok.grant_id)
         return Response(status_code=200, headers={"cache-control": "no-store"})
 
     # -- /register (RFC 7591) ---------------------------------------------------------
@@ -684,7 +683,7 @@ class OAuthEndpoints:
         svc = self.svc
         ip = client_ip(request, svc.cfg.trusted_proxy_hops)
         if svc.limits.register_global.blocked("*") or not svc.limits.register_ip.allow(ip or "-"):
-            svc.audit("ratelimit.hit", scope="register")
+            await svc.audit("ratelimit.hit", scope="register")
             return oauth_error("invalid_client_metadata", "too many registrations", status=429)
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > MAX_REGISTER_BYTES:
@@ -702,7 +701,7 @@ class OAuthEndpoints:
             return oauth_error(e.error, e.description)
         svc.limits.register_global.add("*")
         info = await svc.clients.register(name, redirects)
-        svc.audit("auth.register", client=info.id)
+        await svc.audit("auth.register", client=info.id)
         issued = int(svc.store.now().timestamp())
         return JSONResponse(
             {
@@ -720,10 +719,6 @@ class OAuthEndpoints:
 
 
 # ---------------------------------------------------------------- helpers and routes
-
-
-def _clip(value: str, limit: int = 200) -> str:
-    return value[:limit]
 
 
 def _metadata_response(meta: dict[str, Any]) -> Response:

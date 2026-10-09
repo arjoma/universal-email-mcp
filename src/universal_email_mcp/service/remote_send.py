@@ -24,7 +24,6 @@ from typing import Any
 from universal_email_mcp.config import Policy
 from universal_email_mcp.errors import RateLimited
 from universal_email_mcp.models import Identity, MessageRef
-from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.service.send import ApprovalTicket
 from universal_email_mcp.store import ActivityEntry, PendingApproval, Store
 
@@ -83,7 +82,7 @@ class StoreRemoteSend:
 
     async def record_send(self) -> None:
         await self.store.record_activity(
-            self.user_id, SEND_EVENT, tool="send_message", outcome="sent"
+            self.user_id, SEND_EVENT, client=self.grant_id, tool="send_message", outcome="sent"
         )
 
     # ------------------------------------------------------------ replay guard
@@ -126,4 +125,4 @@ class StoreRemoteSend:
         )
 
     def audit_fields(self) -> Mapping[str, Any]:
-        return {"user": short_id(self.user_id), "grant": self.grant_id}
+        return {"user": self.user_id, "grant": self.grant_id}
