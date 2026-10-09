@@ -190,7 +190,10 @@ Sending (irreversible - only when the user explicitly asks to send):
   a known address) and, by policy, asks the USER to confirm in their client before
   anything leaves - the user's answer decides, not yours. If the client cannot ask,
   or the user declines, nothing is sent and the draft stays in Drafts: tell the user
-  and, when it could not ask, that they must send it from their mail client.
+  and, when it could not ask, that they must send it from their mail client. A
+  remote server may answer "pending_approval" instead: nothing was sent, the user has
+  to open approval_url, check the message and approve it there - give them the link
+  and do not send again.
 - Report the result exactly: status "sent" only if it says so. A look-alike or new
   recipient is a warning for the user - repeat it, do not talk it away. Never retry a
   send whose outcome is unknown (SEND_OUTCOME_UNKNOWN) - ask the user to check Sent.
@@ -1801,6 +1804,14 @@ def build_server(
                 head = "SENT."
             elif res.status == "declined":
                 head = "NOT sent: the user declined. The draft is kept in Drafts."
+            elif res.status == "pending_approval" and res.approval is not None:
+                head = (
+                    "NOT sent yet - waiting for the user's approval. Tell the user to open "
+                    f"{res.approval.url} (valid for {res.approval.expires_in_minutes} minutes), "
+                    "check the message there and approve or reject it. Do not try to send it "
+                    "again; nothing is sent until the user approves in the browser. The draft "
+                    "is kept in Drafts."
+                )
             else:
                 head = "NOT sent. The message is kept as a draft in Drafts."
             lines = [head]
@@ -1988,6 +1999,10 @@ def build_server(
                 draft_id=res.draft_id,
                 reasons=res.reasons,
                 confirmation=res.confirmation,
+                approval_url=res.approval.url if res.approval else None,
+                approval_expires_minutes=(
+                    res.approval.expires_in_minutes if res.approval else None
+                ),
                 receipt=res.receipt,
                 sent_copy=res.sent_copy,
                 steps=res.steps,

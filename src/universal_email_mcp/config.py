@@ -52,6 +52,11 @@ CONFIG_ENV = "UEM_CONFIG"
 
 SendPolicy = Literal["off", "draft", "confirm", "confirm-external", "on"]
 SEND_POLICIES: tuple[SendPolicy, ...] = get_args(SendPolicy)
+SendFallback = Literal["draft", "portal", "send-unless-flagged"]
+SEND_FALLBACKS: tuple[SendFallback, ...] = get_args(SendFallback)
+"""What happens to a send that needs the user's confirmation when the client cannot ask
+(design section 8): ``draft`` keeps it in Drafts; ``portal`` and ``send-unless-flagged``
+need the portal, so they exist in remote mode only."""
 PERMISSION_NAMES = ("read", "organize", "delete", "drafts")
 
 _NAME_RE = re.compile(r"^[\w][\w .@+-]{0,63}$", re.UNICODE)
@@ -76,7 +81,10 @@ class Policy:
     identity addresses are internal; a whole domain only if listed here."""
     max_sends_per_hour: int = 20
     max_sends_per_day: int = 100
-    """Send limits per SMTP account (counted in memory while the server runs)."""
+    """Send limits per SMTP account (counted in memory while the server runs); in remote
+    mode per user, counted in the store (shared by all instances)."""
+    send_fallback: SendFallback = "draft"
+    """Remote mode (``SEND_FALLBACK``): see :data:`SendFallback`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +123,9 @@ class Downloads:
 class Config:
     accounts: tuple[Account, ...] = ()
     identities: tuple[Identity, ...] = ()
+    smtp_accounts: tuple[Account, ...] = ()
+    """Remote mode: the outgoing servers of the sending identities (never mailboxes: they
+    are not in ``accounts`` and no tool lists or reads them). Local mode uses ``accounts``."""
     policy: Policy = Policy()
     limits: Limits = Limits()
     settings: Settings = Settings()
@@ -128,6 +139,13 @@ class Config:
                 return acc
         names = ", ".join(a.name for a in self.accounts) or "none configured"
         raise ConfigError(f"unknown account {name!r}", hint=f"Known accounts: {names}.")
+
+    def smtp_account(self, name: str) -> Account:
+        """The account whose server and login send an identity's mail."""
+        for acc in self.smtp_accounts:
+            if acc.name == name:
+                return acc
+        return self.account(name)
 
     @property
     def default_identity(self) -> Identity | None:

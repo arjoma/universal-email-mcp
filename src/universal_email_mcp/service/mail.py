@@ -72,7 +72,7 @@ from universal_email_mcp.service.router import (
     Fanout,
     ensure_ref_matches,
 )
-from universal_email_mcp.service.send import Sender
+from universal_email_mcp.service.send import RemoteSend, Sender
 from universal_email_mcp.service.trust import SentTo, SentToIndex
 
 DEFAULT_PAGE = 20
@@ -357,6 +357,7 @@ class MailService:
         viewer_base: str | None = None,
         download_links: DownloadLinks | None = None,
         download_status: str | None = None,
+        remote_send: RemoteSend | None = None,
     ) -> None:
         self.config = config
         self.router = router or AccountRouter(config)
@@ -376,7 +377,13 @@ class MailService:
         self.drafts = Drafter(config, self.router, self.index, self.sent_to, self._own_addresses)
         """Compose and save drafts (``save_draft``)."""
         self.sender = Sender(
-            config, self.router, self.index, self.sent_to, self.drafts, self._own_addresses
+            config,
+            self.router,
+            self.index,
+            self.sent_to,
+            self.drafts,
+            self._own_addresses,
+            remote=remote_send,
         )
         """Policy, recipient check, confirmation and SMTP (``send_message``)."""
 

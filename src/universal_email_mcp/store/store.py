@@ -10,6 +10,7 @@ backends with TTL policies delete them eventually, ``purge_expired()`` does it b
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import secrets
 import types
 import typing
@@ -235,14 +236,22 @@ class Store:
         """Delete; unconditional unless ``expected_version`` is given. Missing is fine."""
         await self.backend.commit([Op("delete", cls.KIND, rec_id, None, expected_version)])
 
-    async def list_for_user(self, cls: type[R], user_id: str) -> list[R]:
+    async def get_any(self, cls: type[R], rec_id: str) -> R | None:
+        """Like :meth:`get`, but an expired record that has not been purged yet is returned
+        too (the portal shows "expired" for a user's own approval)."""
+        doc = await self.backend.get(cls.KIND, rec_id)
+        return None if doc is None else self.decode(cls, rec_id, doc)
+
+    async def list_for_user(
+        self, cls: type[R], user_id: str, *, include_expired: bool = False
+    ) -> list[R]:
         """The user's live records of one type, oldest first."""
         if cls not in USER_OWNED:
             raise ValueError(f"{cls.__name__} has no user_id")
         out = [
             self.decode(cls, i, d)
             for i, d in await self.backend.find(cls.KIND, "user_id", user_id)
-            if not self._expired(d)
+            if include_expired or not self._expired(d)
         ]
         return sorted(out, key=lambda r: (_when(r), r.id))
 
@@ -603,6 +612,44 @@ class Store:
         ):
             return None
         return await self.take(PendingApproval, approval_id)
+
+    # -- sent-message markers ---------------------------------------------------------
+
+    @staticmethod
+    def _send_marker_id(user_id: str, content_hash: str) -> str:
+        digest = hashlib.sha256(f"uem-send-marker\0{user_id}\0{content_hash}".encode())
+        return "s_" + digest.hexdigest()[:24]
+
+    async def claim_send(self, user_id: str, content_hash: str, ttl: timedelta) -> bool:
+        """Mark "this message of this user goes out now" for ``ttl``; ``False`` when the
+        same content was claimed already (a replayed confirmation, a double click, a second
+        instance). Markers are ``approvals`` records with the status ``sent`` and no draft."""
+        now = self.now()
+        try:
+            await self.create(
+                PendingApproval(
+                    id=self._send_marker_id(user_id, content_hash),
+                    user_id=user_id,
+                    grant_id="",
+                    identity_id="",
+                    content_hash=content_hash,
+                    draft_ref="",
+                    status="sent",
+                    created_at=now,
+                    expires_at=now + ttl,
+                )
+            )
+        except AlreadyExists:
+            existing = await self.get(PendingApproval, self._send_marker_id(user_id, content_hash))
+            if existing is not None:
+                return False
+            await self.delete(PendingApproval, self._send_marker_id(user_id, content_hash))
+            return await self.claim_send(user_id, content_hash, ttl)
+        return True
+
+    async def release_send(self, user_id: str, content_hash: str) -> None:
+        """Undo :meth:`claim_send` (the send failed, so trying again is fine)."""
+        await self.delete(PendingApproval, self._send_marker_id(user_id, content_hash))
 
     # -- activity ---------------------------------------------------------------------
 

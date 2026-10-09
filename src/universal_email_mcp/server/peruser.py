@@ -16,6 +16,13 @@ per principal. Three seams make the SDK serve a different server to each caller:
   an SDK middleware reads the user's folder maps just before ``initialize`` / ``server/discover``
   so the instructions carry the mailbox structure, exactly like local mode.
 
+* The ``requestState`` that carries a send confirmation through the client (protocol
+  2026-07-28) is sealed by the SDK's :class:`~mcp.server.request_state.RequestStateSecurity`
+  under keys derived from the store key ring (:func:`request_state_security`): the same on
+  every instance, rotated with the ring, bound to the tool, the arguments, the expiry, the
+  server and to *user + grant*. A client can neither forge an "accepted" nor use another
+  user's state.
+
 Enforcement does not rely on the tool list: the router of the context checks the permission
 of each account on every call (see ``service/userpool.py``).
 """
@@ -30,6 +37,7 @@ from typing import Any
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.lowlevel.server import Server
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.request_state import RequestStateSecurity
 from mcp.types import CallToolResult, TextContent
 from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -43,6 +51,7 @@ from universal_email_mcp.server.app import (  # pyright: ignore[reportPrivateUsa
 )
 from universal_email_mcp.server.http import _send_json  # pyright: ignore[reportPrivateUsage]
 from universal_email_mcp.service.userpool import UserContext, UserPool
+from universal_email_mcp.store import KeyRing
 
 log = logging.getLogger(__name__)
 
@@ -67,15 +76,38 @@ class _DynamicInstructionsServer(Server[Any]):
         pass  # set once by the base class constructor; the value is per user
 
 
+REQUEST_STATE_TTL = 600.0
+"""Seconds a question to the user (and the answer riding back) stays valid."""
+
+
+def state_principal(_ctx: ServerRequestContext[Any, Any]) -> str:
+    """What a sealed request state is bound to: the user and the grant of the call.
+    Refuses (the SDK turns an error into a rejected state) when there is no context."""
+    ctx = user_context_var.get()
+    if ctx is None:
+        raise RuntimeError("no user context")
+    return f"{ctx.user_id}\0{ctx.grant_id}"
+
+
+def request_state_security(
+    keys: KeyRing, *, ttl: float = REQUEST_STATE_TTL
+) -> RequestStateSecurity:
+    """Sealing of ``requestState`` under keys derived from the store key ring."""
+    return RequestStateSecurity(
+        keys=keys.derive("mcp-request-state-v1"), ttl=ttl, bind_principal=state_principal
+    )
+
+
 class PerUserServer(MCPServer):
     """An ``MCPServer`` whose tools, schemas and instructions come from the current user."""
 
-    def __init__(self, pool: UserPool) -> None:
+    def __init__(self, pool: UserPool, security: RequestStateSecurity | None = None) -> None:
         super().__init__(
             SERVER_NAME,
             title="Universal e-mail (IMAP)",
             version=__version__,
             middleware=[self._discovery_middleware],
+            request_state_security=security,
         )
         self.pool = pool
         self._lowlevel_server.__class__ = _DynamicInstructionsServer

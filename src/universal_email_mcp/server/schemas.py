@@ -468,9 +468,11 @@ class RecipientOut(_Model):
 class SendOut(_Model):
     """The outcome of send_message."""
 
-    status: Literal["sent", "draft_kept", "declined"] = Field(
+    status: Literal["sent", "draft_kept", "declined", "pending_approval"] = Field(
         description="sent; draft_kept (nothing was sent, the draft is in Drafts: the client "
-        "cannot ask for confirmation, or the policy forbids sending); declined (the user said no)."
+        "cannot ask for confirmation, or the policy forbids sending); declined (the user said "
+        "no); pending_approval (nothing was sent yet: the user has to approve the message at "
+        "approval_url first)."
     )
     sent: bool
     account: str = Field(description="The SMTP account used (or that would have been used).")
@@ -488,7 +490,13 @@ class SendOut(_Model):
         "the draft removed)."
     )
     reasons: list[str] = Field(description="Why it was not sent / why confirmation was needed.")
-    confirmation: Literal["asked", "not_needed", "unavailable"]
+    confirmation: Literal["asked", "not_needed", "unavailable", "fallback"]
+    approval_url: str | None = Field(
+        default=None,
+        description="pending_approval: the page where the user approves or rejects the send "
+        "(valid for approval_expires_minutes).",
+    )
+    approval_expires_minutes: int | None = None
     receipt: str | None = Field(description="The SMTP server's final reply (sent only).")
     sent_copy: str
     steps: list[str] = Field(description="Bookkeeping after the send (copy, draft, answered).")
