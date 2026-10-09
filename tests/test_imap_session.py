@@ -104,3 +104,41 @@ def test_login_works_against_the_scripted_server():
         with _connect(srv, "starttls") as s:
             assert s.login_info.tls == "STARTTLS"
             assert s.login_info.auth_mechanism == "AUTHENTICATE PLAIN"
+
+
+# ----------------------------------------------------------------- login credentials
+
+
+def _login_with(srv: ScriptedImapServer, username: str, password: str = "secret") -> ImapSession:
+    return ImapSession.connect(
+        Endpoint("localhost", srv.port, "tls"),
+        username,
+        password,
+        net=NetPolicy(allow_private=True, read_timeout=5),
+        tls=TlsSettings(verify=False),
+        resolver=lambda _h, _p: ["127.0.0.1"],
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ['a"b@example.org', "a\\b@example.org", "x{1}@example.org", "a*%]@x.org"]
+)
+def test_login_name_is_sent_as_one_quoted_string(name: str):
+    with ScriptedImapServer(post_tls_caps=()) as srv:  # no AUTH=PLAIN: plain LOGIN
+        _login_with(srv, name, 'p"w\\d').close()
+        (login,) = [ln for ln in srv.lines if " LOGIN " in ln]
+        quoted = name.replace("\\", "\\\\").replace('"', '\\"')
+        assert login.split(" ", 2)[2] == f'"{quoted}" "p\\"w\\\\d"'
+
+
+@pytest.mark.parametrize("bad", ["a\r\nA2 DELETE INBOX", "a\nb", "a\x00b", "a\rb"])
+@pytest.mark.parametrize("caps", [(), ("AUTH=PLAIN",)])
+def test_credentials_with_control_characters_are_refused_before_sending(
+    bad: str, caps: tuple[str, ...]
+):
+    for username, password in ((bad, "secret"), ("user", bad)):
+        with ScriptedImapServer(post_tls_caps=caps) as srv:
+            with pytest.raises(AuthFailed, match="control characters"):
+                _login_with(srv, username, password)
+            assert "LOGIN" not in srv.commands and "AUTHENTICATE" not in srv.commands
+            assert not any("DELETE" in ln for ln in srv.lines)

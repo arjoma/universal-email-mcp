@@ -73,6 +73,7 @@ from universal_email_mcp.errors import (
     UnsupportedByServer,
 )
 from universal_email_mcp.mail.bodystructure import SECTION_RE, BodyLeaf
+from universal_email_mcp.mail.credentials import check_credentials
 from universal_email_mcp.mail.imap import (
     AttachmentData,
     FolderStatus,
@@ -282,13 +283,6 @@ class _Wire:
         return True, text, data.splitlines()
 
 
-def _check_credentials(username: str, password: str) -> None:
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in username + password):
-        raise AuthFailed("user name or password contains control characters")
-    if not username:
-        raise AuthFailed("no user name configured")
-
-
 def _parse_caps(lines: Sequence[bytes]) -> tuple[str, ...]:
     return tuple(ln.decode("ascii", "replace").strip().upper() for ln in lines if ln.strip())
 
@@ -328,7 +322,7 @@ def _open(
     resolver: Resolver | None,
 ) -> tuple[_Wire, tuple[str, ...]]:
     """Connect, secure, authenticate. Returns the wire and the capabilities."""
-    _check_credentials(username, password)
+    check_credentials(username, password)
     ctx = tls_context(verify=tls.verify, ca_file=tls.ca_file)
     host = endpoint.host
     implicit = endpoint.tls == "tls"

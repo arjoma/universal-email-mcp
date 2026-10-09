@@ -75,6 +75,8 @@ class ScriptedImapServer:
     trickle_greeting: float = 0.0
     """Seconds between the bytes of the greeting (0 = send it at once)."""
     commands: list[str] = field(default_factory=list[str])
+    lines: list[str] = field(default_factory=list[str])
+    """Every complete line received, verbatim (without the line end)."""
     stalled: threading.Event = field(default_factory=threading.Event)
     peer_closed: threading.Event = field(default_factory=threading.Event)
 
@@ -141,6 +143,7 @@ class ScriptedImapServer:
                 parts = line.decode("ascii", "replace").strip().split(" ", 2)
                 tag, cmd = parts[0], (parts[1].upper() if len(parts) > 1 else "")
                 self.commands.append(cmd)
+                self.lines.append(line.decode("latin-1").rstrip("\r\n"))
                 if cmd in self.literal_after:
                     self._send_literal(conn, b"* NOTE", self.literal_after[cmd])
                 if cmd in self.flood_after:
