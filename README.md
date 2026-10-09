@@ -110,7 +110,8 @@ section 8):
   `drafts`), and - `file_replies = "both"` is the default - the copy of a reply also
   goes into the user folder the original is filed in (`sent` / `thread_folder` are options).
 - The confirmation shows the whole new text (up to 3000 characters / 80 lines; what is cut
-  is announced with its size), a one-line summary of a quoted original, and up to 20
+  is announced with its size), who the original of a reply or forward is (sender, date,
+  subject, first lines; a warning if the subject does not match), and up to 20
   attachments with sizes.
 - One audit line per attempt on stderr (JSON; counts per class, size bucket,
   outcome - never addresses, subjects or text; see `docs/audit.md`).
