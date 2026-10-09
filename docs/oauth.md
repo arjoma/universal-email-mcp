@@ -6,8 +6,8 @@ connects to `PUBLIC_URL/mcp`, is sent through the browser to **sign in** and **c
 gets tokens. This page is for operators and client authors; variables are in
 [operator-env.md](operator-env.md), stored records in [stored-data.md](stored-data.md).
 
-> **Status:** sign-in, consent, tokens and the per-user mail tools (work package 3e) work;
-> sending from remote mode follows with 3f (see "What `/mcp` serves" below).
+> **Status:** sign-in, consent, tokens, the per-user mail tools (work package 3e) and sending
+> with confirmation or portal approval (3f) work.
 
 ## What `/mcp` serves
 
@@ -50,11 +50,53 @@ call); a changed or removed account takes effect on the next request too.
   `UEM_CONNECTION_IDLE_TTL`, capped per user and per instance (the longest idle connection is
   closed to make room, otherwise the call fails with `BUSY`), and a user can run only so many
   tool calls at once (`BUSY` beyond that - the client may retry).
-* **Sending.** `mail.send` and sender identities are stored with the grant, but `send_message` is
-  **not offered** in remote mode until work package 3f (request-state sealing for the
-  confirmation, pending approvals in the portal). Drafts work: `save_draft` writes into the
-  Drafts folder of the account an identity is linked to (identities that copy to a drafts-capable
-  account of the grant are usable for drafts without the right to send).
+* **Sending** (`send_message`, work package 3f). The tool is offered when the grant includes
+  `mail.send` for an identity **and** that identity allows sending (portal: "sending allowed")
+  **and** has a complete outgoing login **and** copies to an account with the `drafts`
+  permission (the draft is the safety net) **and** the operator's `UEM_SEND_POLICY` is not
+  `off` / `UEM_READ_ONLY` is off. The effective right is the intersection of grant, identity
+  and policy; it is rebuilt from the store on every request (change the identity, the grant
+  or the account and the next call sees it) and enforced again inside every call, so a
+  client that calls the tool without being shown it is refused. Details below.
+
+### Confirmation, request state, fallbacks
+
+Every send first becomes a **draft** (new text is saved to Drafts, an existing draft is read
+again), the recipients are checked (internal / written to before / new / look-alike) and the
+policy decides whether the user must confirm. Then:
+
+* **The client can ask** (protocol 2026-07-28 with form elicitation): the first answer is
+  "input required" with the question (sender, recipients with class and warnings, subject,
+  attachments, the new text, a content fingerprint) and a `requestState`; the client asks the
+  user and retries with the answer. Only an accepted tick box sends.
+* **`requestState` is sealed** (the SDK's `RequestStateSecurity`, built in `server/peruser.py`):
+  AES-256-GCM under keys derived from the store key ring (`STORE_KEYS`; the same on every
+  instance, rotated with the ring, no extra variable), 10 minutes valid, bound to the tool, its
+  arguments, this server, and to **user + grant**. A client cannot forge an "accepted", edit a
+  state, reuse one for other arguments, after expiry, or use another user's or grant's. The
+  answer additionally only counts for the exact question shown, whose text contains a
+  16-hex-digit fingerprint of the message content, so a draft that changed between the rounds
+  is asked about again. A failing state answers `-32602 Invalid or expired requestState`.
+* **Replay guard.** A valid state can still be sent twice by a client (stateless transport).
+  Before the mail server is contacted a send claims `user + content hash` in the store for 10
+  minutes (`Store.claim_send`); the second attempt, a double click on "approve" or a second
+  instance racing the first fails with `ALREADY_SENT` and sends nothing.
+* **The client cannot ask** (legacy protocol over stateless HTTP has no back channel; clients
+  without elicitation): `SEND_FALLBACK` decides ([operator-env.md](operator-env.md)):
+  `draft` keeps the draft; `portal` (default in remote mode) creates a **pending approval** and
+  answers `status: "pending_approval"` with `approval_url` - nothing is sent until the signed-in
+  user approves it on the portal page "Pending approvals" ([portal.md](portal.md)); and
+  `send-unless-flagged` sends directly unless the recipient check flags something (a new address
+  or a look-alike - then it goes to the portal). A **look-alike is never sent without a human**,
+  whatever the mode.
+* **Limits.** `UEM_MAX_RECIPIENTS`, `UEM_ALLOWED_RECIPIENT_DOMAINS`, message size and the send rate
+  (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`) apply; the rate is **per user**, counted in the store (every
+  completed send writes an activity entry without address or subject), so it is shared by all of
+  a user's clients and all instances (two instances checking at the same moment can overshoot by
+  one). At most 20 sends of a user wait for approval at once; asking again for the same message
+  returns the same link.
+* **Audit** events (`send.*`, `approval.*`) carry pseudonymous user ids, grant and approval
+  ids, counts and size buckets - no address, subject or text.
 
 ## Endpoints
 

@@ -39,7 +39,8 @@ single-field equality (`user_id`, `grant_id`), no composite index is needed.
 | authorization code (`auth_codes`) | client, grant, PKCE challenge, id = SHA-256 of the code | - | 1 minute, single use |
 | grant (`grants`) | user, client, granted account and identity ids, times | - | sliding refresh lifetime (30 days), absolute max 90 days; both configurable, 0 = unlimited |
 | token (`tokens`) | id = SHA-256 of the token, type, grant, resource, expiry | - | access 1 h, refresh as grant |
-| pending approval (`approvals`) | user, grant, identity, content hash, status | draft reference | 10 minutes |
+| pending approval (`approvals`) | user, grant, identity, content hash (SHA-256 of the message without Message-ID/Date), status | draft reference | `UEM_APPROVAL_TTL`, 10 minutes by default |
+| send marker (`approvals`, status `sent`, id `s_...`) | user, content hash | - | 10 minutes (replay guard of a send in flight) |
 | activity (`activity`) | user, time | event, client, tool, account name, outcome, counts | 30 days |
 
 A *grant* is a connected AI client in the portal's "Connected AI clients" list. Refresh

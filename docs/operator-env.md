@@ -61,6 +61,7 @@ out on your own machine, and nothing else.
 | `UEM_REFRESH_TOKEN_TTL` | `2592000` (30 days) | Refresh token, sliding (each refresh extends it). `0` = never expires on its own - weaker, a leaked token then lives until revoked. |
 | `UEM_SESSION_MAX_AGE` | `7776000` (90 days) | Absolute lifetime of a connected client, however often it refreshes. `0` = unlimited. |
 | `UEM_PORTAL_IDLE_TIMEOUT` / `UEM_PORTAL_SESSION_MAX` | `1800` / `43200` | Browser sign-in session: idle timeout and absolute maximum, seconds. |
+| `UEM_APPROVAL_TTL` | `600` | Seconds a send waits for the user's approval in the portal (see `SEND_FALLBACK` below). |
 | `UEM_REAUTH_WINDOW` | `300` | Seconds after typing the password again during which sensitive portal actions and granting `send` need no new entry (see [portal.md](portal.md)). Signing in counts. |
 | `UEM_MAX_DOWNLOAD_BYTES` | `104857600` (100 MiB) | Largest attachment or `.eml` the portal viewer streams (decoded size); bigger ones answer 413. |
 | `UEM_MAX_ACCOUNTS_PER_USER` / `UEM_MAX_IDENTITIES_PER_USER` | `10` / `10` | How many mail accounts and sender identities one user may have. |
@@ -77,8 +78,9 @@ The scopes clients can obtain follow the policy: with `UEM_READ_ONLY=true` only
 Same meaning as `[limits]` and `[policy]` in the TOML config; a set variable
 overrides the TOML value. In OAuth mode they apply to every user's service; a grant can
 only narrow them (the effective permissions are the intersection with `UEM_READ_ONLY`).
-`UEM_SEND_POLICY` and the other send settings take effect with work package 3f; until then
-`send_message` is not offered in remote mode.
+`send_message` is offered when the grant, the identity and the policy all allow it (see
+[oauth.md](oauth.md)); the send settings apply per user: `UEM_MAX_SENDS_PER_HOUR` / `_DAY` are
+counted per user in the store (shared by all instances), not per SMTP account.
 
 | Variable | Config key |
 |---|---|
@@ -88,6 +90,21 @@ only narrow them (the effective permissions are the intersection with `UEM_READ_
 | `UEM_SEND_POLICY` (`off`, `draft`, `confirm`, `confirm-external`, `on`) | `[policy] send` |
 | `UEM_ALLOWED_RECIPIENT_DOMAINS`, `UEM_INTERNAL_DOMAINS` (comma separated) | `[policy] allowed_recipient_domains`, `internal_domains` |
 | `UEM_MAX_RECIPIENTS`, `UEM_MAX_SENDS_PER_HOUR`, `UEM_MAX_SENDS_PER_DAY` | `[policy] max_recipients`, ... |
+
+### Sending without a question: `SEND_FALLBACK`
+
+When the policy wants the user's confirmation but the client cannot ask (legacy protocol over
+stateless HTTP, or a client without form elicitation), `SEND_FALLBACK` decides. Nothing is ever
+sent for a new address or a look-alike without a human.
+
+| Value | Effect |
+|---|---|
+| `portal` (**default in OAuth mode**) | The message stays a draft, a pending approval is created and the tool result carries a link to `PUBLIC_URL/portal/approvals/...`; nothing is sent until the signed-in user approves it there. |
+| `send-unless-flagged` | Sends directly unless the recipient check flags something (an address never written to, or a look-alike): flagged sends go to the portal as above. Recipients that are internal or written to before go out without a question - an explicit trade for deployments whose clients cannot ask (the design plan names this the default; the implementation defaults to the safer `portal`). |
+| `draft` | The message stays in Drafts; the user sends it from their mail client (the only value in dev mode, which has no portal). |
+
+There is deliberately no value that sends unconfirmed in every case. `UEM_APPROVAL_TTL`
+(seconds, default `600`) is how long an approval waits in the portal before it shows as expired.
 
 ## Per-user service: connections and calls (OAuth mode)
 
@@ -104,6 +121,9 @@ account; hosters often cap connections per mailbox, so keep the idle time short.
 | `UEM_USER_IDLE_TTL` | `900` | Seconds an unused per-user service (decrypted accounts, header caches) stays in memory. |
 | `UEM_MAX_CACHED_USERS` | `500` | Per-user services kept in memory; the least recently used idle ones go first. |
 | `UEM_REAUTH_RETRY_AFTER` | `600` | After a rejected login (`REAUTH_REQUIRED`) the account is not tried again for this long, unless its password or user name changed. |
+
+The sealed `requestState` of send confirmations needs no variable of its own: its keys are
+derived from `STORE_KEYS` (so every instance agrees and the state follows key rotation).
 
 A deployment with several instances multiplies the connection caps; size
 `--max-instances` and these values so that `instances x UEM_MAX_CONNECTIONS` stays within what
