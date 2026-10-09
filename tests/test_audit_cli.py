@@ -186,7 +186,7 @@ def test_cloud_timestamp_fallback(tmp_path: Path, capsys: pytest.CaptureFixture[
 
 def test_stdin(monkeypatch: pytest.MonkeyPatch, log: Path, capsys: pytest.CaptureFixture[str]):
     class FakeStdin:
-        buffer = io.BytesIO(log.read_bytes())
+        buffer = io.BufferedReader(io.BytesIO(log.read_bytes()))
 
     monkeypatch.setattr("sys.stdin", FakeStdin())
     assert summary(capsys)["input"]["events_used"] == 12
@@ -341,3 +341,33 @@ def test_local_key(
 def test_missing_input_file(capsys: pytest.CaptureFixture[str]):
     code, _, err = run(capsys, "/nonexistent/\x1b[31mfile")
     assert code == 1 and "\x1b" not in err
+
+
+def test_outcomes_per_event_are_capped(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    lines = [
+        json.dumps({"event": "tool.call", "message": "tool.call", "outcome": f"o{i}"})
+        for i in range(auditcli.MAX_KEYS + 20)
+    ]
+    p = tmp_path / "o.log"
+    p.write_text("\n".join(lines))
+    d = summary(capsys, str(p))
+    assert len(d["events"]["tool.call"]) == auditcli.MAX_KEYS + 1
+
+
+def test_compact_large_array(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    entries = cloud_entries(make_log()) * 200  # one line, well over MAX_LINE
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps(entries, separators=(",", ":")))
+    assert p.stat().st_size > auditcli.MAX_LINE
+    d = summary(capsys, str(p))
+    assert d["input"]["events_used"] == 12 * 200
+    assert d["input"]["skipped_too_long"] == 0
+
+
+def test_line_separators_are_replaced():
+    assert auditcli.clean("a b c d") == "a?b?c d"
+
+
+def test_directory_as_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    code, _, err = run(capsys, str(tmp_path))
+    assert code == 1 and "error" in err
