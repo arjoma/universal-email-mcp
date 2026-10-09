@@ -397,3 +397,47 @@ port = {box.server.imaps_port}
     with pytest.raises(httpx2.TransportError):  # the listener stops with the server
         async with httpx2.AsyncClient() as http:
             await http.get(link)
+
+
+async def test_eml_download_is_the_whole_raw_message(box: Box, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(dl_service, "CHUNK_BYTES", 60_000)
+    c = box.mb.admin()
+    try:
+        c.select_folder("INBOX", readonly=True)
+        raw: bytes = c.fetch([box.uids["big"]], ["BODY.PEEK[]"])[box.uids["big"]][b"BODY[]"]  # pyright: ignore[reportAssignmentType]
+    finally:
+        c.logout()
+    async with listener(box) as (dl, http):
+        url = dl.message_url(box.ref("big"))
+        assert url is not None and "/m/" in url
+        r = await http.get(url)
+        h = await http.head(url)
+        # an attachment token is not accepted on the message route and vice versa
+        wrong = url_for(dl, box.ref("big"), "2").replace("/a/", "/m/")
+        assert (await http.get(wrong)).status_code == 404
+    assert r.status_code == 200 and r.content == raw
+    assert r.headers["content-length"] == str(len(raw)) == h.headers["content-length"]
+    assert 'filename="message.eml"' in r.headers["content-disposition"]
+    assert b"\\Seen" not in box.flags("big")
+
+
+async def test_account_info_reports_download_status(box: Box):
+    config = box.config()
+    router = AccountRouter(config)
+    dl = LocalDownloads(router, config.downloads)
+    assert await dl.start()
+    service = MailService(config, router=router, download_links=dl, download_status=dl.status())
+    try:
+        async with Client(build_server(service)) as c:
+            r = await c.call_tool("account_info", {"overview": False})
+            assert r.structured_content is not None
+            status = r.structured_content["policy"]["download_links"]
+            assert status.startswith(f"on (127.0.0.1:{dl.port}")
+            block = r.content[0]
+            assert isinstance(block, TextContent) and "download links: on" in block.text
+            msg = await c.call_tool("get_message", {"id": box.ref("big").encode()})
+            assert msg.structured_content is not None
+            assert "/m/" in msg.structured_content["eml_url"]
+    finally:
+        await dl.stop()
+        await service.aclose()

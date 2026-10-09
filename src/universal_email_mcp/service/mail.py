@@ -148,6 +148,10 @@ class DownloadLinks(Protocol):
 
     def attachment_url(self, ref: MessageRef, section: str) -> str | None: ...
 
+    def message_url(self, ref: MessageRef) -> str | None:
+        """Link to the raw ``.eml`` of the whole message."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class SpecialFolderStatus:
@@ -319,6 +323,7 @@ class MailService:
         cursors: CursorCodec | None = None,
         viewer_base: str | None = None,
         download_links: DownloadLinks | None = None,
+        download_status: str | None = None,
     ) -> None:
         self.config = config
         self.router = router or AccountRouter(config)
@@ -326,6 +331,8 @@ class MailService:
         self.cursors = cursors or CursorCodec()
         self._viewer_base = viewer_base
         self._download_links = download_links
+        self.download_status = download_status or ("on" if download_links else "off")
+        """One line for ``account_info``: links on (where, how long) or off (why)."""
         self._prefixes: dict[str, str] = {}
         self.organize = Organizer(config, self.router, self.index, self._prefix)
         """Mark, move, delete and create folders (the write side)."""
@@ -341,6 +348,10 @@ class MailService:
         if not self._viewer_base:
             return None
         return f"{self._viewer_base.rstrip('/')}/m/{ref.encode()}"
+
+    def message_url(self, ref: MessageRef) -> str | None:
+        """``.eml`` download link when a provider is configured."""
+        return self._download_links.message_url(ref) if self._download_links else None
 
     def attachment_url(self, ref: MessageRef, section: str) -> str | None:
         """Download link for one attachment when a provider is configured."""

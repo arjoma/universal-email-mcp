@@ -55,7 +55,7 @@ Message = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 
-_ROUTE = re.compile(r"^/a/([A-Za-z0-9_.-]{1,4096})$")
+_ROUTE = re.compile(r"^/([am])/([A-Za-z0-9_.-]{1,4096})$")
 
 SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
     (b"x-content-type-options", b"nosniff"),
@@ -118,12 +118,22 @@ class DownloadApp:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return
+        started = False
+
+        async def tracking_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
         try:
-            await self._handle(scope, receive, send)
+            await self._handle(scope, receive, tracking_send)
         except DownloadAborted:
             raise
         except Exception:
             log.exception("download: unexpected error")
+            if started:  # cannot send a second response: cut the connection
+                raise DownloadAborted("download aborted") from None
             await _plain(send, 500, "Internal error.")
 
     async def _handle(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -139,9 +149,11 @@ class DownloadApp:
         if m is None or scope.get("query_string"):
             await _plain(send, 404, "Not found.")
             return
-        token = m.group(1)
+        kind, token = m.group(1), m.group(2)
         try:
             ref, section = self._tokens.verify(token)
+            if (kind == "m") != (section == ""):  # /m/ carries message tokens only
+                raise LinkInvalid
         except LinkExpired:
             await _plain(send, 403, "This download link has expired; ask for a fresh one.")
             return
@@ -287,6 +299,18 @@ class LocalDownloads:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+
+    def status(self) -> str:
+        """One line for ``account_info``."""
+        if self._server is None:
+            return f"off (could not listen on 127.0.0.1:{self._settings.port or 'any port'})"
+        hours = self._settings.link_ttl / 3600
+        return f"on (127.0.0.1:{self.port}, valid {hours:g} h or until the server stops)"
+
+    def message_url(self, ref: MessageRef) -> str | None:
+        if self._server is None:
+            return None
+        return f"http://127.0.0.1:{self.port}/m/{self._tokens.issue(ref, '')}"
 
     def attachment_url(self, ref: MessageRef, section: str) -> str | None:
         if self._server is None:

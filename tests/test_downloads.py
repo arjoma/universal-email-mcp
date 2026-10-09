@@ -333,3 +333,31 @@ async def test_tampered_and_expired_tokens(asgi: Any):
     now[0] = 11.0
     status, _, body = await app2.request(f"/a/{t}")
     assert status == 403 and b"expired" in body
+
+
+async def test_failure_after_response_start_aborts_instead_of_second_response():
+    from universal_email_mcp.server.downloads import DownloadAborted
+
+    class Boom(DownloadApp):
+        async def _handle(self, scope: Any, receive: Any, send: Any) -> None:
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            raise RuntimeError("boom")
+
+    app = Boom(AccountRouter(Config()), DownloadTokens(), port=1, max_bytes=1)
+    sent: list[Any] = []
+
+    async def send(msg: Any) -> None:
+        sent.append(msg)
+
+    async def receive() -> Any:
+        return {"type": "http.request"}
+
+    with pytest.raises(DownloadAborted):
+        await app({"type": "http", "headers": []}, receive, send)
+    assert [m["type"] for m in sent] == ["http.response.start"]
+
+
+async def test_message_tokens_only_on_m_route_and_attachment_tokens_only_on_a(asgi: Any):
+    app, tokens = asgi
+    assert (await app.request(f"/m/{tokens.issue(REF, '2')}"))[0] == 404
+    assert (await app.request(f"/a/{tokens.issue(REF, '')}"))[0] == 404

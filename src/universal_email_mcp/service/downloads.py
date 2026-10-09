@@ -129,6 +129,14 @@ async def open_part(
     """Permission check and the verified part lookup; raises :class:`MailError`
     (:class:`TooLarge` when the part would exceed ``max_bytes`` decoded)."""
     account = router.account(ref.account, "read")
+    if section == "":  # the whole message as .eml
+        size = await router.run_one(
+            account, lambda a: router.call(a, lambda s: s.locate_message(ref))
+        )
+        if size > max_bytes:
+            raise TooLarge("the message is larger than the download limit")
+        leaf = BodyLeaf("", "message/rfc822", None, "message.eml", "attachment", None, "7bit", size)
+        return PartInfo(account, ref, leaf)
     leaf = await router.run_one(
         account, lambda a: router.call(a, lambda s: s.locate_part(ref, section))
     )

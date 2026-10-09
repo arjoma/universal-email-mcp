@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_attachment` now show these links. Served as `attachment` with a sanitised
   file name, passive content types only, `nosniff`, sandbox CSP, `no-store`; `Host`
   checking against DNS rebinding; `GET`/`HEAD` only. Config: `[downloads]`
-  (`enabled`, `port`, `link_ttl`, `max_download_bytes`).
+  (`enabled`, `port`, `link_ttl`, `max_download_bytes`). `get_message` also offers
+  a "download .eml" link (`/m/<token>`, the raw message); `account_info` reports
+  whether download links are on (and where) or off (and why).
 - `get_attachment`: reads one attachment by the id `get_message` lists. Text-like
   files (text, CSV, JSON, XML, HTML, SVG) come back as fenced, defanged, paged text;
   other files as an embedded resource (base64 blob); files over

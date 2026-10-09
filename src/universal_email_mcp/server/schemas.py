@@ -200,6 +200,9 @@ class MessageOut(_Model):
     references: list[str]
     body: BodyOut | None = Field(description="The text body; null with thread=true.")
     attachments: list[AttachmentOut]
+    eml_url: str | None = Field(
+        default=None, description="Server-generated link to download the raw .eml, if offered."
+    )
     source_truncated: bool
     thread: list[MessageItem] | None = Field(
         default=None,
@@ -303,6 +306,9 @@ class PolicyOut(_Model):
     account_timeout: float
     max_headers_scanned: int
     max_batch_messages: int = Field(description="Most messages one mark/move/delete call changes.")
+    download_links: str = Field(
+        description="Whether attachment download links are offered (and where, how long), or why not."
+    )
 
 
 class AccountInfoOut(_Model):
