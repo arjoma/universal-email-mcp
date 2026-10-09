@@ -51,6 +51,7 @@ from universal_email_mcp.models import (
 )
 from universal_email_mcp.service import folder_list, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourcePos, query_hash
+from universal_email_mcp.service.drafts import Drafter
 from universal_email_mcp.service.index import HeaderIndex
 from universal_email_mcp.service.organize import Organizer
 from universal_email_mcp.service.paging import (
@@ -338,6 +339,8 @@ class MailService:
         """Mark, move, delete and create folders (the write side)."""
         self.sent_to = SentToIndex()
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
+        self.drafts = Drafter(config, self.router, self.index, self.sent_to, self._own_addresses)
+        """Compose and save drafts (``save_draft``)."""
 
     @property
     def limits(self) -> Limits:

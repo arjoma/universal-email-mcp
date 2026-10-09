@@ -128,3 +128,26 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       other servers may allow terminal escape sequences).
 - [ ] Defanging of folder names is uneven (`http\[:\]attacker.test` keeps the
       dots); a fake code fence in a body is left as is.
+
+## WP 2c (drafts) leftovers
+- [ ] Plain text only. An HTML alternative (signature with a logo, formatting) and
+      `format=flowed` are out of scope for now.
+- [ ] `draft_id` replaces the whole draft: attachments of a forward draft are lost
+      unless `forward_id` is passed again, `Bcc` is not carried over, and the body
+      cannot be patched. Read the old draft's parts (verified part lookup) and keep
+      its attachments when the update names none.
+- [ ] Sender selection for replies looks at the original's To/Cc only; `Delivered-To`,
+      `X-Original-To` and list aliases are not read (the summary does not carry them).
+- [ ] Inline images of a forwarded mail are dropped (reported as a warning); the inner
+      attachments of a forwarded `message/rfc822` are not offered individually.
+- [ ] Forwarded text attachments keep their declared type but travel as base64
+      bytes (no charset guessing); `message/*` other than `rfc822` becomes `octet-stream`.
+- [ ] Non-ASCII local parts (SMTPUTF8) are refused; domains are IDNA-encoded.
+- [ ] Message-IDs of unusual syntax in an original are dropped from `References`
+      (the thread link is lost rather than risking odd bytes in a header).
+- [ ] The quote's attribution line uses UTC; use the user's time zone and language.
+- [ ] `\Answered` on the original is set only when the reply is sent (WP 2d).
+- [ ] The "never written to" note runs one Sent search per save; cache or skip it for
+      repeated updates of the same draft.
+- [ ] Drafts: `max_recipients` of the policy also caps to+cc+bcc of a draft; a draft
+      for a mailing list with more recipients needs the limit raised.

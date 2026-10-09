@@ -386,3 +386,40 @@ class CreateFolderOut(_Model):
     existing: list[str] = Field(description="Levels of the path that already existed.")
     subscribed: bool
     notes: list[str]
+
+
+class DraftFile(_Model):
+    name: str
+    content_type: str
+    size: int
+
+
+class DraftOut(_Model):
+    """A saved draft. Nothing was sent."""
+
+    id: str | None = Field(
+        description="The draft's id (use it for draft_id= to update, or get_message to read it); "
+        "null if the server did not report it."
+    )
+    account: str
+    folder: str = Field(description="The Drafts folder (decoded display name).")
+    message_id: str = Field(description="The Message-ID header of the draft.")
+    from_: AddressOut = Field(
+        serialization_alias="from", validation_alias=AliasChoices("from", "from_")
+    )
+    sender_reason: str = Field(description="Why this identity was chosen.")
+    to: list[AddressOut]
+    cc: list[AddressOut]
+    bcc: list[AddressOut]
+    subject: str
+    in_reply_to: str | None
+    attachments: list[DraftFile]
+    body: str = Field(description="The text written, with the signature (not the quoted original).")
+    quoted: str = Field(
+        description="The quoted/forwarded original (untrusted mail content, inert text)."
+    )
+    replaced: Literal["none", "removed", "kept"] = Field(
+        description="Update: whether the previous version was removed."
+    )
+    replaced_note: str
+    warnings: list[str]

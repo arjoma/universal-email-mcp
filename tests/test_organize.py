@@ -163,8 +163,10 @@ async def test_tool_list_follows_permissions_and_policy():
     )
     both = config_with(["read", "organize", "delete"], ["read"])
     assert await tool_names(both) == READ_TOOLS | ORGANIZE_TOOLS | {"delete_messages"}
-    # drafts alone does not offer organize tools
-    assert await tool_names(config_with(["read", "drafts"], ["read"])) == READ_TOOLS
+    # drafts alone offers only save_draft, none of the organize tools
+    assert await tool_names(config_with(["read", "drafts"], ["read"])) == (
+        READ_TOOLS | {"save_draft"}
+    )
     # read_only policy wins over account permissions
     ro = config_with(["read", "organize", "delete"], ["read"], policy={"read_only": True})
     assert await tool_names(ro) == READ_TOOLS
