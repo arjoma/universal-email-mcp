@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
 import json
 import logging
@@ -86,6 +87,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--insecure-local",
         action="store_true",
         help="no token; bind to loopback only (temporary, local development)",
+    )
+    admin = sub.add_parser(
+        "admin",
+        help="operator maintenance of the remote-mode store (rotate-keys)",
+        description=(
+            "Maintenance commands for operators. They read the same environment as `serve` "
+            "(STORE_BACKEND, STORE_KEYS, FIRESTORE_*, PUBLIC_URL, LOGIN_DOMAINS ...; see "
+            "docs/operator-env.md) and print counts only - never key material or record content."
+        ),
+    )
+    admin_sub = admin.add_subparsers(dest="admin_command", metavar="COMMAND")
+    rotate = admin_sub.add_parser(
+        "rotate-keys",
+        help="re-seal every stored record with the active store key",
+        description=(
+            "Re-seal all records that are not sealed with the active key (STORE_ACTIVE_KEY, "
+            "default: the highest key number), so that an old key can be removed from the ring. "
+            "Safe to repeat. Records that cannot be read are skipped and counted per kind "
+            "(exit status 3); a warning without content is logged."
+        ),
+    )
+    rotate.add_argument(
+        "--dry-run", action="store_true", help="only count what would be re-sealed; write nothing"
     )
     from universal_email_mcp import auditcli
 
@@ -219,6 +243,38 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _rotate_keys(dry_run: bool) -> int:
+    from universal_email_mcp.oauth.app import make_store
+    from universal_email_mcp.operator import load_operator_config
+    from universal_email_mcp.store import rotate_keys
+
+    store = make_store(load_operator_config())
+    try:
+        report = await rotate_keys(store, dry_run=dry_run)
+    finally:
+        await store.close()
+    verb = "would be re-sealed" if dry_run else "re-sealed"
+    for kind, n in report.resealed.items():
+        print(f"{kind}: {n} {verb}")
+    for kind, n in report.unreadable.items():
+        print(f"{kind}: {n} UNREADABLE (skipped)")
+    if report.total_unreadable:
+        print(
+            "Some records cannot be read (damaged, or sealed with a key that is not in the "
+            "ring). Keep the old keys until they are restored or removed.",
+            file=sys.stderr,
+        )
+        return 3
+    return 0
+
+
+def _cmd_admin(args: argparse.Namespace) -> int:
+    if args.admin_command == "rotate-keys":
+        return asyncio.run(_rotate_keys(args.dry_run))
+    print("usage: universal-email-mcp admin rotate-keys [--dry-run]", file=sys.stderr)
+    return 2
+
+
 def _print_error(err: MailError, as_json: bool) -> None:
     if as_json:
         print(json.dumps({"error": err.to_dict()}), file=sys.stderr)
@@ -243,6 +299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "probe": _cmd_probe,
         "local": _cmd_local,
         "serve": _cmd_serve,
+        "admin": _cmd_admin,
         "audit": _cmd_audit,
     }
     if args.command is None:

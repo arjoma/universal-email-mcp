@@ -122,9 +122,14 @@ Generate a key: `python -c "import base64,os;print(base64.b64encode(os.urandom(3
 
 1. Add `k2` to the ring and make it active; deploy. New and updated records use `k2`, old
    blobs still open with `k1`.
-2. Run `rotate_keys(store)` (`universal_email_mcp.store.rotation`; it will be exposed as
-   `universal-email-mcp admin rotate-keys` with the HTTP server) to re-seal the records
-   nobody has written since. It reports counts per record kind and is safe to repeat.
+2. Run `universal-email-mcp admin rotate-keys` (same environment as `serve`; `--dry-run`
+   counts without writing; it calls `rotate_keys(store)` of `universal_email_mcp.store.rotation`)
+   to re-seal the records nobody has written since. It prints counts per record kind and is
+   safe to repeat. A record that cannot be read (damaged, or sealed with a key that is not in
+   the ring) does not stop the run: it is skipped, counted as `UNREADABLE` per kind, a warning
+   without ids or content is logged and the exit status is 3. Keep the old key until that is
+   resolved. The GDPR export (`Store.export_user`) treats such records the same way: it lists
+   them as `{"unreadable": true}` instead of failing.
 3. Remove `k1` from the ring. Losing a key makes the blobs sealed with it unreadable: keep
    the ring in Secret Manager with versions.
 
