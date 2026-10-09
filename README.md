@@ -45,7 +45,7 @@ never from the file. Six read tools are always there:
 
 | Tool | What it does |
 |---|---|
-| `account_info` | accounts, permissions, server features, quota, identities, limits, plus a cheap overview (unread in INBOX, Drafts/Junk counts, number of folders) |
+| `account_info` | accounts, permissions, server features, quota, identities, limits, plus a cheap overview (unread in INBOX, Drafts/Junk counts, number of folders) and the folder map |
 | `list_folders` | top level first with subfolder counts (`Clients ▸ 87`); `parent=` drills down, `query=` searches all levels, `depth=` (≤ 3) |
 | `find_messages` | time window (`today`, `this_week` …), from/to/subject/body, unread/flagged/attachments — exact, server-side; plus `query` (wildcard or fuzzy) |
 | `get_message` | headers, text body (paged, fenced as untrusted), attachments; `thread=true` for the conversation |
@@ -127,6 +127,24 @@ claude mcp add email -e UEM_WORK_PASSWORD=… -- uvx universal-email-mcp local
 Add `"--config", "/path/to/config.toml"` to the arguments for a non-default config
 file. Until the first functional release is on PyPI, run it from a checkout
 instead: `"command": "uv", "args": ["run", "--directory", "/path/to/universal-email-mcp", "universal-email-mcp", "local"]`.
+
+**What the assistant knows at the start:** the server instructions include a
+folder map per account, read when the server starts (all accounts in parallel,
+3 seconds at most; an account that is slow or down shows "not read at startup" and
+the server starts anyway):
+
+```text
+Work: INBOX, Drafts, Sent, Archive ▸ 8 (yearly: 2019 … 2026), Trash,
+      Clients ▸ 87 (e.g. Huber, Müller, Schmidt …), Projects ▸ 12, Personal
+```
+
+Special folders come first (labelled with their role where the name differs, e.g.
+`Gesendet (sent)`), then the other top-level folders alphabetically; `▸ N` is the
+number of direct subfolders, with a few example names or, for the archive, its
+scheme. The map is capped (30 folders, about 1500 characters per account), shows
+only your own folders (never other users' or shared ones) and treats every name as
+untrusted data. `account_info` returns the current map, so a long-running session
+can refresh it.
 
 Results come as Markdown tables (mail text escaped, links defanged) plus
 structured JSON; message bodies are fenced as untrusted content, so the assistant
