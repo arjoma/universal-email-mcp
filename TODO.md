@@ -242,8 +242,7 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Custom (free-entry) servers take a host name only, on the standard TLS ports 993 / 995 /
       465. Later: autodiscovery (Thunderbird ISPDB, autoconfig, RFC 6186) to prefill, STARTTLS
       and other ports behind an operator switch, a separate SMTP host.
-- [ ] Not yet in the portal (M4 list): activity page, privacy page (export / delete
-      everything), pending approvals (3f), a rename for accounts, an "allowed only for this
+- [ ] Not yet in the portal: a rename for accounts, an "allowed only for this
       client" pre-selection from the scope the client asked for on the account page.
 - [ ] Re-authentication re-checks `User.primary_address` (lower-cased) against the login
       server; a server that treats the login name case-sensitively would refuse a user who

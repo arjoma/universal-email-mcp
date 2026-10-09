@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   POSTs per user and network, viewer pages and downloads per user (translated 429 page),
   `/authorize` POSTs per network. IPv6 clients are limited per /64, `Retry-After` is sent with
   every 429, limiter memory is bounded, `ratelimit.hit` carries `grant` and the new scopes.
+- Portal page **Privacy** (`/portal/privacy`): what is stored about the user with live counts
+  and the retention from the running configuration; **download my data** (one JSON file with the
+  user's own records, never passwords, token digests or keys); **delete all my data** (needs a
+  recent password entry, the typed address and the CSRF token; revokes every grant and token
+  first, then removes all records of the user and closes their pooled mail connections).
+  Audit events `portal.export` and `portal.delete_all`.
 - Own-activity feed and the portal page **Activity** (`/portal/activity`): the user's recent
   events in plain words - sign-in, connecting and disconnecting applications, account and
   identity changes, what applications did (a `tool.call` audit event per MCP tool call in OAuth

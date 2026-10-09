@@ -60,7 +60,7 @@ tell apart by the `event` field and the `logger` name `universal_email_mcp.audit
 | Area | Events |
 |---|---|
 | authentication | `auth.sign_in` (outcome), `auth.consent`, `auth.token` (grant type, outcome), `auth.revoke`, `auth.register`, `auth.code_replay`, `auth.client_refused`, `auth.redirect_refused`, `auth.csrf_failed`, `portal.reauth`, `ratelimit.hit` (`scope`: `signin_address`, `signin_ip`, `authorize_ip`, `token_ip`, `register`, `portal_action`, `portal_test`, `viewer`, `download`, `tool_user`, `tool_grant`, `tool_write`; plus `user`, `grant`, `ip` where known; a refused tool call is logged as this event only, not as `tool.call`, so it writes nothing to the activity feed) |
-| portal | `portal.account_add/test/permissions/password/remove`, `portal.identity_add/edit/test/remove`, `portal.grant_edit/revoke` |
+| portal | `portal.account_add/test/permissions/password/remove`, `portal.identity_add/edit/test/remove`, `portal.grant_edit/revoke`, `portal.export` (record counts; in the feed), `portal.delete_all` (`deleted`: count per record kind; log only, the user's feed is deleted with them) |
 | tool calls (OAuth mode) | `tool.call`: tool name (`unknown` for names the client invented), outcome `ok`/`error`, `code`, duration bucket, number of accounts, and for writes `succeeded`/`unchanged`/`failed`/`planned` message counts |
 | sends | `send.requested`, `send.confirmed`, `send.declined`, `send.draft_kept`, `send.fallback_send`, `send.approval_requested`, `send.replay_refused`, `send.sent`, `send.failed`; `approval.approved/rejected/refused/send_failed/expired_use` |
 | viewer | `viewer.open`, `viewer.raw`, `attachment.download` |

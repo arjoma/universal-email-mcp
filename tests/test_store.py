@@ -724,7 +724,9 @@ async def test_delete_user_interrupted_midway_is_safe_and_repeatable(
     # tokens are dead already, the user and the accounts are still there
     assert await store.authenticate_access_token(access.access_token) is None
     assert await store.backend.find("grants", "user_id", "u_1") == []
-    assert await store.get(User, "u_1") is not None and await store.list_for_user(MailAccount, "u_1")
+    assert await store.get(User, "u_1") is not None and await store.list_for_user(
+        MailAccount, "u_1"
+    )
     counts = await store.delete_user("u_1")  # the retry finishes the job
     assert counts["users"] == 1
     for cls in USER_OWNED:

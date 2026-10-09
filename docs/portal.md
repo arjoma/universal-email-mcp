@@ -213,6 +213,30 @@ account names are looked up in the user's own records when the page is shown, an
 exists reads as "an application that is no longer connected". The page only ever reads the
 signed-in user's entries. The text is translatable like every other page. Details: [audit.md](audit.md).
 
+## Privacy: what is stored, export, delete everything
+
+`/portal/privacy` (menu "Privacy") has three parts.
+
+* **What is stored.** A table of the record kinds (user record, mail accounts, sender
+  identities, connected applications, activity, pending approvals, sign-in sessions) with live
+  counts of the signed-in user's own records and the retention. The durations are read from the
+  running configuration (portal session limits, the store's `SessionPolicy`: access key
+  lifetime, refresh lifetime and absolute maximum, activity 30 days, `UEM_APPROVAL_TTL`), not
+  written into the template.
+* **Download my data.** A `POST` (CSRF token required, no re-authentication: it shows the user
+  what they can already see) answers with one JSON file, `Content-Disposition: attachment`,
+  `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`. Contents and exclusions:
+  [stored-data.md](stored-data.md#privacy-export-and-delete). Audit event `portal.export` (also
+  a line in the user's Activity page).
+* **Delete all my data.** `GET /portal/privacy/delete` shows what will go and asks to type the
+  sign-in address; it needs a recent password entry like every sensitive action (stale: redirect
+  to `/portal/reauth` and back). `POST` checks the CSRF token, the password freshness and the typed
+  address (case-insensitive), calls `Store.delete_user`, closes the user's pooled mail
+  connections and viewer contexts (`UserPool.forget_user`), clears the session cookie and shows
+  "Your data was deleted". Signing in again afterwards starts from scratch like a new user.
+  Audit event `portal.delete_all` (log only, with counts per record kind; no feed entry because
+  the feed is deleted too).
+
 ## Language
 
 Templates contain no literal text; everything goes through the translation layer
