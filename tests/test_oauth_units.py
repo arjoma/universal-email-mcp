@@ -33,6 +33,7 @@ def test_pkce_rfc7636_example():
 def test_pkce_shapes():
     assert pkce.valid_challenge("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
     assert not pkce.valid_challenge("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM=")
+    assert not pkce.valid_challenge("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM\n")
     assert not pkce.valid_challenge("a" * 42) and not pkce.valid_challenge("")
     assert not pkce.valid_verifier("a" * 129) and not pkce.valid_verifier("a" * 42)
     assert not pkce.valid_verifier("a" * 43 + "!")
@@ -73,6 +74,9 @@ def test_acceptable_redirects(uri):
         "https://user:pw@app.example.com/cb",
         "https://app.example.com/cb\r\nX: y",
         "https://app.example.com/cb d",
+        "https://*/cb",
+        "https://a.example,x/cb",
+        "http://evil.com\\@127.0.0.1/cb",
         "https://app.example.com/é",
         "/relative",
         "https://",

@@ -13,11 +13,11 @@ _VERIFIER = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
 
 def valid_challenge(value: str) -> bool:
     """A base64url SHA-256 digest without padding is exactly 43 characters."""
-    return bool(_CHALLENGE.match(value))
+    return bool(_CHALLENGE.fullmatch(value))
 
 
 def valid_verifier(value: str) -> bool:
-    return bool(_VERIFIER.match(value))
+    return bool(_VERIFIER.fullmatch(value))
 
 
 def s256(verifier: str) -> str:

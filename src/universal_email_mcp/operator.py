@@ -212,6 +212,8 @@ def _origin(var: str, value: str) -> tuple[str, str]:
     bracket = f"[{host}]" if ":" in host else host
     if parts.scheme == "http" and bracket not in LOOPBACK_HOSTS:
         raise _fail(var, "http is only allowed for localhost", hint="Use https://…")
+    if (parts.scheme, port) in (("https", 443), ("http", 80)):
+        port = None  # browsers omit default ports in Origin
     origin = f"{parts.scheme}://{bracket}" + (f":{port}" if port else "")
     return origin, bracket
 

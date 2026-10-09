@@ -45,9 +45,11 @@ from universal_email_mcp.oauth.config import (
 )
 from universal_email_mcp.oauth.identity import AddressError, parse_address, short_id
 from universal_email_mcp.oauth.redirects import (
+    RedirectError,
     csp_form_target,
     display_host,
     redirect_matches,
+    validate_redirect_uri,
 )
 from universal_email_mcp.oauth.service import OAuthService, oauth_error, same_resource
 from universal_email_mcp.portal.assets import PORTAL_CSS
@@ -58,6 +60,7 @@ from universal_email_mcp.store import (
     Identity,
     InvalidToken,
     MailAccount,
+    OAuthClient,
     PortalSession,
     Token,
     User,
@@ -250,6 +253,10 @@ class OAuthEndpoints:
             if len(client.redirect_uris) != 1:
                 return _error_page(svc, request, "redirect")
             redirect_uri = client.redirect_uris[0]
+        try:
+            validate_redirect_uri(redirect_uri)
+        except RedirectError:
+            return _error_page(svc, request, "redirect")
         if not redirect_matches(client.redirect_uris, redirect_uri):
             svc.audit("auth.redirect_refused", client=_clip(client_id))
             return _error_page(svc, request, "redirect")
@@ -259,9 +266,14 @@ class OAuthEndpoints:
             return _error_page(svc, request, "invalid")
 
         def fail(error: str, description: str) -> Response:
-            return self._redirect_to(
-                redirect_uri, state, error=error, error_description=description
-            )
+            # Not redirected: anyone can register a client, so redirecting protocol errors
+            # would make /authorize an open redirect (RFC 9700 4.11.2). Only the user's own
+            # decision (access_denied) goes back to the client.
+            log_event(
+                log, logging.INFO, "authorization request refused",
+                event="auth.request", error=error, detail=description,
+            )  # fmt: skip
+            return _error_page(svc, request, "invalid")
 
         if params.get("response_type") != "code":
             return fail("unsupported_response_type", "only response_type=code is supported")
@@ -487,7 +499,7 @@ class OAuthEndpoints:
             scopes.add(SCOPE_READ)  # everything else builds on reading
         granted = {s for scopes in account_scopes.values() for s in scopes}
         if identity_ids:
-            granted.add(SCOPE_SEND)
+            granted.update((SCOPE_SEND, SCOPE_READ))
         scope = " ".join(s for s in svc.cfg.offered_scopes if s in granted)
         grant = await svc.store.create_grant(
             user_id=user.id,
@@ -546,7 +558,12 @@ class OAuthEndpoints:
         form = await request.form()
         values = {k: v for k, v in form.items() if isinstance(v, str)}
         if "client_secret" in values or request.headers.get("authorization"):
-            return oauth_error("invalid_client", "only public clients are supported", status=401)
+            return oauth_error(
+                "invalid_client",
+                "only public clients are supported",
+                status=401,
+                headers={"www-authenticate": 'Basic realm="token"'},
+            )
         grant_type = values.get("grant_type", "")
         client_id = values.get("client_id", "")
         if not client_id or len(client_id) > 512:
@@ -587,7 +604,7 @@ class OAuthEndpoints:
             return oauth_error("invalid_grant", "the authorization code is not valid")
         ok = (
             code.client_id == client_id
-            and values.get("redirect_uri") == code.redirect_uri
+            and values.get("redirect_uri", code.redirect_uri) == code.redirect_uri
             and pkce.verify(verifier, code.code_challenge)
         )
         if not ok:
@@ -607,6 +624,7 @@ class OAuthEndpoints:
             issued = await svc.store.issue_tokens(grant, resource=code.resource)
         except (InvalidToken, MailError):
             return oauth_error("invalid_grant", "the authorization code is not valid")
+        await self._keep_client(client_id)
         svc.audit(
             "auth.token",
             grant_type="authorization_code",
@@ -636,6 +654,7 @@ class OAuthEndpoints:
                 client=_clip(client_id),
             )
             return oauth_error("invalid_grant", "the refresh token is not valid")
+        await self._keep_client(client_id)
         svc.audit(
             "auth.token",
             grant_type="refresh_token",
@@ -644,6 +663,12 @@ class OAuthEndpoints:
             client=_clip(client_id),
         )
         return self._token_response(issued)
+
+    async def _keep_client(self, client_id: str) -> None:
+        """A registered client stays registered while its sessions are in use."""
+        rec = await self.svc.store.get(OAuthClient, client_id)
+        if rec is not None and rec.registration == "dcr":
+            await self.svc.store.touch_client(rec)
 
     # -- /revoke ----------------------------------------------------------------------
 

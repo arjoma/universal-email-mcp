@@ -173,7 +173,7 @@ def test_unknown_scopes_are_dropped_but_not_alone(client):
     assert a.exchange(a.code()).json()["scope"] == "mail.read"
     b = Authz(client, register(client), scope="offline_access")
     r = b.open()
-    assert query_of(r.headers["location"])["error"] == "invalid_scope"
+    assert r.status_code == 400 and "location" not in r.headers
 
 
 # ---------------------------------------------------------------- authorize errors
@@ -207,12 +207,46 @@ def test_loopback_port_is_free_for_native_clients(client):
         ({"resource": "https://other.example/mcp"}, "invalid_target"),
     ],
 )
-def test_redirectable_errors_carry_state_and_iss(client, change, error):
+def test_protocol_errors_are_pages_never_redirects(client, change, error):
+    # RFC 9700 4.11.2: anyone can register a client, so /authorize must not redirect errors
     a = Authz(client, register(client), **change)
     r = a.open()
-    q = query_of(r.headers["location"])
-    assert r.status_code == 303 and q["error"] == error
-    assert q["state"] == a.state and q["iss"] == ISSUER
+    assert r.status_code == 400 and "location" not in r.headers
+
+
+def test_open_redirect_is_closed(client):
+    cid = register(client, "https://evil.example/landing")
+    r = Authz(client, cid, redirect_uri="https://evil.example/landing",
+              extra={"response_type": "token"}).open()  # fmt: skip
+    assert r.status_code == 400 and "location" not in r.headers
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["http://evil.com\\@127.0.0.1/cb", "http://u@127.0.0.1:5/cb", "http://127.0.0.1:5/cb#x"],
+)
+def test_loopback_parser_tricks_are_refused(client, uri):
+    cid = register(client, "http://127.0.0.1/cb")
+    assert Authz(client, cid, redirect_uri=uri).open().status_code == 400
+
+
+def test_send_only_grant_still_includes_reading(client):
+    a = Authz(client, register(client), scope="mail.read mail.send")
+    page = a.consent_page()
+    form = {**hidden_fields(page.text), "action": "approve", "identity": ["primary"]}
+    code = query_of(client.post("/authorize", data=form).headers["location"])["code"]
+    assert a.exchange(code).json()["scope"] == "mail.read mail.send"
+
+
+def test_redirect_uri_is_optional_at_the_token_endpoint(client):
+    cid = register(client)
+    a = Authz(client, cid)
+    assert a.exchange(a.code(), redirect_uri="").status_code != 500
+    b = Authz(client, cid)
+    code = b.code()
+    data = {"grant_type": "authorization_code", "code": code, "client_id": cid,
+            "code_verifier": b.verifier}  # fmt: skip
+    assert client.post("/token", data=data).status_code == 200
 
 
 def test_missing_resource_defaults_to_the_mcp_endpoint(client):
@@ -232,7 +266,7 @@ def test_wrong_verifier_is_refused_and_burns_the_code(client):
     assert a.exchange(code).json()["error"] == "invalid_grant"
 
 
-@pytest.mark.parametrize("missing", ["code_verifier", "redirect_uri", "client_id"])
+@pytest.mark.parametrize("missing", ["code_verifier", "client_id"])
 def test_token_request_needs_every_binding(client, missing):
     a = Authz(client, register(client))
     r = a.exchange(a.code(), **{missing: ""})
