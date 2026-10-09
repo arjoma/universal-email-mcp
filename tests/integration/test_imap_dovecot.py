@@ -6,8 +6,9 @@ import dataclasses
 import socket
 import ssl
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from cryptography import x509
@@ -466,3 +467,47 @@ def test_wrong_password(mailbox: Mailbox):
             tls=INSECURE,
         )
     assert exc.value.code == "AUTH_FAILED"
+
+
+DAY = date(2026, 9, 15)  # in the past: Dovecot keeps only past INTERNALDATEs
+
+
+@pytest.mark.parametrize(
+    "zone",
+    [ZoneInfo("Pacific/Auckland"), ZoneInfo("America/Los_Angeles")],
+    ids=["ahead-of-utc", "behind-utc"],
+)
+def test_search_window_is_exact_for_days_in_another_zone(imap_server: ImapServer, zone):
+    """Dovecot counts days in UTC; the window is a day in ``zone``. Shortly after local
+    midnight "today" must still contain mail that arrived after it and nothing before it."""
+    mb = Mailbox(imap_server, f"tz-{uuid.uuid4().hex[:10]}@example.org")
+    c = mb.admin()
+    edge = datetime.combine(DAY, datetime.min.time(), zone).astimezone(UTC)  # local midnight
+    one, day = timedelta(minutes=1), timedelta(days=1)
+    arrivals = {
+        "just before the day": edge - one,
+        "first minute": edge + one,
+        "last minute": edge + day - 2 * one,
+        "just after the day": edge + day,
+        "yesterday noon": edge - timedelta(hours=12),
+        "tomorrow noon": edge + day + timedelta(hours=12),
+    }
+    try:
+        for i, (label, when) in enumerate(arrivals.items(), start=1):
+            raw = f"From: a@example.com\r\nSubject: {label}\r\nMessage-ID: <{i}@t>\r\n\r\nx\r\n"
+            c.append("INBOX", raw.encode(), msg_time=when)
+    finally:
+        c.logout()
+
+    def subjects(s: ImapSession, uids: tuple[int, ...]) -> set[str]:
+        sums = s.fetch_summaries("INBOX", list(uids))
+        return {m.subject for m in sums}
+
+    with mb.session() as s:
+        today = SearchCriteria(since=DAY, tz=zone)
+        got = subjects(s, s.search("INBOX", today).uids)
+        assert got == {"first minute", "last minute", "just after the day", "tomorrow noon"}
+        only = SearchCriteria(since=DAY, before=DAY + timedelta(days=1), tz=zone)
+        res = s.search("INBOX", only)
+        assert subjects(s, res.uids) == {"first minute", "last minute"}
+        assert res.exact

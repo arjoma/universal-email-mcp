@@ -321,6 +321,17 @@ def _sort_key(s: MessageSummary) -> float:
     return d.timestamp() if d else 0.0
 
 
+def flags_agree(summary: MessageSummary, criteria: SearchCriteria) -> bool:
+    """Do the (fresh) flags still satisfy the ``unseen``/``flagged`` filter? The search
+    ran a moment before the flags were read again; a message that changed in between must
+    not be listed under a filter its shown flags contradict. POP3 has no flags."""
+    if summary.ref.is_pop3:
+        return True
+    if criteria.unseen is not None and summary.seen == criteria.unseen:
+        return False
+    return criteria.flagged is None or summary.flagged == criteria.flagged
+
+
 def _hit_key(h: Hit) -> Key:
     """Best score first, then newest arrival; unique per message."""
     r = h.summary.ref
@@ -741,6 +752,7 @@ class MailService:
             notes += n
             exact = exact and e
         hits, next_sources = _merge(chunks, limit)
+        hits = [h for h in hits if flags_agree(h, criteria)]
         total = sum(c.total for c in chunks)
         offset = sum(c.start for c in chunks)
         # Accounts that failed this time keep their old positions, and the cursor
@@ -889,6 +901,7 @@ class MailService:
             problems=fan.problems,
         )
         shown = await self._refresh_hit_flags(selected, [h for _acc, h in page.items])
+        shown = [h for h in shown if flags_agree(h.summary, criteria)]
         return MessagePage(
             hits=shown,
             total=page.total,
@@ -1216,7 +1229,9 @@ class MailService:
         qh = query_hash(args)
         cur = self.cursors.decode(cursor, tool=tool, query=qh) if cursor else None
         now = now or datetime.now(UTC)
-        since = (now - timedelta(days=days)).date()
+        local = now.astimezone()  # the days count in the server's local zone, exactly
+        since = (local - timedelta(days=days)).date()
+        window = SearchCriteria(since=since, tz=local.tzinfo)
         selected, problems = self.router.select(accounts)
         budget = self.limits.max_headers_scanned
         if overview:
@@ -1234,7 +1249,7 @@ class MailService:
                 if f is None:
                     notes.append(f"{session.account_name}: no {role} folder found")
                     continue
-                res = session.search(f.name, SearchCriteria(since=since))
+                res = session.search(f.name, window)
                 share = budget // 2
                 uids = list(res.uids[:share])
                 if len(res.uids) > share and not overview:

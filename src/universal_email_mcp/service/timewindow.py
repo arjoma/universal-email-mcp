@@ -1,13 +1,15 @@
-"""Natural time windows (``today``, ``this_week`` …) → IMAP day ranges.
+"""Natural time windows (``today``, ``this_week`` …) → day ranges in a time zone.
 
-IMAP ``SINCE``/``BEFORE`` compare the arrival date with day precision; ``before``
-is exclusive. Days are taken in the local time zone (local mode) or a given one.
+A window is a range of *days in the user's time zone* (``tz``: the zone of ``now``,
+the server's local zone by default); ``before`` is exclusive. IMAP ``SINCE``/``BEFORE``
+compare the server's idea of the arrival day, so the search layer widens the range and
+filters exactly on the arrival instant (``SearchCriteria.tz``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 from typing import Literal, get_args
 
 from universal_email_mcp.errors import InvalidArgument
@@ -32,6 +34,8 @@ class Window:
     since: date | None
     before: date | None
     """Exclusive."""
+    tz: tzinfo | None = None
+    """The zone the days are in (``None``: unknown, server-day semantics)."""
 
     def describe(self) -> str:
         if self.since and self.before:
@@ -61,7 +65,9 @@ def resolve_window(
     now: datetime | None = None,
 ) -> Window:
     """Combine a preset with explicit ``since``/``before`` (explicit values win)."""
-    today = (now or datetime.now().astimezone()).date()
+    now = now or datetime.now().astimezone()
+    tz = now.tzinfo
+    today = now.date()
     w_since: date | None = None
     w_before: date | None = None
     if window:
@@ -99,4 +105,4 @@ def resolve_window(
         w_before = _parse_day(before, "before")
     if w_since and w_before and w_before <= w_since:
         raise InvalidArgument("'before' must be later than 'since'")
-    return Window(w_since, w_before)
+    return Window(w_since, w_before, tz)
