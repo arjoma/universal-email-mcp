@@ -25,7 +25,7 @@ from email.utils import getaddresses
 
 from universal_email_mcp.errors import InvalidArgument
 from universal_email_mcp.mail.compose import clean_email, valid_msgid
-from universal_email_mcp.mail.mime import sanitize_text
+from universal_email_mcp.mail.mime import html_to_text, sanitize_text
 from universal_email_mcp.models import Address
 
 MAX_RECIPIENT_HEADERS = 50
@@ -50,6 +50,16 @@ class Outgoing:
     preview: str
     """The plain-text body (sanitised, unescaped, capped; escape it for display)."""
     has_text_body: bool
+    preview_cut: int = 0
+    """Characters of the plain text beyond ``MAX_TEXT_CHARS`` that the preview leaves out."""
+    html_text: str = ""
+    """The text of the HTML part(s), as a reader would see it (sanitised, capped)."""
+    html_shown: bool = False
+    """The HTML says something the plain text does not (or there is no plain text): the
+    confirmation must show it too."""
+    html_cut: int = 0
+    remote_images: int = 0
+    """``<img>`` elements in the HTML that load a remote URL (tracking pixels)."""
 
     @property
     def recipients(self) -> tuple[Address, ...]:
@@ -161,7 +171,11 @@ def parse_outgoing(raw: bytes) -> Outgoing:
             text = str(body.get_content())
         except (LookupError, ValueError, UnicodeError):
             text = ""
-    preview = sanitize_text(text).strip()[:MAX_TEXT_CHARS]
+    full = sanitize_text(text).strip()
+    preview = full[:MAX_TEXT_CHARS]
+    html_text, html_cut, images = _html_view(msg)
+    same = " ".join(html_text.split()) == " ".join(preview.split())
+    html_shown = bool(html_text.strip()) and (body is None or not same)
     return Outgoing(
         raw=raw,
         sender=senders[0],
@@ -174,4 +188,32 @@ def parse_outgoing(raw: bytes) -> Outgoing:
         attachments=tuple(atts),
         preview=preview,
         has_text_body=body is not None,
+        preview_cut=max(0, len(full) - MAX_TEXT_CHARS),
+        html_text=html_text,
+        html_shown=html_shown,
+        html_cut=html_cut,
+        remote_images=images,
     )
+
+
+_REMOTE_IMG = re.compile(r"<img\b[^>]*\bsrc\s*=\s*[\"']?\s*(?:https?:)?//", re.IGNORECASE)
+
+
+def _html_view(msg: EmailMessage) -> tuple[str, int, int]:
+    """(text of all HTML body parts, characters cut, remote images). Attachments are not
+    body parts; a part that cannot be decoded counts as empty."""
+    texts: list[str] = []
+    images = 0
+    for part in msg.walk():
+        if part.is_multipart() or part.get_content_type() != "text/html":
+            continue
+        if part.get_content_disposition() == "attachment":
+            continue
+        try:
+            html = str(part.get_content())
+        except (LookupError, ValueError, UnicodeError):
+            continue
+        images += len(_REMOTE_IMG.findall(html))
+        texts.append(sanitize_text(html_to_text(html)).strip())
+    joined = "\n\n".join(t for t in texts if t)
+    return joined[:MAX_TEXT_CHARS], max(0, len(joined) - MAX_TEXT_CHARS), images

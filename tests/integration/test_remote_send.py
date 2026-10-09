@@ -747,3 +747,51 @@ async def test_pages_need_a_session(imap_server: ImapServer):
             assert res.status_code == 303 and res.headers["location"].startswith("/portal/signin")
         res = await anon.post(path, data={"action": "approve", "csrf_token": "x" * 40})
         assert res.status_code in (303, 403) and r.sink.messages == []
+
+
+# ---------------------------------------------------------------- HTML alternative, parallel approve
+
+
+async def test_the_page_shows_a_differing_html_part(imap_server: ImapServer):
+    async with remote(imap_server) as r:
+        u = await r.user()
+        token, _ = await r.token(u)
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = "me@example.org", "alice@example.org", "Mit HTML"
+        m["Message-ID"] = "<h@example.org>"
+        m.set_content("Harmloser Text")
+        m.add_alternative(
+            '<p>Ueberweisen Sie 5000 EUR</p><img src="https://track.example/pixel.png">',
+            subtype="html",
+        )
+        c = u.box.admin()
+        try:
+            c.append("Drafts", m.as_bytes(), flags=[b"\\Draft"])
+        finally:
+            c.logout()
+        async with r.client(token) as cl:
+            found = await cl.call_tool(
+                "find_messages",
+                {"accounts": ["Work"], "folders": ["Drafts"], "since": "2000-01-01"},
+            )
+            assert found.structured_content is not None
+            msgs = found.structured_content["messages"]
+            draft = next(x["id"] for x in msgs if x["subject"] == "Mit HTML")
+        d = data_of(await send(r, token, {"draft_id": draft}, mode="legacy"))
+        assert d["status"] == "pending_approval"
+        page = (await (await r.portal(u)).get(d["approval_url"].removeprefix(r.url))).text
+        assert "Harmloser Text" in page and "HTML version (differs" in page
+        assert "Ueberweisen Sie 5000 EUR" in page and "remote image" in page
+
+
+async def test_two_parallel_approvals_send_exactly_once(imap_server: ImapServer):
+    import asyncio
+
+    async with remote(imap_server) as r:
+        u = await r.user()
+        token, _ = await r.token(u)
+        aid, path = await pending(r, u, token)
+        a, b = await r.portal(u), await r.portal(u)
+        res = await asyncio.gather(post(a, path, action="approve"), post(b, path, action="approve"))
+        assert sorted(x.status_code for x in res)[0] == 200
+        assert len(r.sink.messages) == 1
