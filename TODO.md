@@ -18,7 +18,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       (work package 3h), then ship log-based metric/alert definitions as scripts.
 - [ ] Single-VM deployment: a `docker-compose.yml` is pointless with the memory store (all
       accounts lost on restart); do it together with the SQLite store.
-- [ ] Dependabot (or similar) for the pinned base-image digest and the Trivy action.
 
 ### M1 read tools: review leftovers and sandbox findings
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
