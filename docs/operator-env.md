@@ -40,7 +40,7 @@ out on your own machine, and nothing else.
 |---|---|
 | `MAIL_SERVERS` | Servers users may add in the portal: preset names or host names, comma separated (`united-domains,mail.example.com`). One entry = fixed, several = a list to choose from, **empty = free entry**: users type a host name (public addresses only, ports 993/995/465/587, verified TLS - see [portal.md](portal.md)). To forbid free entry, list at least one server. |
 | `LOGIN_DOMAINS` | `domain=server,...` - e-mail domains that may sign in (OAuth mode: **required**) and the server each uses for the login check. A bare `domain` uses the single `MAIL_SERVERS` entry. |
-| `UEM_ALLOW_PRIVATE_NETWORKS` | `false` by default in remote mode (mail servers on private/loopback addresses are refused). In dev mode the TOML `[settings]` value is the default. |
+| `UEM_ALLOW_PRIVATE_NETWORKS` | `false` by default in remote mode (mail servers on private/loopback addresses are refused). It only applies to servers the operator lists (`MAIL_SERVERS`, `LOGIN_DOMAINS`); hosts users type in (free entry) are always public-only. In dev mode the TOML `[settings]` value is the default. |
 
 ## Store and keys (OAuth mode)
 

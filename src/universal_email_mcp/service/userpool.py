@@ -153,6 +153,7 @@ def _account(rec: MailAccount, name: str, perms: Permissions, tls: TlsSettings) 
         credential=CredentialRef("inline", name, rec.password),
         permissions=perms,
         tls=tls,
+        public_only=not rec.preset,
     )
 
 
@@ -272,6 +273,7 @@ def _smtp_account(
         credential=CredentialRef("inline", name, ident.smtp_password),
         permissions=Permissions(read=False),
         tls=tls,
+        public_only=source is None or not source.preset,
     )
 
 

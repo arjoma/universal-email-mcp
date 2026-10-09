@@ -798,7 +798,7 @@ class Sender:
                         raw=out.raw,
                         max_bytes=cfg.limits.max_send_bytes,
                         tls=smtp_acc.tls,
-                        net=cfg.net_policy(),
+                        net=cfg.net_policy(smtp_acc),
                     )
 
                 try:

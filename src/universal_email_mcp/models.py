@@ -118,6 +118,10 @@ class Account:
     archive_scheme: ArchiveScheme = "auto"
     """How ``move_messages(to="archive")`` files mail: ``auto`` detects it from the
     archive folder's children (empty archive: flat)."""
+    public_only: bool = False
+    """Connect to public addresses only, whatever ``allow_private_networks`` says: set for
+    accounts whose host a user typed in (remote free entry), never for operator-listed
+    servers or local-mode accounts."""
 
     @property
     def endpoint(self) -> Endpoint:

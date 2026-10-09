@@ -70,7 +70,7 @@ class ConnectionHooks(Protocol):
 
 def connect_imap(account: Account, config: Config) -> ImapSession:
     password = resolve_password(account)
-    return ImapSession.for_account(account, password, net=config.net_policy())
+    return ImapSession.for_account(account, password, net=config.net_policy(account))
 
 
 DEFAULT_CONNECTORS: Mapping[AccountKind, Connector] = {"imap": connect_imap}
@@ -217,7 +217,7 @@ class AccountRouter:
                 max_message_bytes=lim.max_message_bytes,
             )
         return Pop3Session.for_account(
-            account, resolve_password(account), net=config.net_policy(), state=state
+            account, resolve_password(account), net=config.net_policy(account), state=state
         )
 
     # ------------------------------------------------------------ selection

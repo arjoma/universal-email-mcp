@@ -413,6 +413,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Hosts that users type in (free entry) are always connected to with public addresses only,
+  also when the operator sets `UEM_ALLOW_PRIVATE_NETWORKS`: the accounts carry the rule, so it
+  holds for every later connection and send, not only for the portal test. Site-local IPv6
+  (`fec0::/10`) is no longer treated as public.
 - Re-authentication for sensitive portal actions and for granting `send`; connection tests
   to user-named servers use the SSRF-safe connector (public addresses only, mail ports only,
   verified TLS) and are rate limited; passwords with line breaks or NUL are refused.

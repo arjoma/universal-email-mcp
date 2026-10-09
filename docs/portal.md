@@ -43,8 +43,11 @@ Free entry (only when `MAIL_SERVERS` is empty) is guarded like every outbound co
 user-named host: the name is resolved once, **every** address must be public (no private,
 loopback, link-local, CGNAT or metadata ranges, also not embedded in IPv6), the socket
 connects to the checked address, TLS is verified for the host name, only the ports 993 / 995 /
-465 / 587 are allowed, and IP literals and bare names are refused. Servers listed by the
-operator are trusted (any port; private addresses only with `UEM_ALLOW_PRIVATE_NETWORKS`).
+465 / 587 are allowed, and IP literals and bare names are refused. Free-entry accounts are
+**always public-only**, also when the operator sets `UEM_ALLOW_PRIVATE_NETWORKS` (the accounts
+remember this, so the check applies to every later connection, not only to the portal test).
+Servers listed by the operator are trusted (any port; private addresses only with
+`UEM_ALLOW_PRIVATE_NETWORKS`).
 
 Connection tests open outbound connections and try logins, so they are rate limited (by default 10 per
 user and 10 minutes, 30 per IP, 5 per target mailbox and 15 minutes). Every portal POST is
