@@ -475,3 +475,76 @@ async def test_guessing_passwords_for_one_mailbox_is_throttled(store, tester):
         tester.script.update({f"p{i}": "auth" for i in range(10)})
         codes = [add_account(b, password=f"p{i}", name=f"N{i}").status_code for i in range(8)]
         assert codes.count(429) >= 3  # at most 5 per mailbox and 15 minutes
+
+
+# ---------------------------------------------------------------- sign-in opt-in
+
+
+def _stored(store: Store) -> str:
+    return repr(store.backend._data)  # pyright: ignore[reportAttributeAccessIssue,reportPrivateUsage]
+
+
+def test_sign_in_form_offers_a_preticked_checkbox(app):
+    with Browser(app) as b:
+        page = b.page("/portal/signin")
+        assert 'name="store_password" value="1" checked' in page
+        assert "Use this mailbox with AI clients (stores the password encrypted)" in page
+        assert 'name="csrf_token"' in page
+
+
+async def test_unticked_sign_in_stores_nothing(store, tester):
+    app = await make_app(store=store, tester=tester)
+    with Browser(app) as b:
+        assert b.sign_in(store=False).status_code == 303
+        assert b.get("/portal/accounts").status_code == 200  # still signed in
+        assert await store.list_for_user(MailAccount, ALICE) == []
+        assert await store.list_for_user(Identity, ALICE) == []
+        user = await store.get(User, ALICE)
+        assert user is not None and not user.settings.get("primary_account")
+        assert PASSWORD not in _stored(store)
+        assert ids_in(b.page("/portal/accounts"), "accounts") == []
+
+
+async def test_a_later_ticked_sign_in_opts_in(store, tester):
+    app = await make_app(store=store, tester=tester)
+    with Browser(app) as b:
+        b.sign_in(store=False)
+    with Browser(app) as b2:
+        b2.sign_in()
+    (acc,) = await store.list_for_user(MailAccount, ALICE)
+    assert acc.name == "Main" and acc.password == PASSWORD
+
+
+async def test_unticked_later_sign_in_still_refreshes_an_existing_main(store, tester):
+    login = FakeLogin()
+    app = await make_app(store=store, tester=tester, login=login)
+    with Browser(app) as b:
+        b.signed_in()
+        login.password = "changed-at-the-server"
+        with Browser(app) as b2:
+            assert b2.sign_in("changed-at-the-server", store=False).status_code == 303
+    (acc,) = await store.list_for_user(MailAccount, ALICE)
+    assert acc.password == "changed-at-the-server"
+
+
+async def test_removed_main_does_not_come_back_by_signing_in(store, tester):
+    app = await make_app(store=store, tester=tester)
+    with Browser(app) as b:
+        b.signed_in()
+        (acc,) = await store.list_for_user(MailAccount, ALICE)
+        await store.delete(MailAccount, acc.id)
+        with Browser(app) as b2:
+            b2.sign_in()  # ticked
+    assert await store.list_for_user(MailAccount, ALICE) == []
+
+
+async def test_sign_in_without_csrf_stores_nothing(store, tester):
+    app = await make_app(store=store, tester=tester)
+    with Browser(app) as b:
+        r = b.client.post(
+            "/portal/signin",
+            data={"address": b.address, "password": PASSWORD, "store_password": "1"},
+        )
+        assert r.status_code == 403
+    assert await store.list_for_user(MailAccount, ALICE) == []
+    assert PASSWORD not in _stored(store)

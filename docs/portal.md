@@ -13,11 +13,19 @@ never a server the user names. The same sign-in serves the OAuth consent step: w
 signed in at `/authorize` is signed in at the portal and vice versa. Sessions are
 `__Host-` cookies, 30 minutes idle / 12 hours absolute by default.
 
-The **first** sign-in turns the sign-in mailbox into a real account named "Main" (IMAP, the
-login server, the typed password sealed in the store) plus a sender identity with the same
-address when the server has a submission endpoint. Later sign-ins keep the stored password
-current if it changed at the provider. A user who removes "Main" does not get it back; they
-can add the mailbox again like any other account. (Before the portal, the consent page offered
+Signing in **only verifies the password**. The sign-in form (portal and OAuth) has an opt-in
+checkbox, pre-ticked: "Use this mailbox with AI clients (stores the password encrypted)".
+Only when it is ticked is the sign-in mailbox turned into a real account named "Main" (IMAP,
+the login server, the typed password sealed in the store) plus a sender identity with the
+same address when the server has a submission endpoint. Unticked, nothing is stored (no
+account, no identity, no sealed password) and the user can add the mailbox later under
+Accounts, or tick the box at a later sign-in. The form cannot know the user before the address
+is typed, so the box is always shown and pre-ticked; it only has an effect while the user has
+no "Main". If "Main" exists, every sign-in keeps its stored password current if it changed at
+the provider, ticked or not. A user who removes "Main" does not get it back by signing in
+(ticked or not); they can add the mailbox again like any other account. With nothing stored,
+the OAuth consent page says no mail account is connected yet and links to the portal; a grant
+can only name existing accounts, so the user denies or adds an account first. (Before the portal, the consent page offered
 a pseudo account `primary`; grants that still reference it are rewritten to "Main" at the
 owner's next sign-in, keeping the permissions that had been granted.)
 

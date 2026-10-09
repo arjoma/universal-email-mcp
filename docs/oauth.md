@@ -112,7 +112,7 @@ interface. The SDK's *client* is what the end-to-end tests drive.
    with `state` and `iss`). `redirect_uri` at `/token` is optional but must match if sent.
 2. No browser session: the **sign-in page**. Address and password are verified by an IMAP
    login against the server `LOGIN_DOMAINS` assigns to the address's domain (never a server
-   the user names). The password is checked against that server; on the **first** sign-in it is also stored, sealed, as the credential of the sign-in mailbox account (the portal's "Main"; see [portal.md](portal.md)). The user record is keyed by the
+   the user names). The password is checked against that server; it is stored, sealed, as the credential of the sign-in mailbox account (the portal's "Main"; see [portal.md](portal.md)) only if the user ticks the opt-in checkbox "Use this mailbox with AI clients". The user record is keyed by the
    pseudonym `HMAC(PSEUDONYM_KEY, normalised address)`. A browser session (cookie) lives for
    `UEM_PORTAL_IDLE_TIMEOUT` idle / `UEM_PORTAL_SESSION_MAX` absolute.
 3. The **consent page** shows the client name, its metadata URL (CIMD) or "self-registered,

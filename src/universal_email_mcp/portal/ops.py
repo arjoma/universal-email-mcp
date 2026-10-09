@@ -346,15 +346,23 @@ def _without_send(grant: Grant, rest: tuple[str, ...]) -> Grant:
 
 
 async def ensure_primary(
-    store: Store, user: User, address: Address, password: str, profile: ServerProfile
+    store: Store,
+    user: User,
+    address: Address,
+    password: str,
+    profile: ServerProfile,
+    *,
+    create: bool,
 ) -> User:
-    """Make the sign-in mailbox a real account, once.
+    """Make the sign-in mailbox a real account, once - if the user opted in.
 
-    First sign-in of a user (or the first one after the portal replaced the 3c pseudo
-    account): create the account from the login server and the typed password, plus an
-    identity when the server has a submission endpoint, and rewrite old grants that
-    referenced the pseudo account ``primary``. Later sign-ins only refresh the stored
-    password if it changed. A user who removed the account does not get it back.
+    Signing in only verifies the password. With ``create`` (the user ticked "use this
+    mailbox with AI clients") and no "Main" yet: create the account from the login server
+    and the typed password, plus an identity when the server has a submission endpoint,
+    and rewrite old grants that referenced the pseudo account ``primary``. Without
+    ``create`` nothing is stored. An existing "Main" only has its password refreshed if
+    it changed (whatever ``create`` says). A user who removed the account does not get it
+    back by a later sign-in, ticked or not.
     """
     primary_id = str(user.settings.get("primary_account", ""))
     if primary_id:
@@ -362,7 +370,7 @@ async def ensure_primary(
         if acc is not None and acc.password != password:
             await set_password(store, user.id, primary_id, password)
         return user
-    if user.settings.get("primary_done") or profile.imap is None:
+    if not create or user.settings.get("primary_done") or profile.imap is None:
         return user
 
     now = store.now()
