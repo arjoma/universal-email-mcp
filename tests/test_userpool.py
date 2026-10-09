@@ -293,3 +293,62 @@ async def test_context_cache_is_bounded():
     assert len(h.pool._contexts) == 2  # pyright: ignore[reportPrivateUsage]
     assert ("u1", "g_u1") not in h.pool._contexts  # pyright: ignore[reportPrivateUsage]
     await h.pool.aclose()
+
+
+# ---------------------------------------------------------------- the viewer's context (WP 3g)
+
+
+async def test_viewer_context_holds_only_the_users_own_readable_accounts():
+    h = Harness(PoolSettings(), [0.0])
+    mine = await h.store.create(record("alice", "Mine"))
+    await h.store.create(record("alice", "Writer", perms=("organize",)))  # no read
+    await h.store.create(record("bob", "Mine"))  # same name, another user
+    await h.store.create(record("bob", "Secret"))
+    ctx = await h.pool.lease_viewer("alice")
+    try:
+        assert [a.name for a in ctx.config.accounts] == ["Mine"]
+        assert ctx.records["Mine"].id == mine.id and ctx.records["Mine"].user_id == "alice"
+        assert ctx.server is None  # no MCP server for the portal viewer
+        assert ctx.active == 1
+        assert all(a.permissions.read and not a.permissions.organize for a in ctx.config.accounts)
+        # the other user's account is not even resolvable
+        with pytest.raises(Exception, match="Secret"):
+            ctx.router.account("Secret")
+        again = await h.pool.lease_viewer("alice")  # the same lease again is the cached context
+        assert again is ctx
+        h.pool.release(again)
+    finally:
+        h.pool.release(ctx)
+    bob = await h.pool.lease_viewer("bob")
+    assert {a.name for a in bob.config.accounts} == {"Mine", "Secret"} and bob is not ctx
+    h.pool.release(bob)
+    await h.pool.aclose()
+
+
+async def test_viewer_context_is_rebuilt_when_an_account_changes():
+    h = Harness(PoolSettings(), [0.0])
+    rec = await h.store.create(record("alice", "Mine"))
+    first = await h.pool.lease_viewer("alice")
+    h.pool.release(first)
+    await h.store.update(replace(rec, permissions=("organize",)))
+    second = await h.pool.lease_viewer("alice")
+    assert second is not first and second.config.accounts == ()
+    h.pool.release(second)
+    await h.pool.aclose()
+
+
+async def test_mcp_contexts_carry_portal_links():
+    from universal_email_mcp.models import MessageRef
+
+    h = Harness(PoolSettings(), [0.0])
+    rec = await h.store.create(record("alice", "Mine"))
+    ctx = await h.pool.acquire(principal("alice", {rec.id: "read"}))
+    ref = MessageRef("Mine", "INBOX", 7, 3)
+    base = h.op.public_url
+    assert ctx.service.viewer_url(ref) == f"{base}/m/{ref.encode()}"
+    assert ctx.service.attachment_url(ref, "2.1") == f"{base}/m/{ref.encode()}/a/2.1"
+    assert ctx.service.message_url(ref) == f"{base}/m/{ref.encode()}/eml"
+    pop = MessageRef("Mine", "INBOX", 0, 0, "uidl-1")
+    assert ctx.service.attachment_url(pop, "1") is None  # POP3 has no parts to stream
+    assert "portal viewer" in ctx.service.download_status
+    await h.pool.aclose()

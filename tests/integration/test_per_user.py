@@ -217,6 +217,30 @@ async def test_read_grant_offers_six_read_tools_and_reads(
             assert bad.is_error
 
 
+async def test_tool_results_carry_portal_viewer_links(imap_server: ImapServer, box_a: Mailbox):
+    """Remote mode: message results link into the portal (``PUBLIC_URL/m/...``); the links carry
+    no token - the portal session authorises."""
+    async with world(imap_server) as w:
+        acc = await w.account("alice", "Work", box_a, ("read",))
+        token, _ = await w.token("alice", {acc.id: "read"})
+        async with w.client(token) as c:
+            r = await c.call_tool("find_messages", {"subject": "Ihre Rechnung"})
+            assert not r.is_error, text(r)
+            hit = (r.structured_content or {})["messages"][0]
+            mid = hit["id"]
+            assert hit["viewer_url"] == f"{w.url}/m/{mid}"
+            got = await c.call_tool("get_message", {"id": mid})
+            assert not got.is_error, text(got)
+            data = got.structured_content or {}
+            assert data["message"]["viewer_url"] == f"{w.url}/m/{mid}"
+            assert data["eml_url"] == f"{w.url}/m/{mid}/eml"
+            urls = [a["download_url"] for a in data["attachments"]]
+            assert urls and all(u and u.startswith(f"{w.url}/m/{mid}/a/") for u in urls)
+            assert f"{w.url}/m/{mid}" in text(got)
+            for u in (data["message"]["viewer_url"], data["eml_url"], *urls):
+                assert "token" not in u and "?" not in u
+
+
 async def test_grant_scope_caps_the_account_permissions(imap_server: ImapServer, box_a: Mailbox):
     """Effective permission = account ∩ grant ∩ token scope: a grant cannot exceed the account."""
     async with world(imap_server) as w:
