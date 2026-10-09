@@ -347,7 +347,7 @@ async def test_auth_code_single_use_and_expiry(store: Store, clock: Clock) -> No
         *(store.redeem_auth_code(raw) for _ in range(4)), return_exceptions=True
     )
     assert sum(isinstance(r, AuthCode) for r in results) <= 1
-    assert all(r is None or isinstance(r, AuthCode | CodeReplay) for r in results)
+    assert all(r is None or isinstance(r, AuthCode | CodeReplay) for r in results), results
 
 
 async def test_auth_code_replay_revokes_the_tokens_issued_from_it(

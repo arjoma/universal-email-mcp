@@ -13,14 +13,17 @@ therefore the store also checks ``expires_at`` on every read.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import random
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+from google.api_core import exceptions as gexc
 from google.cloud import firestore  # pyright: ignore[reportMissingTypeStubs]
 from google.cloud.firestore_v1.base_query import FieldFilter  # pyright: ignore
 
-from universal_email_mcp.store.backend import Doc, Op, StoreConflict, check_op
+from universal_email_mcp.store.backend import AlreadyExists, Doc, Op, StoreConflict, check_op
 
 ID_KEY = "_id"
 _ATTEMPTS = 10
@@ -72,6 +75,12 @@ class FirestoreBackend:
         if not ops:
             return
         refs = [self._col(op.collection).document(_doc_id(op.collection, op.id)) for op in ops]
+        if all(
+            op.kind == "create" or (op.kind == "delete" and op.expected_version is None)
+            for op in ops
+        ):
+            await self._write_batch(ops, refs)
+            return
 
         @firestore.async_transactional
         async def run(tx: Any) -> None:
@@ -90,6 +99,31 @@ class FirestoreBackend:
             if "attempts" not in str(e):
                 raise
             raise StoreConflict("too many concurrent changes to these records") from e
+
+    async def _write_batch(self, ops: Sequence[Op], refs: Sequence[Any]) -> None:
+        """Commits without a precondition read: creates (``exists == false`` is checked by
+        the server) and unconditional deletes. A transaction would read the documents and
+        lock them, so concurrent sign-ins of one user or revocations of one grant would
+        queue behind each other until the SDK gives up ("Transaction lock timeout");
+        here the server decides atomically and nobody waits."""
+        batch = self._client.batch()
+        for op, ref in zip(ops, refs, strict=True):
+            if op.kind == "delete":
+                batch.delete(ref)
+            else:
+                batch.create(ref, {**(op.doc or {}), ID_KEY: op.id})
+        for attempt in range(_ATTEMPTS):
+            try:
+                await batch.commit()
+                return
+            except gexc.AlreadyExists as e:
+                raise AlreadyExists("record already exists") from e
+            except gexc.Aborted:
+                # Contention on a document ("Transaction lock timeout", "too much contention"):
+                # nothing was written, so trying again is safe. The retry then either wins or
+                # meets the other writer's document and reports AlreadyExists.
+                await asyncio.sleep(min(1.0, 0.05 * 2**attempt) * (0.5 + random.random()))
+        raise StoreConflict("too many concurrent changes to these records")
 
     async def find(self, collection: str, field: str, value: str) -> list[tuple[str, Doc]]:
         query = self._col(collection).where(filter=FieldFilter(field, "==", value))

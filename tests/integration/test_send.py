@@ -686,7 +686,12 @@ async def test_audit_events_have_counts_but_no_addresses_or_content(
     assert [e["event"] for e in events] == ["send.requested", "send.confirmed", "send.sent"]
     first = events[0]
     assert first["recipients"] == {"internal": 0, "known": 1, "new": 1, "lookalike": 0}
-    assert first["size"] == "<10k" and first["account"].startswith("a_") and "Work" not in json.dumps(events) and first["attachments"] == 0
+    assert (
+        first["size"] == "<10k"
+        and first["account"].startswith("a_")
+        and "Work" not in json.dumps(events)
+        and first["attachments"] == 0
+    )
     blob = " ".join(r.getMessage() for r in caplog.records if r.name == LOGGER_NAME)
     for secret in ("alice@", "stranger", "Hallo", "Guten Tag", env.work.user):
         assert secret not in blob
