@@ -66,6 +66,7 @@ from universal_email_mcp.service.paging import (
 )
 from universal_email_mcp.service.query import Query, score_message, similar
 from universal_email_mcp.service.router import AccountProblem, AccountRouter, Fanout
+from universal_email_mcp.service.send import Sender
 from universal_email_mcp.service.trust import SentTo, SentToIndex
 
 DEFAULT_PAGE = 20
@@ -358,6 +359,10 @@ class MailService:
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
         self.drafts = Drafter(config, self.router, self.index, self.sent_to, self._own_addresses)
         """Compose and save drafts (``save_draft``)."""
+        self.sender = Sender(
+            config, self.router, self.index, self.sent_to, self.drafts, self._own_addresses
+        )
+        """Policy, recipient check, confirmation and SMTP (``send_message``)."""
 
     @property
     def limits(self) -> Limits:

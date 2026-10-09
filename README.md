@@ -65,6 +65,7 @@ again against the permissions of the account each message belongs to:
 | `delete_messages` | delete | moves to Trash (recoverable); mail already in Trash stays; there is no permanent deletion |
 
 | `save_draft` | drafts | writes a draft into the account's Drafts folder: new, reply (`reply_to_id`, `reply_all`), forward (`forward_id`, attaches the original's files only), or replaces an earlier one (`draft_id`); **never sends** |
+| `send_message` | an identity with `send = true` | sends a saved draft (`draft_id`) or a new message (the `save_draft` arguments; it is saved as a draft first). Irreversible, so: every recipient is classified (internal / written to before / new / **look-alike** of an address you know), the policy decides, and normally **you are asked to confirm** in your client; see below |
 
 `save_draft` picks the sender among your configured identities (`from` names one;
 else the identity the original was addressed to, else the default; a made-up
@@ -73,7 +74,42 @@ address and refuses line breaks in headers. A reply goes to the original's
 Reply-To (else From), like in a mail client, and warns when that points to another
 domain. The result previews the draft and warns about recipients you never wrote
 to. An identity needs `store_account` (or `account`) for its drafts; no SMTP server
-is needed yet. Plain text only.
+is needed for drafts. Plain text only.
+
+**Sending** is the riskiest tool and therefore the most guarded (design plan
+section 8):
+
+- The message always exists as a **draft** first; a declined, impossible or failed
+  send leaves it in Drafts (the result and error hints give its id).
+- SMTP goes through the same SSRF-safe connector as IMAP: the host is resolved
+  once, every address checked, TLS >= 1.2 verified against the host name.
+  Implicit TLS (465) or STARTTLS (587) - a server without STARTTLS is refused
+  before any login; there is no plain-text mode. The envelope sender is the
+  identity address, a `Bcc` header is never transmitted, and if the server
+  refuses any recipient nothing is sent. A broken connection after the body went
+  out is reported as `SEND_OUTCOME_UNKNOWN` (never retried).
+- **Confirmation** (`[policy] send`): `confirm` (default) asks the user through
+  MCP elicitation, showing sender, To/Cc/Bcc with their class and warnings,
+  subject, attachments and the start of the text; `confirm-external` asks unless
+  every recipient is internal; `on` asks only for look-alikes; `draft` never
+  sends; `off` removes the tool. A look-alike recipient is **always** put to the
+  user. A client that cannot elicit (or a user who declines) means: nothing is
+  sent, the mail stays a draft and must be sent from the mail client.
+- Recipient classes: `internal` = your own identity addresses and
+  `[policy] internal_domains`; `known` = you wrote to it (Sent, To/Cc, 2 years);
+  `new`; `lookalike` = a typo or confusable (digits for letters, Cyrillic or
+  Greek letters, `xn--` homographs, mixed scripts, another top-level domain) of an
+  address or domain you know - including a *known* address that has a near-twin
+  (you once mistyped `oliver.grnat@` and it went out).
+- Hard limits: `allowed_recipient_domains`, `max_recipients`,
+  `max_sends_per_hour` / `max_sends_per_day` per SMTP account, `limits.max_send_bytes`
+  and the server's SIZE.
+- Afterwards: a copy in Sent (identity `save_sent`), the draft removed (UID-scoped),
+  `\Answered` on the original of a reply (needs `organize` on its account), and
+  with `file_replies = "both"`/`"thread_folder"` the copy of a reply also goes
+  into the folder the original is filed in.
+- One audit line per attempt on stderr (JSON; counts per class, size bucket,
+  outcome - never addresses, subjects or text).
 
 The archive scheme of an account (`archive_scheme` = `auto` | `flat` | `yearly` |
 `monthly`, see `docs/config.example.toml`) is detected from the archive folder's

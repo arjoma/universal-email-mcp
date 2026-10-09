@@ -15,9 +15,21 @@ read_timeout = 60      # seconds
 
 [policy]
 read_only = false
-send = "confirm"                      # off | confirm | confirm-external | on
-allowed_recipient_domains = []        # empty = any domain
+# send_message:  off              the tool is not offered
+#                draft            composes and keeps drafts, never sends
+#                confirm          the user confirms every send (MCP elicitation);
+#                                 a client that cannot elicit leaves a draft  [default]
+#                confirm-external confirm unless every recipient is internal
+#                on               no confirmation (explicit opt-in) - except for
+#                                 look-alike recipients, which are always confirmed
+send = "confirm"
+allowed_recipient_domains = []        # empty = any domain (subdomains count)
 max_recipients = 20
+# Internal = your own identity addresses plus these whole domains. Listing a public
+# provider here (gmail.com) would make every one of its users "internal".
+internal_domains = []
+max_sends_per_hour = 20               # per SMTP account, counted while the server runs
+max_sends_per_day = 100
 
 [limits]
 max_results = 50                      # messages per tool call
@@ -28,6 +40,7 @@ max_accounts_per_call = 10
 account_timeout = 30                  # seconds per account in a fan-out
 max_headers_scanned = 2000            # headers per account for fuzzy search / contacts
 max_batch_messages = 50               # messages per mark / move / delete call
+max_send_bytes = 26214400             # largest message handed to SMTP (25 MiB)
 
 [downloads]
 # Local mode serves attachment download links from a listener on 127.0.0.1 (never
@@ -82,6 +95,16 @@ password_env = "UEM_OLDPOP_PASSWORD"
 # tls_ca_file = "~/certs/my-ca.pem"
 
 # ---------------------------------------------------------------- identities
+# Sending: send = true lets send_message use the identity. It needs an SMTP account
+# (account / smtp_account: its [accounts.smtp] table or the preset's SMTP server and
+# credentials; 465 = implicit TLS, 587 with tls = "starttls") and a store_account
+# with the "drafts" permission: a message is always saved as a draft first, the Sent
+# copy goes there, and a declined or impossible confirmation leaves the draft.
+# save_sent = auto (copy to Sent unless the SMTP server files it itself) | always | never
+# file_replies = sent | thread_folder | both: when a reply's original is filed in a
+#   folder of your own (not INBOX, not Archive), `both` also puts the copy there and
+#   `thread_folder` only there (falls back to Sent when no such folder).
+#
 # Senders. save_draft writes drafts as one of these identities (an unknown sender
 # is refused). account = SMTP transport and credentials plus the IMAP account that
 # receives Drafts/Sent copies (override separately with smtp_account /
@@ -97,7 +120,9 @@ address = "alice@example.com"
 display_name = "Alice Example"
 account = "Work"
 default = true
-send = false
+send = false                    # true: send_message may send as this identity
+# save_sent = "auto"
+# file_replies = "sent"
 signature = """
 Alice Example
 Example Inc."""

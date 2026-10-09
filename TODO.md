@@ -53,7 +53,6 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 
 ## Targets from real use (planned for M2, see design §7.2)
 - [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
-- [ ] File replies: the Sent copy of a reply goes into the conversation's folder too (2d).
 - [ ] Label management: rename / move / delete folders later (list and create exist).
 - [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
       raw headers, `.eml` and attachment downloads in the authenticated portal.
@@ -92,14 +91,12 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] A fuzzy `query` is scored per header text (sender, recipients, subject
       separately), so words spread over several fields ("rechnung huber") do not
       add up — consider scoring the combined text too.
-- [ ] WP 2d look-alike check must handle "the user really wrote to a typo
-      address" (`sent_to=true` for `oliver.grnat@`).
 
 ## WP 2a (organize) leftovers
 - [ ] Permanent deletion (empty Trash, delete from Trash/Junk) is deliberately not
       offered; if ever added it needs its own tool, permission and confirmation.
-- [ ] `mark_messages` sets only `\Seen` and `\Flagged`; `\Answered` is for the
-      reply/send work (2c/2d), custom keywords are not planned.
+- [ ] `mark_messages` sets only `\Seen` and `\Flagged` (`\Answered` is set by
+      `send_message` only); custom keywords are not planned, `$Forwarded` after a forward could follow.
 - [ ] Folder management beyond `create_folder` (rename, move, delete, unsubscribe).
 - [ ] Moving between accounts is not supported (an id belongs to one account; the
       destination is resolved per account). Copy-to-other-account would need APPEND.
@@ -175,8 +172,40 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 - [ ] Message-IDs of unusual syntax in an original are dropped from `References`
       (the thread link is lost rather than risking odd bytes in a header).
 - [ ] The quote's attribution line uses UTC; use the user's time zone and language.
-- [ ] `\Answered` on the original is set only when the reply is sent (WP 2d).
 - [ ] The "never written to" note runs one Sent search per save; cache or skip it for
       repeated updates of the same draft.
 - [ ] Drafts: `max_recipients` of the policy also caps to+cc+bcc of a draft; a draft
       for a mailing list with more recipients needs the limit raised.
+
+## WP 2d (send) leftovers
+- [ ] **Try it against a real SMTP server** (the united-domains hoster: 465/587, STARTTLS,
+      AUTH mechanisms, SIZE, whether it files its own Sent copy -> `ServerProfile.smtp_saves_sent`
+      is `False` for every preset until probe evidence exists) with a throw-away recipient.
+      `probe` has no SMTP check yet.
+- [ ] An identity without a store account cannot send (the draft is the safety net and the
+      Sent copy needs a place); the design allows "send without copies, noted in the
+      confirmation". Needs a decision on the fallback when confirmation is impossible.
+- [ ] Remote mode (3f): the elicitation state rides the SDK's `request_state` unsealed
+      locally; sealing/binding to user and content hash (`RequestStateSecurity`) and the
+      `SEND_FALLBACK` portal modes belong to 3f. The question carries a content
+      fingerprint so an answer cannot be reused for changed text.
+- [ ] Rate limits and the sent-Message-ID guard are in memory (lost on restart); the
+      remote store (3b) should hold them. A send whose draft could not be removed (no
+      UIDPLUS) can be sent again after a restart.
+- [ ] Look-alike detection compares with the Sent history of the store account only (up to
+      3000 newest Sent headers read per check, 2 years): contacts only seen in INBOX are
+      not "known" and not compared. The confusables table is small (Cyrillic, Greek, a few
+      Latin letters), no full Unicode TR39 skeleton; short local parts (< 3) are not compared.
+- [ ] `confirm-external` / `internal_domains` match whole domains exactly (no wildcard);
+      subdomain handling is only in `allowed_recipient_domains`.
+- [ ] SMTPUTF8 (non-ASCII local parts) is refused; 8-bit bodies need the server's 8BITMIME.
+      The EHLO name is the fixed `localhost`.
+- [ ] `\Answered` needs `organize` on the original's account; a forward does not set `$Forwarded`.
+      The original of a plain `draft_id` reply is searched in at most 25 folders / 10 s of the
+      store account (INBOX first); one in another account is not found.
+- [ ] The Sent copy keeps the `Bcc` header (the user's own record); the Sent-to index does not
+      read Bcc, so Bcc recipients stay "never written to" for later checks.
+- [ ] A hard policy refusal (allowed domains, limits) leaves nothing stored: the caller must
+      call `save_draft` again to keep the text. A failure after the draft was stored names its id
+      in the error hint.
+- [ ] `SendOut.attachments` reports no content types (file names and sizes only).

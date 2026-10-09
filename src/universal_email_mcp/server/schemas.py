@@ -448,3 +448,48 @@ class DraftOut(_Model):
     )
     replaced_note: str
     warnings: list[str]
+
+
+class RecipientOut(_Model):
+    """One recipient with the result of the send-time check."""
+
+    address: AddressOut
+    field: Literal["to", "cc", "bcc"]
+    klass: Literal["internal", "known", "new", "lookalike"] = Field(
+        serialization_alias="class",
+        validation_alias=AliasChoices("class", "klass"),
+        description="internal (your own / listed domains), known (you wrote to it before), "
+        "new (never written to) or lookalike (close to an address you know).",
+    )
+    notes: list[str]
+    similar_to: str | None = None
+
+
+class SendOut(_Model):
+    """The outcome of send_message."""
+
+    status: Literal["sent", "draft_kept", "declined"] = Field(
+        description="sent; draft_kept (nothing was sent, the draft is in Drafts: the client "
+        "cannot ask for confirmation, or the policy forbids sending); declined (the user said no)."
+    )
+    sent: bool
+    account: str = Field(description="The SMTP account used (or that would have been used).")
+    identity: str
+    from_: AddressOut = Field(
+        serialization_alias="from", validation_alias=AliasChoices("from", "from_")
+    )
+    recipients: list[RecipientOut]
+    subject: str
+    message_id: str | None
+    attachments: list[DraftFile]
+    size: int = Field(description="Message size in bytes.")
+    draft_id: str | None = Field(
+        description="The draft that is still in Drafts (null once the message was sent and "
+        "the draft removed)."
+    )
+    reasons: list[str] = Field(description="Why it was not sent / why confirmation was needed.")
+    confirmation: Literal["asked", "not_needed", "unavailable"]
+    receipt: str | None = Field(description="The SMTP server's final reply (sent only).")
+    sent_copy: str
+    steps: list[str] = Field(description="Bookkeeping after the send (copy, draft, answered).")
+    warnings: list[str]

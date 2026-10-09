@@ -184,3 +184,36 @@ class NoDraftsFolder(MailError):
         "The account has no recognisable Drafts folder (see account_info). Set "
         "folders.drafts in the account configuration."
     )
+
+
+class RecipientsRefused(MailError):
+    code = "RECIPIENT_REFUSED"
+    default_hint = (
+        "The mail server refused one or more recipients; nothing was sent. Check the "
+        "addresses (typos?) and correct the draft."
+    )
+
+    def __init__(
+        self, message: str, refused: dict[str, str] | None = None, *, hint: str | None = None
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.refused = refused or {}
+
+
+class RateLimited(MailError):
+    code = "RATE_LIMITED"
+    default_hint = "The send limit of the policy is reached. Wait, or ask the user to raise it."
+
+
+class SendOutcomeUnknown(MailError):
+    code = "SEND_OUTCOME_UNKNOWN"
+    default_hint = (
+        "The connection broke after the message was handed to the server: it may or may "
+        "not have been sent. Do NOT send it again; check the Sent folder and ask the "
+        "user. The draft was kept."
+    )
+
+
+class AlreadySent(MailError):
+    code = "ALREADY_SENT"
+    default_hint = "This message was sent earlier in this session; sending it again is refused."

@@ -64,6 +64,20 @@ class DraftResult:
 
 
 @dataclass(slots=True)
+class Built:
+    """A composed draft that has not been stored yet."""
+
+    draft: Draft
+    ident: Identity
+    reason: str
+    """Why this sender was chosen."""
+    store: Account
+    """The account whose Drafts folder receives it."""
+    old: _OldDraft | None
+    own: set[str]
+
+
+@dataclass(slots=True)
 class _Loaded:
     original: Original
     attachments: list[FileAttachment]
@@ -108,6 +122,10 @@ class Drafter:
         if acc.name != name:  # ids carry the exact configured name
             raise InvalidRef("message id refers to an unknown account")
         return acc
+
+    def account_for(self, name: str, permission: str) -> Account:
+        """The account a message id names, checked for ``permission``."""
+        return self._account(name, permission)
 
     # ------------------------------------------------------------ identities
 
@@ -177,7 +195,7 @@ class Drafter:
 
     # ------------------------------------------------------------ save
 
-    async def save(
+    async def build(
         self,
         *,
         to: Sequence[str] | None,
@@ -192,7 +210,9 @@ class Drafter:
         draft_id: str | None,
         account: str | None,
         include_attachments: bool = True,
-    ) -> DraftResult:
+    ) -> Built:
+        """Validate and compose everything for a draft without touching the Drafts
+        folder (``save`` stores the result; ``send_message`` shows it first)."""
         if reply_to_id and forward_id:
             raise InvalidArgument("reply_to_id and forward_id cannot be combined")
         if reply_all and not reply_to_id:
@@ -305,9 +325,45 @@ class Drafter:
 
         store_name = self._store_account(old_ref, account, ident)
         store = self._account(store_name, "drafts")
-        result = await self._append(store, draft, old, reason)
-        await self._recipient_note(store, draft, own, result)
+        return Built(draft, ident, reason, store, old, own)
+
+    async def save(
+        self,
+        *,
+        to: Sequence[str] | None,
+        cc: Sequence[str] | None,
+        bcc: Sequence[str] | None,
+        subject: str | None,
+        body: str,
+        sender: str | None,
+        reply_to_id: str | None,
+        reply_all: bool,
+        forward_id: str | None,
+        draft_id: str | None,
+        account: str | None,
+        include_attachments: bool = True,
+    ) -> DraftResult:
+        built = await self.build(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body=body,
+            sender=sender,
+            reply_to_id=reply_to_id,
+            reply_all=reply_all,
+            forward_id=forward_id,
+            draft_id=draft_id,
+            account=account,
+            include_attachments=include_attachments,
+        )
+        result = await self._append(built.store, built.draft, built.old, built.reason)
+        await self._recipient_note(built.store, built.draft, built.own, result)
         return result
+
+    async def store(self, built: Built) -> DraftResult:
+        """Append a built draft to its Drafts folder (a new draft, nothing replaced)."""
+        return await self._append(built.store, built.draft, None, built.reason)
 
     def _match_identity(self, email_addr: str) -> tuple[Identity, str] | None:
         key = email_addr.casefold()
@@ -336,7 +392,7 @@ class Drafter:
 
     async def _load_old(self, ref: MessageRef, acc: Account) -> _OldDraft:
         def fn(session: ImapSession) -> _OldDraft:
-            drafts = _drafts_folder(session)
+            drafts = drafts_folder(session)
             if ref.folder != drafts.name:
                 raise InvalidArgument(
                     "that message is not in the Drafts folder, so it is not a draft",
@@ -369,7 +425,7 @@ class Drafter:
         self, acc: Account, draft: Draft, old: _OldDraft | None, reason: str
     ) -> DraftResult:
         def fn(session: ImapSession) -> DraftResult:
-            drafts = _drafts_folder(session)
+            drafts = drafts_folder(session)
             res = session.append_message(drafts.name, draft.raw, flags=DRAFT_FLAGS)
             self.index.invalidate(session.account_name, drafts.name)
             new_id: str | None = None
@@ -462,7 +518,7 @@ class Drafter:
 # ----------------------------------------------------------------- helpers
 
 
-def _drafts_folder(session: ImapSession):  # noqa: ANN202
+def drafts_folder(session: ImapSession):  # noqa: ANN202
     session.list_folders()
     folder = session.folder_for_role("drafts")
     if folder is None:

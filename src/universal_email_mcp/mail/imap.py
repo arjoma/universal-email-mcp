@@ -54,6 +54,7 @@ from universal_email_mcp.errors import (
     ProtocolError,
     ServerUnreachable,
     TlsError,
+    TooLarge,
     UidValidityChanged,
     UnsupportedByServer,
 )
@@ -252,8 +253,12 @@ class IncrementalBatch:
     """True if further new messages exist beyond ``limit``."""
 
 
+RAW_CHUNK = 512 * 1024
+"""Bytes per FETCH when a whole message is read."""
 SETTABLE_FLAGS = ("\\Seen", "\\Flagged")
-"""The only flags :meth:`ImapSession.set_flags` changes."""
+"""The only flags :meth:`ImapSession.set_flags` changes unless the caller widens ``allowed``."""
+ANSWERED_FLAGS = (*SETTABLE_FLAGS, "\\Answered")
+"""What ``send_message`` may set on the original of a reply."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1297,6 +1302,30 @@ class ImapSession:
         self._open_message(ref)
         return self.read_part_range(ref, section, offset, length)
 
+    def fetch_raw_message(
+        self, ref: MessageRef, *, max_bytes: int
+    ) -> tuple[tuple[str, ...], bytes]:
+        """``(flags, raw bytes)`` of one whole message (``BODY.PEEK``: never sets
+        ``\\Seen``). Checks account and UIDVALIDITY; a message larger than
+        ``max_bytes`` raises :class:`TooLarge` before anything is downloaded."""
+        wire, _current = self._open_message(ref)
+        got = self._fetch_raw([ref.uid], ["UID", "FLAGS", "RFC822.SIZE"]).get(ref.uid)
+        if got is None:
+            raise MessageNotFound(f"message {ref.uid} not found in {decode_folder_name(wire)!r}")
+        size = int(got.get(b"RFC822.SIZE") or 0)
+        if size > max_bytes:
+            raise TooLarge(f"the message is {size} bytes; the limit is {max_bytes}")
+        flags = tuple(_s(f) for f in got.get(b"FLAGS", ()))
+        chunks: list[bytes] = []
+        offset = 0
+        while offset < size:
+            chunk = self.read_part_range(ref, "", offset, min(RAW_CHUNK, size - offset))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            offset += len(chunk)
+        return flags, b"".join(chunks)
+
     def fetch_attachment(self, ref: MessageRef, section: str, *, max_bytes: int) -> AttachmentData:
         """Decoded bytes of one part, or only its metadata when it is bigger than
         ``max_bytes`` (nothing is fetched then). Memory is bounded: the encoded
@@ -1367,15 +1396,17 @@ class ImapSession:
         uidvalidity: int,
         add: Sequence[str] = (),
         remove: Sequence[str] = (),
+        allowed: Sequence[str] = SETTABLE_FLAGS,
     ) -> FlagChange:
-        """Add and/or remove flags (only ``\\Seen`` and ``\\Flagged``) on ``uids``.
+        """Add and/or remove flags (only ``\\Seen`` and ``\\Flagged``, unless the caller
+        names more in ``allowed``) on ``uids``.
 
         ``UID STORE ... +FLAGS.SILENT`` / ``-FLAGS.SILENT``; returns the resulting
         flags per UID and the UIDs that no longer exist.
         """
         flags = [*add, *remove]
-        if not flags or set(add) & set(remove) or any(f not in SETTABLE_FLAGS for f in flags):
-            raise InvalidArgument(f"flags to change must come from {', '.join(SETTABLE_FLAGS)}")
+        if not flags or set(add) & set(remove) or any(f not in allowed for f in flags):
+            raise InvalidArgument(f"flags to change must come from {', '.join(allowed)}")
         wire = self._select_for_write(folder, uidvalidity)
         existing = self._existing(uids)
         present = sorted(existing)
