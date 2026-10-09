@@ -156,3 +156,18 @@ def test_serve_oauth_mode_refuses_incomplete_environment(
     monkeypatch.setenv("STORE_BACKEND", "memory")
     assert main(["serve"]) == 1
     assert "LOGIN_DOMAINS" in capsys.readouterr().err
+
+
+def test_serve_oauth_mode_refuses_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    """--config would be silently ignored in OAuth mode: say so instead."""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(CONFIG)
+    for var in ("UEM_DEV_TOKEN", "STORE_BACKEND", "LOGIN_DOMAINS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    assert main(["serve", "--config", str(cfg)]) == 1
+    err = capsys.readouterr().err
+    assert "--config" in err and "OAuth mode" in err

@@ -307,6 +307,11 @@ def _policy(env: Mapping[str, str], base: Policy) -> Policy:
     return replace(base, **changes)
 
 
+MAX_SECONDS = 10 * 365 * 24 * 3600
+"""Upper bound of a duration setting (10 years). Larger values overflow the calendar when
+added to "now" (the server would fail on the first token), and no deployment wants them."""
+
+
 def _seconds(env: Mapping[str, str], var: str, default: timedelta, *, zero_ok: bool) -> timedelta:
     raw = _text(env, var)
     if raw is None:
@@ -317,6 +322,8 @@ def _seconds(env: Mapping[str, str], var: str, default: timedelta, *, zero_ok: b
         raise _fail(var, f"{raw!r} is not a whole number of seconds") from None
     if value < 0 or (value == 0 and not zero_ok):
         raise _fail(var, "must be positive" + (" (0 = unlimited)" if zero_ok else ""))
+    if value > MAX_SECONDS:
+        raise _fail(var, f"too large (at most {MAX_SECONDS} seconds, 10 years)")
     return timedelta(seconds=value)
 
 
