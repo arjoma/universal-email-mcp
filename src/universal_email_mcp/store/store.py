@@ -269,17 +269,17 @@ class Store:
     # -- users ------------------------------------------------------------------------
 
     async def get_or_create_user(self, user_id: str, primary_address: str) -> User:
-        existing = await self.get(User, user_id)
-        if existing:
-            return existing
-        try:
-            return await self.create(
-                User(id=user_id, primary_address=primary_address, created_at=self.now())
-            )
-        except AlreadyExists:  # lost a race
-            again = await self.get(User, user_id)
-            assert again is not None
-            return again
+        for _ in range(5):
+            existing = await self.get(User, user_id)
+            if existing:
+                return existing
+            try:
+                return await self.create(
+                    User(id=user_id, primary_address=primary_address, created_at=self.now())
+                )
+            except StoreConflict:  # lost a race (AlreadyExists) or contention: look again
+                continue
+        raise StoreConflict("could not create the user record")
 
     # -- portal sessions --------------------------------------------------------------
 

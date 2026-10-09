@@ -235,30 +235,13 @@ WRITE_TOOLS = frozenset(
 # --------------------------------------------------------------------- configuration
 
 
-class FeedSink:
-    """Where own-activity entries go (the store). Implemented in :mod:`store`."""
-
-    async def __call__(
-        self,
-        user_id: str,
-        event: str,
-        *,
-        client: str,
-        tool: str,
-        account: str,
-        outcome: str,
-        counts: dict[str, int],
-        coalesce: bool,
-    ) -> None: ...
-
-
 @dataclass(slots=True)
 class _State:
     key: bytes = field(default_factory=lambda: secrets.token_bytes(32), repr=False)
     instance: str = ""
     log_ip: bool = False
     strict: bool = False
-    feed: Callable[..., Awaitable[None]] | None = None
+    feed: Callable[..., Awaitable[Any]] | None = None
 
 
 _state = _State()
@@ -285,7 +268,7 @@ def configure(
         _state.strict = strict
 
 
-def configure_feed(sink: Callable[..., Awaitable[None]] | None) -> None:
+def configure_feed(sink: Callable[..., Awaitable[Any]] | None) -> None:
     """Attach (or with ``None`` detach) the own-activity feed writer."""
     _state.feed = sink
 
