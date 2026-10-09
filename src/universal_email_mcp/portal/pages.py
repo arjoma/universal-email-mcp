@@ -788,7 +788,8 @@ class PortalEndpoints:
         await self.svc.audit(
             "portal.account_remove",
             user=auth.user.id,
-            account=account.name,  # the account is gone afterwards: the feed keeps its name
+            account=account.id,
+            label=account.name,  # the account is gone afterwards: the feed keeps its name
             grants=removal.grants_revoked if removal else 0,
             identities=removal.identities_removed if removal else 0,
         )

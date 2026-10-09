@@ -214,3 +214,63 @@ async def test_entries_expire_with_the_activity_ttl(app):
     assert store.policy.activity_ttl == timedelta(days=30)
     entry = await store.record_activity(uid, "auth.sign_in")
     assert entry.expires_at - now >= timedelta(days=29, hours=23)
+
+
+# ---------------------------------------------------------------- removed accounts, partial calls
+
+
+async def test_a_removed_account_keeps_its_name_in_a_dedicated_label(app, caplog):
+    caplog.set_level(logging.INFO, logger=audit.LOGGER_NAME)
+    with Browser(app) as b:
+        b.signed_in()
+        add = b.post(
+            "/portal/accounts/new",
+            {"name": "Kunden Konto", "protocol": "imap", "host": "mail.example.org",
+             "username": "alice", "password": "pw"},
+        )  # fmt: skip
+        aid = add.headers["location"].split("?")[0].rsplit("/", 1)[1]
+        b.post(f"/portal/accounts/{aid}/remove")
+        text = text_of(b.page("/portal/activity"))
+        assert "You added the mail account" in text
+        assert "You removed the mail account Kunden Konto." in text
+    by_event = {e.event: e for e in await entries(app)}
+    removed = by_event["portal.account_remove"]
+    assert removed.account == aid and removed.label == "Kunden Konto"  # id + label, not a name
+    assert by_event["portal.account_add"].label == ""
+    assert "Kunden" not in caplog.text  # the label reaches the feed, never the log line
+
+
+async def test_label_is_refused_where_the_event_does_not_list_it(app):
+    audit.configure(strict=True)
+    with pytest.raises(audit.AuditSchemaError):
+        audit.event("auth.sign_in", user="u_" + "ab" * 16, label="Work")
+    audit.configure(strict=False)
+
+
+async def test_a_partly_failed_call_shows_on_the_page(app):
+    with Browser(app) as b:
+        b.signed_in()
+        uid = await uid_of(app)
+        store = store_of(app)
+        for outcome in ("ok", "partial", "error"):
+            await store.record_activity(
+                uid, "tool.call", tool="mark_messages", outcome=outcome,
+                counts={"succeeded": 1, "failed": 0 if outcome == "ok" else 1},
+            )  # fmt: skip
+        text = text_of(b.page("/portal/activity"))
+        assert text.count("(partly succeeded)") == 1 and text.count("(did not succeed)") == 1
+
+
+async def test_partial_is_warning_severity_and_a_known_outcome(caplog):
+    from universal_email_mcp.server.peruser import _outcome
+
+    assert _outcome("ok", {"succeeded": 2}) == "ok"
+    assert _outcome("ok", {"succeeded": 2, "failed": 1}) == "partial"
+    assert _outcome("ok", {"failed": 1}) == "error"
+    assert _outcome("ok", {"failed": 0, "succeeded": 0}) == "ok"
+    assert _outcome("NOT_PERMITTED", {}) == "error"
+    caplog.set_level(logging.INFO, logger=audit.LOGGER_NAME)
+    audit.configure(strict=True)
+    audit.event("tool.call", tool="mark_messages", outcome="partial", failed=1, succeeded=2)
+    line = json.loads(caplog.records[-1].getMessage())
+    assert line["outcome"] == "partial" and line["severity"] == "WARNING"

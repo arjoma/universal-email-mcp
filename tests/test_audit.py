@@ -36,6 +36,7 @@ def sample_value(kind: str) -> Any:
         "user": USER,
         "ref:c": "https://client.example/meta.json",
         "ref:a": "Private Name",
+        "label": "Private Name",
         "ref:g": "g_0123456789abcdef",
         "ref:i": "i_0123456789abcdef",
         "ref:p": "a_0123456789abcdef",
@@ -99,7 +100,7 @@ def test_every_event_has_the_stable_shape(logs: pytest.LogCaptureFixture):
 
 def test_every_field_kind_is_used_and_valid():
     kinds = {"user", "ref:c", "ref:a", "ref:g", "ref:i", "ref:p", "ip", "tok", "words", "int",
-             "bool", "counts"}  # fmt: skip
+             "bool", "counts", "label"}  # fmt: skip
     assert set(FIELDS.values()) == kinds
     for spec in EVENTS.values():
         assert spec.fields <= set(FIELDS), spec.fields - set(FIELDS)

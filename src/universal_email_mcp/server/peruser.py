@@ -63,6 +63,16 @@ user_context_var: ContextVar[UserContext | None] = ContextVar("uem_user_context"
 DISCOVERY_METHODS = frozenset({"initialize", "server/discover"})
 
 
+def _outcome(code: str, counts: dict[str, int]) -> str:
+    """``ok``; ``error``; or ``partial`` when a batch call had failures next to successes
+    (it used to count as ``ok``, hiding the failures from the log severity and the feed)."""
+    if code != "ok":
+        return "error"
+    if counts.get("failed"):
+        return "partial" if counts.get("succeeded") else "error"
+    return "ok"
+
+
 class _DynamicInstructionsServer(Server[Any]):
     """The SDK reads ``Server.instructions`` for the handshake and for discovery. Here it is
     the instructions of the context serving the current request."""
@@ -192,9 +202,7 @@ class PerUserServer(MCPServer):
                 user=ctx.user_id,
                 grant=ctx.grant_id,
                 tool=name if name in audit.READ_TOOLS | audit.WRITE_TOOLS else "unknown",
-                outcome="ok"
-                if code == "ok" and not (counts.get("failed") and not counts.get("succeeded"))
-                else "error",
+                outcome=_outcome(code, counts),
                 code=None if code == "ok" else code,
                 dur=audit.duration_bucket(seconds),
                 accounts=len(ctx.records),

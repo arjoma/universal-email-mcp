@@ -485,6 +485,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a message before.
 - The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
   both transfer decoders run in a worker thread instead of on the event loop.
+- Audit: the `send.*` events now carry the account id (and the sender identity id) like every other event instead of the SMTP account name, so the log and the activity feed agree; the Activity page no longer guesses between ids and names. The name of a removed account is kept in a dedicated feed `label` (never in the log). A tool call with both successes and failures is audited as `partial` (severity WARNING) instead of `ok` and shown on the Activity page ("partly succeeded", also in German).
+
 - `serve`: `--config` in OAuth mode is refused with a clear error (it was silently ignored), and a `UEM_*_TTL` / `UEM_SESSION_MAX_AGE` / `UEM_PORTAL_*` value above 10 years is a `ConfigError` naming the variable instead of an overflow at the first token.
 
 - Time windows (`today`, `this_week`, `since`/`before`, and the contact look-back) are days in the server's local time zone and exact: the IMAP search is widened by a day on each side and the messages of the border days are checked on their arrival instant (INTERNALDATE); POP3 compares in the same zone. Before, mail that arrived between local and server midnight fell into the neighbouring day (`today` was empty for the first hours of the day). Hits whose fresh flags contradict an `unread`/`flagged` filter are dropped.

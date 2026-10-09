@@ -21,7 +21,7 @@ from tests.integration.test_drafts import seed
 from tests.integration.test_per_user import first_id, text, world
 from tests.integration.test_remote_send import data_of, send
 from universal_email_mcp.audit import LOGGER_NAME
-from universal_email_mcp.store import PendingApproval
+from universal_email_mcp.store import MailAccount, PendingApproval
 
 pytestmark = pytest.mark.integration
 
@@ -81,6 +81,29 @@ async def test_tool_calls_are_audited_and_land_in_the_feed(
         assert secret not in blob, secret
 
 
+async def test_a_batch_with_failures_and_successes_is_audited_as_partial(
+    imap_server: ImapServer,
+    box_a: Mailbox,
+    caplog: pytest.LogCaptureFixture,
+):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    async with world(imap_server) as w:
+        acc = await w.account("alice", "Work", box_a, ("read", "organize"))
+        token, _ = await w.token("alice", {acc.id: "read organize"})
+        async with w.client(token) as c:
+            found = await c.call_tool("find_messages", {"subject": "ALPHA-ONLY"})
+            mid = first_id(found, "ALPHA-ONLY subject")
+            r = await c.call_tool("mark_messages", {"ids": [mid, "m1.nonsense"], "seen": True})
+            assert r.structured_content["succeeded"] == 1 and r.structured_content["failed"] == 1
+        feed = [
+            e for e in await w.store.list_activity(w.users["alice"]) if e.tool == "mark_messages"
+        ]
+        assert [e.outcome for e in feed] == ["partial"]
+        assert feed[0].counts["succeeded"] == 1 and feed[0].counts["failed"] == 1
+    line = next(e for e in audit_lines(caplog) if e.get("tool") == "mark_messages")
+    assert line["outcome"] == "partial" and line["severity"] == "WARNING"
+
+
 async def test_a_users_feed_holds_only_their_own_calls(
     imap_server: ImapServer,
     box_a: Mailbox,
@@ -123,8 +146,12 @@ async def test_declined_and_pending_sends_are_in_the_feed_and_the_page(imap_serv
         token, _ = await r.token(u)
         await send(r, token, NEW, answers=Answers(action="decline"))
         await send(r, token, {**NEW, "to": ["stranger@nowhere.example"]}, mode="legacy")
-        events = {e.event for e in await r.store.list_activity(u.id)}
-        assert {"send.declined", "send.approval_requested"} <= events
+        feed = await r.store.list_activity(u.id)
+        assert {"send.declined", "send.approval_requested"} <= {e.event for e in feed}
+        # the send events carry the account's id like every other event, never its name
+        ids = {a.id for a in await r.store.list_for_user(MailAccount, u.id)}
+        declined = next(e for e in feed if e.event == "send.declined")
+        assert declined.account in ids
         approval = (await r.store.list_for_user(PendingApproval, u.id))[0]
         browser = await r.portal(u)
         await portal_post(browser, f"/portal/approvals/{approval.id}", action="reject")

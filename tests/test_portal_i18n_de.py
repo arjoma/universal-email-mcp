@@ -205,7 +205,8 @@ def _activity() -> list[dict[str, Any]]:
     ]  # fmt: skip
     return [
         {"when": "2026-10-09 14:30 UTC", "event": e, "tool": t, "client": HOSTILE,
-         "account": HOSTILE, "counts": {"succeeded": 2}, "calls": 3, "failed": i % 2 == 0}
+         "account": HOSTILE, "counts": {"succeeded": 2}, "calls": 3, "failed": i % 2 == 0,
+         "partial": i % 3 == 0}
         for i, (e, t) in enumerate(events)
     ]  # fmt: skip
 

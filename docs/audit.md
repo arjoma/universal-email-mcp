@@ -29,7 +29,11 @@ tell apart by the `event` field and the `logger` name `universal_email_mcp.audit
   (same as the `X-Request-Id` header and the access log), `user`, `client`, `account`,
   `outcome`, `code`.
 * `severity` is `WARNING` for refusals (`auth.csrf_failed`, `ratelimit.hit`, a sign-in with an
-  outcome other than `ok`, ...) and `ERROR` for `send.failed` / `approval.send_failed`.
+  outcome other than `ok`, a tool call with the outcome `error` or `partial`, ...) and `ERROR` for `send.failed` / `approval.send_failed`.
+* Every event names an account by its **id** (`a_...`), also the `send.*` events (the account the
+  sent copy goes to, plus the `identity`); local mode has no ids and uses the configured name
+  throughout. The one place a name is kept is the feed `label` of `portal.account_remove` (it is
+  never part of the log line), so the Activity page can still say which account was removed.
 * Other fields are event specific (counts such as `accounts`, `attachments`, `succeeded`;
   buckets `size` (`<10k` ... `>=10M`) and `dur` (`<100ms`, `<1s`, `<5s`, `<30s`, `>=30s`);
   `recipients` as counts per class).
@@ -61,7 +65,7 @@ tell apart by the `event` field and the `logger` name `universal_email_mcp.audit
 |---|---|
 | authentication | `auth.sign_in` (outcome), `auth.consent`, `auth.token` (grant type, outcome), `auth.revoke`, `auth.register`, `auth.code_replay`, `auth.client_refused`, `auth.redirect_refused`, `auth.csrf_failed`, `portal.reauth`, `ratelimit.hit` (`scope`: `signin_address`, `signin_ip`, `authorize_ip`, `token_ip`, `register`, `portal_action`, `portal_test`, `viewer`, `download`, `tool_user`, `tool_grant`, `tool_write`; plus `user`, `grant`, `ip` where known; a refused tool call is logged as this event only, not as `tool.call`, so it writes nothing to the activity feed) |
 | portal | `portal.account_add/test/permissions/password/remove`, `portal.identity_add/edit/test/remove`, `portal.grant_edit/revoke`, `portal.export` (record counts; in the feed), `portal.delete_all` (`deleted`: count per record kind; log only, the user's feed is deleted with them) |
-| tool calls (OAuth mode) | `tool.call`: tool name (`unknown` for names the client invented), outcome `ok`/`error`, `code`, duration bucket, number of accounts, and for writes `succeeded`/`unchanged`/`failed`/`planned` message counts |
+| tool calls (OAuth mode) | `tool.call`: tool name (`unknown` for names the client invented), outcome `ok`/`error`/`partial` (`partial`: a batch with `succeeded` and `failed` both above 0), `code`, duration bucket, number of accounts, and for writes `succeeded`/`unchanged`/`failed`/`planned` message counts |
 | sends | `send.requested`, `send.confirmed`, `send.declined`, `send.draft_kept`, `send.fallback_send`, `send.approval_requested`, `send.replay_refused`, `send.sent`, `send.failed`; `approval.approved/rejected/refused/send_failed/expired_use` |
 | viewer | `viewer.open`, `viewer.raw`, `attachment.download` |
 
@@ -70,7 +74,8 @@ In local mode only the `send.*` events occur (counts, buckets, outcome; no user)
 ## The activity feed (OAuth mode)
 
 `audit.record(...)` stores, for events that have a user, an `ActivityEntry` in the store
-(`docs/stored-data.md`): event name, grant id (as `client`), tool, account id or name,
+(`docs/stored-data.md`): event name, grant id (as `client`), tool, account id (and, for a removed
+account, a `label` with its name),
 outcome and counts - sealed, 30 days (TTL). The portal page **Activity** (`/portal/activity`)
 shows the signed-in user's own entries in plain words and resolves the application and
 account names from the user's own records when the page is rendered.

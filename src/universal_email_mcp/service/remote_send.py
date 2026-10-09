@@ -50,12 +50,15 @@ class StoreRemoteSend:
         user_id: str,
         grant_id: str,
         public_url: str | None,
+        account_ids: Mapping[str, str] | None = None,
     ) -> None:
         self.store = store
         self.policy = policy
         self.user_id = user_id
         self.grant_id = grant_id
         self.public_url = public_url
+        self._account_ids = dict(account_ids or {})
+        """Account name in the user's configuration -> account id."""
 
     # ------------------------------------------------------------ rate limit
 
@@ -124,5 +127,11 @@ class StoreRemoteSend:
             id=rec.id, url=approval_url(self.public_url, rec.id), expires_in_minutes=minutes
         )
 
-    def audit_fields(self) -> Mapping[str, Any]:
-        return {"user": self.user_id, "grant": self.grant_id}
+    def audit_fields(self, *, identity: Identity, account_name: str | None) -> Mapping[str, Any]:
+        out: dict[str, Any] = {"user": self.user_id, "grant": self.grant_id}
+        if identity.ref:
+            out["identity"] = identity.ref
+        account = self._account_ids.get(account_name or "")
+        if account:
+            out["account"] = account
+        return out

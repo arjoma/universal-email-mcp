@@ -687,6 +687,7 @@ class Store:
         client: str = "",
         tool: str = "",
         account: str = "",
+        label: str = "",
         outcome: str = "",
         counts: dict[str, int] | None = None,
         coalesce: bool = False,
@@ -695,14 +696,14 @@ class Store:
         subjects, addresses or other mail data cannot slip in by accident.
 
         ``client`` is the id of the grant (the portal resolves it to the application's name
-        when it shows the entry), ``account`` an account id or name.
+        when it shows the entry), ``account`` an account id; ``label`` the name of something that no longer exists.
 
         ``coalesce`` merges repeated events of the same kind within one hour into a single
         entry whose ``calls`` count grows (and whose counts add up), so that a busy client
         cannot fill the feed (and the send rate limit's scan of it) with read calls. Racing
         writers of one entry retry a few times; under heavy contention a call raises
         ``StoreConflict`` and its count is not recorded (the entry never over-counts)."""
-        for text in (event, client, tool, account, outcome):
+        for text in (event, client, tool, account, label, outcome):
             if len(text) > ACTIVITY_MAX_TEXT or "@" in text:
                 raise ValueError("activity labels must be short names, not addresses or text")
         counts = counts or {}
@@ -723,6 +724,7 @@ class Store:
             client=client,
             tool=tool,
             account=account,
+            label=label,
             outcome=outcome,
             counts=dict(counts),
             expires_at=now + self.policy.activity_ttl,
