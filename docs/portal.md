@@ -93,8 +93,11 @@ mailbox, through the same per-user service the application uses, and shows what 
 * the subject, the attachments (names and sizes; a count of the ones not listed),
 * the whole **new text** under the same truncation rules as the elicitation prompt (3000
   characters / 80 lines, the rest announced with numbers, never silently); links are defanged,
-  control and bidi characters removed, everything is HTML-escaped. The quoted original of a
-  reply is folded into a `<details>` block (collapsed, but never dropped).
+  control and bidi characters removed, everything is HTML-escaped. The original of a
+  reply or forward is named (sender, date, subject; "forwarded message" for forwards), with a
+  warning when the subject is not `Re:` / `Fwd:` plus the original's subject. The quote of a
+  reply is folded into a `<details>` block (collapsed, never dropped) only when the server
+  verified it against the message in the mailbox; anything else is shown as ordinary text.
 
 If the draft has an HTML version that differs from the plain text (or there is no plain
 text), its text is shown under its own heading too, with the same cut notices; remote images in
