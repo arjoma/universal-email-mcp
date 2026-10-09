@@ -29,6 +29,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Docker Hub limits anonymous pulls per runner IP; pull through Google's public
+      # mirror (falls back to Docker Hub for images it lacks). Images stay pinned by digest.
+      - name: Use the Docker Hub mirror
+        run: |
+          [ -s /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' /etc/docker/daemon.json \
+            | sudo tee /etc/docker/daemon.tmp >/dev/null
+          sudo mv /etc/docker/daemon.tmp /etc/docker/daemon.json
+          sudo systemctl restart docker
+
       # Real IMAP + POP3 server for the integration tests (tests/integration). Any
       # user name logs in with USER_PASSWORD. Pinned by digest; started here rather
       # than as a service container because POP3 needs a command-line option the
@@ -92,6 +102,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Docker Hub limits anonymous pulls per runner IP; pull through Google's public
+      # mirror (falls back to Docker Hub for images it lacks). Images stay pinned by digest.
+      - name: Use the Docker Hub mirror
+        run: |
+          [ -s /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' /etc/docker/daemon.json \
+            | sudo tee /etc/docker/daemon.tmp >/dev/null
+          sudo mv /etc/docker/daemon.tmp /etc/docker/daemon.json
+          sudo systemctl restart docker
       - name: Build image
         run: docker build --build-arg EXTRAS=gcp --build-arg REVISION="$GITHUB_SHA" --tag uem-ci:test .
       - name: Smoke test
