@@ -11,7 +11,6 @@ are ever read (the store lists by ``user_id``), so another user's activity canno
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from universal_email_mcp.portal.pages import PortalEndpoints
 
 PAGE_SIZE = 200
-_ID = re.compile(r"[a-z]{1,3}_[0-9a-f]{12,}")
 
 
 class ActivityPages:
@@ -44,12 +42,8 @@ class ActivityPages:
         rows: list[dict[str, Any]] = []
         for e in entries:
             grant = grants.get(e.client) if e.client else None
-            if e.account in accounts:
-                account = accounts[e.account]
-            elif e.account and not _ID.fullmatch(e.account):
-                account = e.account  # a name recorded as it was (e.g. of a removed account)
-            else:
-                account = ""
+            # the account's current name; for one that is gone, the label kept with the entry
+            account = accounts.get(e.account, "") or e.label
             rows.append(
                 {
                     "when": fmt_time(e.at),
@@ -58,7 +52,9 @@ class ActivityPages:
                     "has_client": bool(e.client),
                     "tool": e.tool,
                     "account": clean_text(account, 80),
-                    "failed": e.outcome not in ("", "ok", "approved", "accepted", "sent"),
+                    "failed": e.outcome
+                    not in ("", "ok", "approved", "accepted", "sent", "partial"),
+                    "partial": e.outcome == "partial",
                     "counts": dict(e.counts),
                     "calls": e.counts.get("calls", 1),
                 }

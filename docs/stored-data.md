@@ -41,7 +41,7 @@ single-field equality (`user_id`, `grant_id`), no composite index is needed.
 | token (`tokens`) | id = SHA-256 of the token, type, grant, resource, expiry | - | access 1 h, refresh as grant |
 | pending approval (`approvals`) | user, grant, identity, content hash (SHA-256 of the message without Message-ID/Date), status | draft reference | `UEM_APPROVAL_TTL`, 10 minutes by default |
 | send marker (`approvals`, status `sent`, id `s_...`) | user, content hash | - | 10 minutes (replay guard of a send in flight) |
-| activity (`activity`) | user, time | event, grant id, tool, account id or name, outcome, counts | 30 days |
+| activity (`activity`) | user, time | event, grant id, tool, account id, label (name of a removed account), outcome, counts | 30 days |
 
 A *grant* is a connected AI client in the portal's "Connected AI clients" list. Refresh
 tokens rotate on every use; the old one stays (marked consumed) until it expires, and
@@ -49,7 +49,7 @@ presenting it again revokes the whole grant (replay detection).
 
 Activity entries accept only short labels (no `@`, max 64 characters) and integer counts, a
 tripwire against accidents; callers must still pass names and counts only. `client` holds the
-**grant id** and `account` an account id (or, for a removed account, its name as it was); the portal's
+**grant id** and `account` an account id (for a removed account the entry also keeps its `label`, the name as it was, never an address); the portal's
 Activity page resolves both to the user's current names when it renders, so nothing but ids
 and counts is duplicated. Entries are written by the audit pipeline (`audit.record`, see
 [audit.md](audit.md)); `Store.record_activity(..., coalesce=True)` merges repeated events of one

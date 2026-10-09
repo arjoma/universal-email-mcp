@@ -409,6 +409,7 @@ class UserPool:
                 user_id=principal.user_id,
                 grant_id=principal.grant_id,
                 public_url=self.op.public_url,
+                account_ids={name: rec.id for name, rec in records.items()},
             ),
         )
         ctx = UserContext(

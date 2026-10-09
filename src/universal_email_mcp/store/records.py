@@ -277,7 +277,15 @@ class ActivityEntry(Record):
     """One event of the own-activity feed (design section 9). Counts and names, no mail data."""
 
     KIND: ClassVar[str] = "activity"
-    SEALED: ClassVar[tuple[str, ...]] = ("event", "client", "tool", "account", "outcome", "counts")
+    SEALED: ClassVar[tuple[str, ...]] = (
+        "event",
+        "client",
+        "tool",
+        "account",
+        "label",
+        "outcome",
+        "counts",
+    )
 
     user_id: str
     at: datetime
@@ -285,7 +293,10 @@ class ActivityEntry(Record):
     client: str = field(default="", repr=False)
     tool: str = field(default="", repr=False)
     account: str = field(default="", repr=False)
-    """Account *name* the user chose, never an address."""
+    """An account *id* (the portal resolves it to the account's current name)."""
+    label: str = field(default="", repr=False)
+    """A name the user chose, kept for entries about something that is gone afterwards (a
+    removed account); never an address."""
     outcome: str = field(default="", repr=False)
     counts: dict[str, int] = field(default_factory=dict[str, int], repr=False)
     expires_at: datetime

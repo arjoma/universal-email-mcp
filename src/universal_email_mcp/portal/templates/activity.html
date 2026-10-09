@@ -59,7 +59,8 @@
         {%- elif e.event == "viewer.raw" %}{{ _("You looked at the raw source of a message.") }}
         {%- elif e.event == "attachment.download" %}{{ _("You downloaded an attachment.") }}
         {%- else %}{{ _("Other activity.") }}{% endif %}
-        {%- if e.failed %} <strong>{{ _("(did not succeed)") }}</strong>{% endif %}
+        {%- if e.partial %} <strong>{{ _("(partly succeeded)") }}</strong>
+        {%- elif e.failed %} <strong>{{ _("(did not succeed)") }}</strong>{% endif %}
       </td>
     </tr>
     {% endfor %}

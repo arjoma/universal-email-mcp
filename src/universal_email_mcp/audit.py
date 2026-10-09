@@ -74,11 +74,13 @@ class AuditSchemaError(ValueError):
 #   int    non-negative integer
 #   bool   boolean
 #   counts mapping token -> non-negative integer
+#   label  a name the user chose, for the user's own feed only (never in the log line)
 #   ip     IP address, logged as the pseudonym of its network (only if enabled)
 FIELDS: dict[str, str] = {
     "user": "user",
     "client": "ref:c",
     "account": "ref:a",
+    "label": "label",
     "grant": "ref:g",
     "identity": "ref:i",
     "approval": "ref:p",
@@ -144,7 +146,7 @@ def _s(*names: str, severity: str = "INFO", feed: bool = False, feed_if: str | N
     )
 
 
-SEND_FIELDS = ("recipients", "attachments", "size", "mode", "grant")
+SEND_FIELDS = ("recipients", "attachments", "size", "mode", "grant", "identity")
 
 EVENTS: dict[str, Spec] = {
     # --- authentication (OAuth server and portal sign-in)
@@ -166,7 +168,7 @@ EVENTS: dict[str, Spec] = {
     "portal.account_test": _s(severity="outcome", feed=True),
     "portal.account_permissions": _s("permissions", feed=True),
     "portal.account_password": _s(feed=True),
-    "portal.account_remove": _s("grants", "identities", feed=True),
+    "portal.account_remove": _s("grants", "identities", "label", feed=True),
     "portal.identity_add": _s("identity", "can_send", feed=True),
     "portal.identity_edit": _s("identity", "can_send", feed=True),
     "portal.identity_remove": _s("identity", "grants", feed=True),
@@ -467,6 +469,8 @@ def _build(name: str, fields: Mapping[str, Any]) -> tuple[dict[str, Any], Spec |
         if key not in allowed or key not in FIELDS:
             _bad(strict, f"event {name}: field {key!r} is not allowed")
             continue
+        if key == "label":
+            continue  # a chosen name: reaches the user's own feed (see record), never the log
         out = _convert(key, FIELDS[key], raw, strict)
         if out is not None:
             payload[key] = out
@@ -527,6 +531,7 @@ async def record(name: str, /, *, coalesce: bool = False, **fields: Any) -> None
     if isinstance(rec, dict):
         counts.update({f"to_{k}": v for k, v in rec.items()})  # pyright: ignore[reportUnknownVariableType]
     client = fields.get("grant") if isinstance(fields.get("grant"), str) else ""
+    label = fields.get("label") if "label" in spec.fields else None
     account = fields.get("account") if isinstance(fields.get("account"), str) else ""
     try:
         await asyncio.wait_for(
@@ -536,6 +541,7 @@ async def record(name: str, /, *, coalesce: bool = False, **fields: Any) -> None
                 client=_clip(client),
                 tool=str(tool),
                 account=_clip(account),
+                **({"label": _clip(label)} if label else {}),
                 outcome=str(payload.get("outcome", "")),
                 counts=counts,
                 coalesce=coalesce,

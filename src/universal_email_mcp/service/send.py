@@ -221,8 +221,9 @@ class RemoteSend(Protocol):
         self, *, identity: Identity, content_hash: str, draft: MessageRef
     ) -> ApprovalTicket: ...
 
-    def audit_fields(self) -> Mapping[str, Any]:
-        """Pseudonymous ids added to every audit event of the user's sends."""
+    def audit_fields(self, *, identity: Identity, account_name: str | None) -> Mapping[str, Any]:
+        """Ids added to every audit event of the user's sends: user, grant, the identity
+        and the account the copy goes to - ids, never names (the same as every other event)."""
         ...
 
 
@@ -829,12 +830,15 @@ class Sender:
         outcome but a clean send leaves it behind."""
         out = p.out
         base: dict[str, Any] = dict(
-            account=p.smtp_account.name,
             recipients=count_by_class(p.classified),
             attachments=len(out.attachments),
             size=audit.size_bucket(len(out.raw)),
             mode=self.config.policy.send,
-            **(self.remote.audit_fields() if self.remote else {}),
+            **(
+                self.remote.audit_fields(identity=p.ident, account_name=p.ident.store_account)
+                if self.remote
+                else {"account": p.smtp_account.name}  # local mode has names only
+            ),
         )
         await audit.record("send.requested", **base)
         result = SendResult(
