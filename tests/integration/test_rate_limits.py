@@ -163,5 +163,6 @@ async def test_hits_are_audited_without_content(
     hits = [e for e in lines if e["event"] == "ratelimit.hit"]
     assert len(hits) == 1 and hits[0]["scope"] == "tool_user" and hits[0]["severity"] == "WARNING"
     assert "SECRET-SUBJECT" not in json.dumps(lines)
+    # the refused call is audited as ratelimit.hit only (no tool.call, so no feed write)
     calls = [e for e in lines if e["event"] == "tool.call"]
-    assert [e["outcome"] for e in calls] == ["ok", "error"] and calls[1]["code"] == "RATE_LIMITED"
+    assert [e["outcome"] for e in calls] == ["ok"]
