@@ -38,6 +38,7 @@ from universal_email_mcp.errors import MailError
 from universal_email_mcp.mail.mime import sanitize_line
 from universal_email_mcp.oauth.bearer import Principal
 from universal_email_mcp.oauth.clients import clean_text
+from universal_email_mcp.portal.i18n import TIME_FORMAT
 from universal_email_mcp.server import render
 from universal_email_mcp.service.send import (
     SHOW_ATTACHMENTS,
@@ -54,7 +55,6 @@ from universal_email_mcp.service.send import (
     split_quoted,
     text_excerpt,
 )
-from universal_email_mcp.portal.i18n import TIME_FORMAT
 from universal_email_mcp.store import Grant, PendingApproval
 from universal_email_mcp.store.backend import StoreConflict
 

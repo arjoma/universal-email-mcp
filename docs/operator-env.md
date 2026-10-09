@@ -69,7 +69,7 @@ out on your own machine, and nothing else.
 | `UEM_DCR` | `true` | Offer `/register` (Dynamic Client Registration) as fallback to Client ID Metadata Documents. |
 | `UEM_DCR_REDIRECT_HOSTS` | any | Comma separated hosts a dynamically registered `https` redirect URI may use (loopback is always allowed). |
 | `UEM_TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front (Cloud Run: `1`). Decides which `X-Forwarded-For` entry is the client address for rate limits; `0` uses the socket peer. Set it wrong and rate limits count the proxy, or can be dodged by a forged header. |
-| `UEM_DEFAULT_LANGUAGE` | `en` | Default language of the sign-in and consent pages (needs a catalog; falls back to English). |
+| `UEM_DEFAULT_LANGUAGE` | `en` | Default language of all end-user pages for visitors without a cookie or matching `Accept-Language` (`en` or `de`; other values fall back to English). |
 
 The scopes clients can obtain follow the policy: with `UEM_READ_ONLY=true` only
 `mail.read`, `mail.send` is not offered when `UEM_SEND_POLICY=off`.

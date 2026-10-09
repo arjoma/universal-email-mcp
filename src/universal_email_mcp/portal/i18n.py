@@ -17,8 +17,8 @@ import gettext
 import io
 import json
 import re
-from datetime import datetime
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 

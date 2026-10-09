@@ -26,9 +26,10 @@ German — that stays in the chat and never ends up in the repository.
   (`Gesendet`, `Entwürfe`), fuzzy-matching synonyms (`Kunden`), test corpora.
 - **End-user UI** (portal, consent, message viewer — anything a person sees in the
   browser) is built **translatable from the start** (no hard-coded strings in
-  templates), but ships English only for now. Later: the operator sets the
-  deployment's default language, each user can switch. German will be the second
-  language. Tool output for the AI client stays English.
+  templates). English and German ship (`portal/locales/de.json`, formal "Sie"); the
+  operator sets the deployment's default language, each user can switch. Every UI change
+  must keep `tests/test_portal_i18n_de.py` green (it lists missing German ids). Tool output
+  for the AI client stays English.
 
 ## Security principle: no e-mail is trusted
 
