@@ -27,6 +27,8 @@ from universal_email_mcp.store.backend import AlreadyExists, Doc, Op, StoreConfl
 
 ID_KEY = "_id"
 _ATTEMPTS = 10
+_TX_ATTEMPTS = 3
+_ROUNDS = 6
 TTL_FIELD = "expires_at"
 
 
@@ -93,12 +95,19 @@ class FirestoreBackend:
                 else:
                     tx.set(ref, {**(op.doc or {}), ID_KEY: op.id})
 
-        try:
-            await run(self._client.transaction(max_attempts=_ATTEMPTS))
-        except ValueError as e:  # the SDK's "failed to commit in N attempts": heavy contention
-            if "attempts" not in str(e):
-                raise
-            raise StoreConflict("too many concurrent changes to these records") from e
+        # The SDK retries an aborted transaction itself, but with long back-offs, and the
+        # racers of one document keep aborting each other (all hold a read lock, all want to
+        # write). A few short rounds with jitter let one win; the others then fail the
+        # version check at once instead of timing out.
+        for round_ in range(_ROUNDS):
+            try:
+                await run(self._client.transaction(max_attempts=_TX_ATTEMPTS))
+                return
+            except ValueError as e:  # the SDK's "failed to commit in N attempts"
+                if "attempts" not in str(e):
+                    raise
+            await asyncio.sleep(random.uniform(0.05, 0.25) * (round_ + 1))
+        raise StoreConflict("too many concurrent changes to these records")
 
     async def _write_batch(self, ops: Sequence[Op], refs: Sequence[Any]) -> None:
         """Commits without a precondition read: creates (``exists == false`` is checked by
