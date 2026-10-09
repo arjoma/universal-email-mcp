@@ -292,7 +292,7 @@ async def test_cimd_clients_show_their_host(alice, store):
         user_id=ALICE, client_id=cid, client_name="Doc Client", scope="mail.read"
     )
     page = alice.page("/portal/clients")
-    assert "client.example.org" in page and "Doc Client" in page
+    assert "<code>client.example.org</code>" in page and "Doc Client" in page
     del now
 
 
