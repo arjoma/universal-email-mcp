@@ -238,3 +238,34 @@ async def test_run_daemon_delivers_results_and_errors():
 
     with pytest.raises(ValueError):
         await _run_daemon(loop, boom)
+
+
+async def test_a_write_is_not_replayed_after_the_connection_broke():
+    """The first run may have reached the server: a second run could apply it twice."""
+    router, conn = _router("A")
+    acc = router.account("A")
+    assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
+    session = conn.sessions["A"]
+    runs = 0
+
+    def append(s: FakeSession) -> None:
+        nonlocal runs
+        runs += 1
+        s.writes_started = getattr(s, "writes_started", 0) + 1  # the APPEND went out ...
+        raise ServerUnreachable("connection lost during APPEND")  # ... the answer never came
+
+    session.fail_next = False
+    with pytest.raises(ServerUnreachable) as info:
+        await router.call(acc, append)
+    assert runs == 1
+    assert "check the result" in info.value.hint
+    assert conn.connects == ["A"]  # no reconnect for the write
+
+
+async def test_a_read_that_never_wrote_is_still_retried_on_a_new_connection():
+    router, conn = _router("A")
+    acc = router.account("A")
+    assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
+    conn.sessions["A"].fail_next = True
+    assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
+    assert conn.connects == ["A", "A"]

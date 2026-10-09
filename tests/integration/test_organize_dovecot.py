@@ -261,3 +261,29 @@ def test_created_folder_accepts_mail(session: ImapSession):
 def test_folder_list_shows_roles(session: ImapSession):
     trash = session.folder_for_role("trash")
     assert isinstance(trash, FolderInfo) and trash.name == "Trash"
+
+
+def test_move_fallback_keeps_a_deleted_mark_somebody_else_set(box: Mailbox, session: ImapSession):
+    """When UID EXPUNGE fails, our \\Deleted is withdrawn - but not from a message that
+    was already flagged before we touched it."""
+    import imaplib
+
+    without(session, "MOVE")
+    validity, uids = inbox(session)
+    c: Any = box.admin()
+    try:
+        c.select_folder("INBOX")
+        c.add_flags([uids[0]], [b"\\Deleted"], silent=True)
+    finally:
+        c.logout()
+
+    def broken(_uids: object) -> None:
+        raise imaplib.IMAP4.error("UID EXPUNGE refused")
+
+    client: Any = session._client  # pyright: ignore[reportPrivateUsage]
+    client.uid_expunge = broken
+    res = session.move_messages("INBOX", uids[:2], "Zielordner", uidvalidity=validity)
+    assert res.copied_only == tuple(uids[:2]) and res.moved == {}
+    got = flags(session, uids[:2])
+    assert "\\Deleted" in got[uids[0]]
+    assert "\\Deleted" not in got[uids[1]]

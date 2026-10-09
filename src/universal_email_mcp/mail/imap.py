@@ -610,6 +610,10 @@ class ImapSession:
         self._foreign: tuple[str, ...] | None = None
         self.role_warnings: list[str] = []
         self.subscribe_failed: list[str] = []
+        self.writes_started = 0
+        """Counts write commands put on the wire. The router re-runs a call on a fresh
+        connection only if this did not move: a repeated STORE/MOVE/APPEND whose first run
+        reached the server would be applied twice."""
 
     # ------------------------------------------------------------ lifecycle
 
@@ -1511,6 +1515,7 @@ class ImapSession:
         existing = self._existing(uids)
         present = sorted(existing)
         if present:
+            self.writes_started += 1
             if add:
                 self._call("STORE", lambda: self._client.add_flags(present, list(add), silent=True))
             if remove:
@@ -1546,7 +1551,8 @@ class ImapSession:
         wire = self._select_for_write(folder, uidvalidity)
         if dest_wire == wire:
             raise InvalidArgument("the messages are already in that folder")
-        present = sorted(self._existing(uids))
+        existing = self._existing(uids)
+        present = sorted(existing)
         missing = tuple(u for u in dict.fromkeys(uids) if u not in present)
         if not present:
             return MoveResult(wire, dest_wire, {}, (), missing, None, "none")
@@ -1556,6 +1562,7 @@ class ImapSession:
         quoted = _quote_wire(dest_wire)
         imap.untagged_responses.pop("COPYUID", None)
         verb = b"MOVE" if use_move else b"COPY"
+        self.writes_started += 1
         typ, data = self._call(
             verb.decode(), lambda: client._raw_command(verb, [id_set, quoted], uid=True)
         )
@@ -1588,8 +1595,12 @@ class ImapSession:
             self._call("UID EXPUNGE", lambda: self._client.uid_expunge(moved_src))
         except MailError:
             copied_only = tuple(moved_src)
-            try:  # best effort: do not leave the originals hidden as "deleted"
-                self._client.remove_flags(moved_src, [b"\\Deleted"], silent=True)
+            # Best effort: do not leave the originals hidden as "deleted" - but only those
+            # that were not flagged before; somebody else's \Deleted mark stays.
+            ours = [u for u in moved_src if not _has_flag(existing.get(u, ()), "\\Deleted")]
+            try:
+                if ours:
+                    self._client.remove_flags(ours, [b"\\Deleted"], silent=True)
             except Exception:  # noqa: BLE001
                 pass
         moved = {} if copied_only else {u: (mapping or {}).get(u) for u in moved_src}
@@ -1603,6 +1614,7 @@ class ImapSession:
         is recorded in ``subscribe_failed``). The cached folder list is dropped."""
         wire = _wire_name(wire)
         self._check_own(wire)
+        self.writes_started += 1
         try:
             self._client.create_folder(wire)
         except (imaplib.IMAP4.abort, OSError) as e:
@@ -1631,6 +1643,7 @@ class ImapSession:
         """
         wire = _wire_name(folder)
         self._check_own(wire)
+        self.writes_started += 1
         try:
             resp = self._client.append(wire, raw, flags=[f.encode("ascii") for f in flags])
         except (imaplib.IMAP4.abort, OSError) as e:
@@ -1673,6 +1686,7 @@ class ImapSession:
             return "missing"
         if "\\Draft" not in flags:
             return "not_a_draft"
+        self.writes_started += 1
         self._call("STORE", lambda: self._client.add_flags([uid], [b"\\Deleted"], silent=True))
         try:
             self._call("UID EXPUNGE", lambda: self._client.uid_expunge([uid]))
@@ -1686,6 +1700,10 @@ class ImapSession:
 
 
 # =========================================================================== helpers
+
+
+def _has_flag(flags: Iterable[str], flag: str) -> bool:
+    return any(f.casefold() == flag.casefold() for f in flags)
 
 
 def _quiet_shutdown(client: IMAPClient) -> None:
