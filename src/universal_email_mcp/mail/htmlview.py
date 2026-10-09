@@ -40,6 +40,10 @@ from universal_email_mcp.mail.mime import (
 
 MAX_HTML_CHARS = 2_000_000
 MAX_NESTING = 400
+MAX_TAGS = 20_000
+"""Start tags per part. Bounds the depth ammonia sees whatever it does with stray end tags."""
+MAX_INLINE_IMAGE_OUTPUT = 8 * 1024 * 1024
+"""Bytes of ``data:`` URIs written per document (a cid image used many times is copied)."""
 """``ammonia`` takes time quadratic in the nesting depth; deeper input is refused."""
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024
@@ -118,9 +122,13 @@ def clean_style(value: str) -> str | None:
 
 
 def _depth_ok(html: str) -> bool:
-    depth = 0
+    depth = tags = 0
     for m in _TAG.finditer(html):
         tag = m.group(2).lower()
+        if not m.group(1):
+            tags += 1
+            if tags > MAX_TAGS:
+                return False
         if m.group(1):
             depth = max(0, depth - 1)
         elif not m.group(3) and tag not in _VOID:
@@ -161,7 +169,11 @@ def csp(*, remote_images: bool, ancestor: str) -> str:
 
 
 def sanitize_html(
-    html: str, images: dict[str, tuple[str, bytes]], *, remote_images: bool
+    html: str,
+    images: dict[str, tuple[str, bytes]],
+    *,
+    remote_images: bool,
+    image_budget: list[int] | None = None,
 ) -> tuple[str, int, tuple[str, ...]]:
     """``(clean fragment, remote image count, links)``; raises :class:`TooComplex`."""
     html = sanitize_text(html)
@@ -169,6 +181,7 @@ def sanitize_html(
         raise TooComplex
     remote = 0
     links: dict[str, None] = {}
+    budget = image_budget if image_budget is not None else [MAX_INLINE_IMAGE_OUTPUT]
 
     def attribute_filter(tag: str, attr: str, value: str) -> str | None:
         nonlocal remote
@@ -188,6 +201,10 @@ def sanitize_html(
                 found = images.get(normalize_cid(src))
                 if found is None:
                     return None
+                cost = len(found[1]) * 4 // 3 + 40
+                if cost > budget[0]:
+                    return None
+                budget[0] -= cost
                 return f"data:{found[0]};base64,{base64.b64encode(found[1]).decode('ascii')}"
             if low.startswith("data:"):
                 return src if _DATA_IMAGE.match(src) else None
@@ -228,8 +245,11 @@ def build_html_view(raw: bytes, *, remote_images: bool = False) -> HtmlView:
     bodies: list[str] = []
     remote_total = 0
     links: dict[str, None] = {}
+    budget = [MAX_INLINE_IMAGE_OUTPUT]
     for html in parts.html:
-        body, remote, found = sanitize_html(html, parts.images, remote_images=remote_images)
+        body, remote, found = sanitize_html(
+            html, parts.images, remote_images=remote_images, image_budget=budget
+        )
         bodies.append(body)
         remote_total += remote
         links.update(dict.fromkeys(found))

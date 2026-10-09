@@ -124,9 +124,10 @@ document comes from a separate route with its own CSP:
   relative URLs and every scheme except `http`, `https`, `mailto` and `tel` on links are
   dropped. `<style>` blocks are not kept; `style` attributes pass an own filter (about 70
   presentation properties, values without `url()`, escapes, comments or any function except
-  colours and `calc`), so there is no CSS exfiltration even without the CSP. Input nested
-  deeper than 400 levels is refused (the sanitizer is quadratic in the depth); the page then
-  shows the text version.
+  colours and `calc`), so there is no CSS exfiltration even without the CSP. Input with
+  more than 20,000 tags or nested deeper than 400 levels is refused (the sanitizer is quadratic
+  in the depth); the page then shows the text version. At most 8 MiB of inlined images are
+  written per document.
 * **Images**: `cid:` references become `data:` URIs of the message's own raster images (PNG,
   JPEG, GIF, WebP; never SVG; 2 MiB each, 8 MiB in all). Remote (`https:`) images are **not
   loaded**: the page says how many there are and offers "Load remote images", an explicit click
@@ -136,7 +137,7 @@ document comes from a separate route with its own CSP:
   the link targets, defanged (`hxxps[:]//...`) so they cannot be clicked there.
 
 With **`CONTENT_ORIGIN`** (recommended) the document is served from another host name instead:
-the iframe points to `CONTENT_ORIGIN/c/<token>`, where the token is a signed, ten minute address
+the iframe points to `CONTENT_ORIGIN/c/<token>`, where the token is a signed, two minute address
 (user, message, image choice) because that origin never sees the portal cookie. Even a sandbox
 escape then lacks the portal's origin. Without it the document is served from the portal's own
 origin at `/m/<id>/html` (still sandboxed by the frame attribute and by the response's own
