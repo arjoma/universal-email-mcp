@@ -43,18 +43,37 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
 
 ## Targets from real use (planned for M2, see design §7.2)
 - [ ] Fuzzy matching of hierarchical folders used as labels (`Clients/<name>`, any group).
-- [ ] Archive action like the webmailer's (probably `Archive/<year>` — verify with `probe`).
-- [ ] Move mail between folders, incl. "move the mail from X and my answer to client X".
-- [ ] File replies: the Sent copy of a reply goes into the conversation's folder too.
-- [ ] Label management: list (tree) and create first; rename / move / delete folders later.
+- [ ] File replies: the Sent copy of a reply goes into the conversation's folder too (2d).
+- [ ] Label management: rename / move / delete folders later (list and create exist).
 - [ ] Message viewer (M3, design §6.2): links from the chat to the full mail, thread,
       raw headers, `.eml` and attachment downloads in the authenticated portal.
 
-## WP 2b (folders as labels) — conversation search
-- [ ] `get_message(thread=true)` searches at most 25 folders (special folders,
-      archive and folders named like the participants first; the rest are listed
-      as skipped). Restructure: a time budget instead of a folder count, and later
-      rounds only in folders that had hits.
+## WP 2b (folders as labels) leftovers
+- [ ] **Check the archive scheme against real `probe` output** of the united-domains
+      hoster (and what its webmail's "archive" button does: flat, `Archive/2025`,
+      `Archive/2025/10`?). Until then `auto` treats an empty archive as flat and
+      `archive_scheme` has to be set by hand; also verify that its webmail files by the `Date` header.
+- [ ] The archive month boundary uses the server host's time zone
+      (an `archive_timezone` setting could follow). Auto-detection is fooled by a
+      single year-named folder (`Archive/2024` for a project): set `archive_scheme`.
+      A non-selectable year/month container is not used (the create then fails).
+- [ ] Conversation moves are same-account only and bounded by the thread search
+      (header budget, time budget): a very long or old conversation can be incomplete
+      (the dry-run list shows what was found). Later search rounds look only in
+      INBOX, Sent, the archive, the message's folder and folders with hits, so an
+      ancestor in an unrelated, hit-less folder is not found.
+- [ ] Conversation members of a *given* message in a custom folder move along only
+      from that message's own folder (plus INBOX/Sent/archive tree); a configurable
+      list of "label" groups that always move could follow.
+- [ ] Members that share a Message-ID with a kept mail but differ (forgeries) are
+      moved if they reply to the conversation; only the dry-run list protects against
+      moving a hostile reply (it is a reply in that conversation by its own claim).
+- [ ] After a lost connection the batch is retried; a MOVE that did go through is
+      then reported "not in folder any more" instead of "may have been applied".
+- [ ] A dry run and the real run search separately: pinned by passing the listed ids
+      to a plain move (instructions and dry-run footer say so); not enforced.
+- [ ] The time budget of the conversation search is a share of `account_timeout`
+      (`THREAD_TIME_SHARE`), not configurable.
 
 ## Tool surface review leftovers (PR #7)
 - [ ] Fuzzy message score keys can shift between pages: the exact-match boost

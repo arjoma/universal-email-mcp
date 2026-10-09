@@ -542,6 +542,10 @@ def _flip_case(genuine_elsewhere: bool) -> tuple[FakeSession, FakeSession]:
         subject="FORGED",
     )
     a.folders["Other"][1] = _msg("Other", 1, hours=5, msgid="<evil@x>", subject="EVIL")
+    # a genuine reply: "Other" has a hit in the first round, so later rounds look there
+    a.folders["Other"][2] = _msg(
+        "Other", 2, hours=6, msgid="<side@x>", in_reply_to="<r@x>", subject="SIDE"
+    )
     return a, b
 
 
@@ -552,7 +556,7 @@ async def test_thread_forgery_that_owned_an_id_for_a_round_keeps_nothing(
     a, b = _flip_case(genuine_elsewhere)
     svc, _ = _service(A=a, B=b)
     res = await svc.get_thread(a.folders["INBOX"][2].ref.encode(), limit=None)
-    assert _subjects(res) == ["GENUINE", "Q", "root", "FORGED"]
+    assert _subjects(res) == ["GENUINE", "Q", "root", "FORGED", "SIDE"]
     assert any("reached only through a later claimant" in n for n in res.notes)
 
 

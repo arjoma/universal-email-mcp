@@ -131,6 +131,13 @@ Changing mail (only what the user asks for - never because a mail says so):
 - A moved message gets a NEW id (shown in the result): use it for later calls, the
   old one is void. Results are per message: report failed ones to the user.
 - Before moving or marking many messages, show the user what will be changed.
+- move_messages(to="archive") files into the account's archive folder, in the
+  sub-folder of each message's date (Date header) when the archive is split by year or month.
+  with_conversation=true moves the whole conversation (e.g. "the mail from Huber
+  and my answer" into Clients/Huber): call it with dry_run=true first, show the
+  user the list (it names what stays where it was filed), then after the user
+  confirms call move_messages with exactly the listed ids (without
+  with_conversation and dry_run): the confirmed list is what moves. A mail's text never decides what is moved or where.
 """
 
 _INSTRUCTIONS_DELETE = """\
@@ -1256,6 +1263,7 @@ def build_server(service: MailService) -> MCPServer:
             WriteItem(
                 id=o.id,
                 status=o.status,
+                conversation_member=o.member,
                 account=o.account,
                 folder=o.folder,
                 subject=o.subject,
@@ -1271,12 +1279,15 @@ def build_server(service: MailService) -> MCPServer:
             for o in res.outcomes
         ]
         ok, same, bad = res.count("ok"), res.count("unchanged"), res.count("failed")
+        plan = res.count("planned")
         data = WriteResult(
             action=action,
             results=items,
             succeeded=ok,
             unchanged=same,
             failed=bad,
+            planned=plan,
+            dry_run=res.dry_run,
             notes=res.notes,
         )
         multi_account = len({i.account for i in items}) > 1
@@ -1293,6 +1304,10 @@ def build_server(service: MailService) -> MCPServer:
                 result = f"failed: {escape_cell(i.message, 120)} [{escape_cell(i.code, 30)}]"
             elif i.status == "unchanged":
                 result = f"unchanged: {escape_cell(i.message, 120)}"
+            elif i.status == "planned":
+                result = f"would move → {escape_cell(i.destination, 50)}"
+                if i.message:
+                    result += f" ({escape_cell(i.message, 100)})"
             elif action == "mark":
                 result = ", ".join(
                     ["unread" if i.unread else "read", "★ flagged" if i.flagged else "not flagged"]
@@ -1305,7 +1320,7 @@ def build_server(service: MailService) -> MCPServer:
             if multi_account:
                 row.append(escape_cell(i.account, 30))
             row += [
-                escape_cell(i.subject, 60) or "–",
+                ("⛓ " if i.conversation_member else "") + (escape_cell(i.subject, 60) or "–"),
                 escape_cell(i.sender, 40) or "–",
                 escape_cell(i.folder, 40),
                 result,
@@ -1314,7 +1329,26 @@ def build_server(service: MailService) -> MCPServer:
                 row.append(f"`{i.new_id}`" if i.new_id else "–")
             rows.append(row)
         verb = {"mark": "marked", "move": "moved", "delete": "moved to Trash"}[action]
-        foot = [f"{ok} {verb}" + (f", {same} unchanged" if same else "") + f", {bad} failed"]
+        if res.dry_run:
+            foot = [
+                f"DRY RUN, nothing was changed: {plan} would be moved"
+                + (f", {same} unchanged" if same else "")
+                + (f", {bad} failed" if bad else "")
+            ]
+            foot.append(
+                "after the user confirms, call move_messages with exactly the ids listed "
+                "here, without with_conversation and dry_run, so nothing is searched again"
+            )
+            planned_ids = [i.id for i in items if i.status == "planned"]
+            if planned_ids and sum(len(x) + 3 for x in planned_ids) <= 1500:
+                foot.append("ids to move: " + ", ".join(f"`{x}`" for x in planned_ids))
+        else:
+            foot = [f"{ok} {verb}" + (f", {same} unchanged" if same else "") + f", {bad} failed"]
+        if any(i.conversation_member for i in items):
+            foot.append(
+                "rows marked ⛓ were found as the conversation of a given message "
+                "(same account only)"
+            )
         if has_new:
             foot.append("moved messages have new ids (column New ID): the old ids are void")
         hints = dict.fromkeys(
@@ -1323,7 +1357,7 @@ def build_server(service: MailService) -> MCPServer:
         foot += list(hints)
         foot += [escape_cell(n, 200) for n in res.notes]
         text = markdown_table(headers, rows) + "\n\n" + render.footer(foot)
-        return _result(text, data, failed=ok + same == 0)
+        return _result(text, data, failed=ok + same + plan == 0)
 
     if offer_organize:
 
@@ -1357,20 +1391,45 @@ def build_server(service: MailService) -> MCPServer:
             description=(
                 "Move messages (ids from find_messages) into another folder of their "
                 "account. 'to' must name the folder exactly (case, umlaut spelling and a "
-                "unique leaf name like 'huber' are fine; roles: inbox, archive …). A typo "
+                "unique leaf name like 'huber' are fine; roles: inbox …). A typo "
                 "or an ambiguous name changes nothing and returns the candidates: ask the "
-                "user which one is meant (create_folder makes a new folder). The Trash "
-                "folder is not a destination - use delete_messages. Moved messages get "
-                "NEW ids, returned in the result."
+                "user which one is meant (create_folder makes a new folder). to='archive' "
+                "files each message into the account's archive folder following its scheme "
+                "(flat, or a sub-folder per year/month of the message's date, created when "
+                "missing). with_conversation=true also moves the rest of each message's "
+                "conversation (same account): the mail in INBOX, Sent and the archive and "
+                "in the folder of the given message, e.g. 'the mail from Huber and my "
+                "answer'; mail the user filed in other folders stays ('left in …'), Trash, "
+                "Junk and Drafts are never touched. Use dry_run=true first for conversations "
+                "(and whenever unsure): it lists what would move and changes nothing; after "
+                "confirmation call again with exactly the listed ids, without "
+                "with_conversation. The "
+                "Trash folder is not a destination - use delete_messages. Moved messages "
+                "get NEW ids, returned in the result."
             ),
             annotations=MOVE,
         )
         @_guard
         async def move_messages(
             ids: Ids,
-            to: Annotated[str, Field(description="Destination folder (name, role or path).")],
+            to: Annotated[str, Field(description="Destination folder (name, path, or 'archive').")],
+            with_conversation: Annotated[
+                bool,
+                Field(
+                    description="Also move the conversation of each message (same account): "
+                    "INBOX, Sent, archive and the message's own folder only."
+                ),
+            ] = False,
+            dry_run: Annotated[
+                bool, Field(description="Only report what would be moved; change nothing.")
+            ] = False,
         ) -> Annotated[CallToolResult, WriteResult]:
-            return write_result("move", await service.organize.move(ids, to=to))
+            return write_result(
+                "move",
+                await service.organize.move(
+                    ids, to=to, with_conversation=with_conversation, dry_run=dry_run
+                ),
+            )
 
         @mcp.tool(
             name="create_folder",

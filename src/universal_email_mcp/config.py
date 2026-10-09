@@ -25,10 +25,12 @@ from universal_email_mcp.errors import ConfigError, CredentialMissing
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import (
     ACCOUNT_KINDS,
+    ARCHIVE_SCHEMES,
     FOLDER_ROLES,
     TLS_MODES,
     Account,
     AccountKind,
+    ArchiveScheme,
     CredentialRef,
     Endpoint,
     FolderRole,
@@ -396,6 +398,7 @@ _ACCOUNT_KEYS = (
     "tls_verify",
     "tls_ca_file",
     "folders",
+    "archive_scheme",
 )
 _DEFAULT_PORTS: dict[tuple[str, TlsMode], int] = {
     ("imap", "tls"): 993,
@@ -463,6 +466,14 @@ def _parse_account(c: _Ctx, t: dict[str, Any], i: int) -> Account:
             raise c.err(f"{w}.folders", f"'{role}' must be a folder name")
         folder_roles[cast(FolderRole, role)] = value
 
+    scheme = c.str_(t, "archive_scheme", w, "auto") or "auto"
+    if scheme not in ARCHIVE_SCHEMES:
+        raise c.err(
+            w,
+            f"archive_scheme = {scheme!r} is invalid",
+            hint='Use "auto", "flat", "yearly" or "monthly".',
+        )
+
     perms_list = c.str_list(t, "permissions", w) if "permissions" in t else ["read"]
     for p in perms_list:
         if p not in PERMISSION_NAMES:
@@ -502,6 +513,7 @@ def _parse_account(c: _Ctx, t: dict[str, Any], i: int) -> Account:
             ca_file=str(Path(ca_file).expanduser()) if ca_file else None,
         ),
         folder_roles=folder_roles,
+        archive_scheme=cast(ArchiveScheme, scheme),
     )
 
 

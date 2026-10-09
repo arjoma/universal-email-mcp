@@ -161,6 +161,15 @@ class InvalidFolderName(MailError):
     default_hint = "Use plain names without * % \" \\ or control characters; '/' separates levels."
 
 
+class NoArchiveFolder(MailError):
+    code = "NO_ARCHIVE_FOLDER"
+    default_hint = (
+        "The account has no recognisable Archive folder (see account_info). Set "
+        "folders.archive in the account configuration, or pass the destination folder "
+        "by name instead of 'archive'. Nothing was changed."
+    )
+
+
 class NoTrashFolder(MailError):
     code = "NO_TRASH_FOLDER"
     default_hint = (

@@ -126,7 +126,7 @@ class FakeSession:
     def list_folders(self, *, with_counts: bool = False, refresh: bool = False) -> list[FolderInfo]:
         self._tick("LIST")
         self.refreshes.append(refresh)
-        roles = {"INBOX": "inbox", "Sent": "sent"}
+        roles = {"INBOX": "inbox", "Sent": "sent", "Archive": "archive"}
         return [
             FolderInfo(name=n, display_name=n, delimiter="/", flags=(), role=roles.get(n))  # pyright: ignore[reportArgumentType]
             for n in self.folders

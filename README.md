@@ -60,7 +60,7 @@ again against the permissions of the account each message belongs to:
 | Tool | Permission | What it does |
 |---|---|---|
 | `mark_messages` | organize | read/unread and flagged, by message id (batch, capped) |
-| `move_messages` | organize | into another folder (exact folder name, unique leaf name or role; a typo or ambiguous name changes nothing and returns the candidates); moved messages get new ids |
+| `move_messages` | organize | into another folder (exact folder name, unique leaf name or role; a typo or ambiguous name changes nothing and returns the candidates); moved messages get new ids. `to="archive"` files into the account's archive folder, in a year or month sub-folder when the archive is organised that way (created when missing). `with_conversation=true` moves the rest of each message's conversation too (INBOX, Sent, archive and the message's own folder; mail filed elsewhere stays, Trash/Junk/Drafts are never touched), `dry_run=true` only lists what would move |
 | `create_folder` | organize | a folder (nested levels, `parent=` named exactly), subscribed; never renames or deletes folders |
 | `delete_messages` | delete | moves to Trash (recoverable); mail already in Trash stays; there is no permanent deletion |
 
@@ -74,6 +74,11 @@ Reply-To (else From), like in a mail client, and warns when that points to anoth
 domain. The result previews the draft and warns about recipients you never wrote
 to. An identity needs `store_account` (or `account`) for its drafts; no SMTP server
 is needed yet. Plain text only.
+
+The archive scheme of an account (`archive_scheme` = `auto` | `flat` | `yearly` |
+`monthly`, see `docs/config.example.toml`) is detected from the archive folder's
+subfolders; an empty archive is flat. Each message goes to the folder of its
+`Date` header when plausible (not before 1990, not later than the arrival date + 1 day), else its arrival date (INTERNALDATE).
 
 Changes are reported per message. They use UIDs checked against the folder's
 UIDVALIDITY, `UID MOVE` (or `UID COPY` + `UID EXPUNGE` with UIDPLUS, otherwise

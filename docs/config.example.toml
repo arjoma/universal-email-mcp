@@ -52,6 +52,11 @@ server = "united-domains"
 username = "alice@example.com"
 password_env = "UEM_WORK_PASSWORD"
 permissions = ["read", "organize", "drafts"]
+# move_messages(to="archive") files into the archive folder (role "archive"). The
+# scheme is detected from its subfolders: "flat" (nothing below, also an EMPTY
+# archive), "yearly" (Archive/2025) or "monthly" (Archive/2025/10 or Archive/2025-10).
+# Set it per account to force one; missing year/month folders are created.
+# archive_scheme = "auto"          # auto | flat | yearly | monthly (account-level key)
 
 [[accounts]]
 name = "Archive"

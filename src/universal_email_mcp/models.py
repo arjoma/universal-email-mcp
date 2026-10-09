@@ -25,6 +25,8 @@ TLS_MODES: tuple[TlsMode, ...] = get_args(TlsMode)
 
 FolderRole = Literal["inbox", "sent", "drafts", "trash", "junk", "archive"]
 FOLDER_ROLES: tuple[FolderRole, ...] = get_args(FolderRole)
+ArchiveScheme = Literal["auto", "flat", "yearly", "monthly"]
+ARCHIVE_SCHEMES: tuple[ArchiveScheme, ...] = get_args(ArchiveScheme)
 
 AccountKind = Literal["imap", "pop3"]
 ACCOUNT_KINDS: tuple[AccountKind, ...] = get_args(AccountKind)
@@ -102,6 +104,9 @@ class Account:
     tls: TlsSettings = TlsSettings()
     folder_roles: dict[FolderRole, str] = field(default_factory=dict[FolderRole, str])
     """User overrides for role detection; take precedence over ``server.folder_roles``."""
+    archive_scheme: ArchiveScheme = "auto"
+    """How ``move_messages(to="archive")`` files mail: ``auto`` detects it from the
+    archive folder's children (empty archive: flat)."""
 
     @property
     def endpoint(self) -> Endpoint:
