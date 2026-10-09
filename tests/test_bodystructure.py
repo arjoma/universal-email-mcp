@@ -9,6 +9,7 @@ from universal_email_mcp.mail.bodystructure import (
     find,
     is_text_like,
     leaves,
+    sniff_image,
 )
 from universal_email_mcp.mail.mime import (
     decode_transfer,
@@ -73,18 +74,56 @@ def test_rfc2231_filename_and_hostile_name():
         (b"attachment", (b"filename*", b"utf-8''%E2%80%AEfdp.exe%0D%0A..%2F..%2Fx.txt")),
     )
     got = leaves(part)
-    assert got is not None and got[0].filename == "x.txt"
+    assert got is not None and got[0].filename == "fdp.exe .._.._x.txt"
+    assert "/" not in (got[0].filename or "") and "\u202e" not in (got[0].filename or "")
+
+
+def _named(params: tuple[object, ...]) -> object:
+    return (b"application", b"pdf", None, None, None, b"base64", 10, None, (b"attachment", params))
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        (b"filename*", b"bogus-cs''%41%42"),
+        (b"filename*0*", b"bogus-cs''%41%42", b"filename*1*", b"%43"),
+        (b"filename*", b"''%41"),
+        (b"filename*", b"%41"),
+        (b"filename*0*", b"utf-8''%41", b"filename*x", b"y", b"filename*99999999", b"z"),
+        (b"filename*0", b"a", b"filename*0", b"b", b"filename*1", b"c"),
+        (b"filename*0*", b"\xff\xfe''%FF%FE"),
+        (b"name*", b"x'x'%zz%"),
+    ],
+)
+def test_hostile_rfc2231_parameters_never_break_leaves(params: tuple[object, ...]):
+    got = leaves(_named(params))
+    assert got is not None and len(got) == 1
+
+
+def test_rfc2231_bogus_charset_falls_back_to_utf8():
+    got = leaves(_named((b"filename*0*", b"bogus-cs''%41%42")))
+    assert got is not None and got[0].filename == "AB"
+
+
+def test_sniff_image():
+    assert sniff_image(b"\x89PNG\r\n\x1a\nxx") == "image/png"
+    assert sniff_image(b"\xff\xd8\xff\xe0") == "image/jpeg"
+    assert sniff_image(b"GIF89a..") == "image/gif"
+    assert sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp"
+    assert sniff_image(b"<svg xmlns='http://www.w3.org/2000/svg'/>") is None
+    assert sniff_image(b"") is None
 
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("../../.ssh/authorized_keys", "authorized_keys"),
-        ("C:\\Windows\\evil.exe", "evil.exe"),
+        ("../../.ssh/authorized_keys", ".._.._.ssh_authorized_keys"),
+        ("C:\\Windows\\evil.exe", "C:_Windows_evil.exe"),
+        ("report 1/2.pdf", "report 1_2.pdf"),
         ("a\u202eb\r\nc.txt", "ab c.txt"),
         ("invoice.pdf.exe", "invoice.pdf.exe"),
         ("   ", None),
-        ("../", None),
+        ("../", ".._"),
     ],
 )
 def test_display_filename(raw: str, expected: str | None):

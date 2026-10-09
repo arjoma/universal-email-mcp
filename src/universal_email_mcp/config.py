@@ -72,7 +72,7 @@ class Limits:
     max_results: int = 50
     max_body_chars: int = 20_000
     max_message_bytes: int = 10 * 1024 * 1024
-    max_attachment_bytes: int = 5 * 1024 * 1024
+    max_attachment_bytes: int = 2 * 1024 * 1024
     """Largest attachment ``get_attachment`` returns (decoded); bigger ones are
     refused or, with a download link provider, handed out as a link."""
     max_accounts_per_call: int = 10

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_attachment`: reads one attachment by the id `get_message` lists. Text-like
   files (text, CSV, JSON, XML, HTML, SVG) come back as fenced, defanged, paged text;
   other files as an embedded resource (base64 blob); files over
-  `limits.max_attachment_bytes` (default 5 MiB) are refused with their size. Part
+  `limits.max_attachment_bytes` (default 2 MiB) are refused with their size. Part
   numbers come from the server's `BODYSTRUCTURE`, so a malformed message (where
   Python's MIME parser and the server disagree) gives the right bytes or a refusal,
   never another part's bytes. Only `BODY.PEEK[n]` is used (no `\Seen`).

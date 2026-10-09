@@ -515,12 +515,12 @@ MAX_FILENAME_CHARS = 120
 def display_filename(name: str) -> str | None:
     """A file name safe to show (still untrusted text: escape it in Markdown).
 
-    Keeps only the last path component (``../../x`` and ``C:\\dir\\x`` → ``x``),
+    Replaces path separators with ``_`` (``../x`` → ``.._x``; the name is display-only),
     removes control, invisible and bidi characters, and shortens very long names in
     the middle so the extension stays visible. Double extensions are shown as they
     are. Nothing here is ever used as a path."""
     name = sanitize_line(name)
-    name = re.split(r"[\\/]", name)[-1].strip()
+    name = re.sub(r"[\\/]+", "_", name).strip()
     if len(name) > MAX_FILENAME_CHARS:
         stem, dot, ext = name.rpartition(".")
         ext = ext[:16] if dot else ""
