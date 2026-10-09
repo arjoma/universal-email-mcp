@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tools renamed and merged** (tool surface of the roadmap, WP 2-0):
+  `find_messages` replaces `list_messages` and `search_messages` (a time window
+  is just one criterion; the `fuzzy` flag is gone — use `query`), and
+  `get_message(thread=true)` replaces `get_thread`.
+- One `query` parameter for `find_messages`, `list_folders` and `find_contacts`:
+  with `*` or `?` a case-insensitive, umlaut-folded wildcard pattern over whole
+  words (`*` crosses folder levels), otherwise fuzzy matching. Structured
+  criteria (`from`, `to`, `subject`, `body`, dates, flags) stay an exact
+  server-side search.
+- `list_folders` shows the top level first, each folder with its number of
+  direct subfolders; `parent=` drills down (approximate names, ambiguity
+  returned as a choice), `query=` searches all levels, `depth=` (≤ 3) adds levels.
+  Paged with a cursor; message/unread counts only for the folders shown
+  (at most 50); similar names when nothing matches. The output is a flat list
+  (`level`, `subfolders`, `descendants`) instead of a nested tree.
+- `find_contacts` without `query` is a quick overview (last 7 days, newest 150
+  messages per account, most recent first); with `query` it searches deeper
+  (180 days by default). No match → similar names and how to look further back.
+  Paged with a cursor.
+- Every list result's footer says how to narrow it or continue.
+
 ### Added
 
 - `universal-email-mcp probe`: log in read-only to an IMAP server (`--host`,
@@ -24,13 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HTML-to-text conversion and attachment lists, fencing of untrusted content.
 - `universal-email-mcp local`: MCP server over stdio (works with Claude Desktop
   and Claude Code via `uvx universal-email-mcp local`) with the read-only tools
-  `account_info`, `list_folders` (folder tree with roles and counts),
-  `list_messages` (time windows like `today`, `this_week`, `last_7_days`),
-  `search_messages` (structured criteria; `fuzzy=true` tolerates typos, umlaut
-  spellings and name order), `get_message` (fenced, paged body; never marks as
-  read), `get_thread` (conversation across INBOX, Sent and other folders) and
-  `find_contacts` (ranked by frequency and recency, marks addresses you have
-  written to).
+  `account_info`, `list_folders` (roles and counts), `find_messages` (time
+  windows like `today`, `this_week`, `last_7_days`, structured criteria, fuzzy
+  matching that tolerates typos, umlaut spellings and name order),
+  `get_message` (fenced, paged body; never marks as read; conversations across
+  INBOX, Sent and other folders) and `find_contacts` (ranked by frequency and
+  recency, marks addresses you have written to).
 - Searches and listings span all accounts in parallel with a per-account
   time-out; failing accounts are reported with the partial result. Cursor
   paging with signed cursors.
@@ -66,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `has_attachment` also finds attachments in signed, related and report mail
   (results marked approximate); listings show current flags; conversations are
   in arrival order; shared folders do not get special roles; deeply nested MIME
-  is reported as unparseable; `list_folders` keeps its tree indentation.
+  is reported as unparseable.
 
 ## [0.0.1] - 2026-09-30
 

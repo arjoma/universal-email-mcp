@@ -26,6 +26,14 @@ MAX_DEPTH = 3
 MAX_STATUS = 50
 """Most folders per call that get message/unread counts (one STATUS each)."""
 DEFAULT_PAGE = 50
+_ROLE_ORDER: dict[str | None, int] = {
+    "inbox": 0,
+    "drafts": 1,
+    "sent": 2,
+    "archive": 3,
+    "junk": 4,
+    "trash": 5,
+}
 
 
 @dataclass(eq=False, slots=True)
@@ -68,8 +76,7 @@ class Node:
 
 
 def build(folders: Sequence[FolderInfo], personal_prefix: str = "") -> list[Node]:
-    """The folder forest (top level first, in the session's order: roles, then
-    alphabetical)."""
+    """The folder forest: special folders first, then alphabetical (umlaut-folded)."""
     root = Node(("",))
     index: dict[tuple[str, ...], Node] = {}
     for f in folders:
@@ -89,7 +96,15 @@ def build(folders: Sequence[FolderInfo], personal_prefix: str = "") -> list[Node
         n.descendants = sum(1 + count(c) for c in n.children)
         return n.descendants
 
+    def order(n: Node) -> None:
+        # Special folders first (as the session sorted them), then by name with
+        # umlauts folded: "Bäckerei" next to "Bauer", not after "Zöhrer".
+        n.children.sort(key=lambda c: (_ROLE_ORDER.get(c.role, 10), fuzzy.normalize(c.name)))
+        for c in n.children:
+            order(c)
+
     count(root)
+    order(root)
     return root.children
 
 

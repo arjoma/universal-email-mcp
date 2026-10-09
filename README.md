@@ -41,9 +41,21 @@ the local config file (see [`docs/config.example.toml`](https://github.com/arjom
 accounts from the config file ([`docs/config.example.toml`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/config.example.toml);
 default `~/.config/universal-email-mcp/config.toml`, or `--config PATH` / `UEM_CONFIG`).
 Passwords come from environment variables (`password_env`) or the OS keyring —
-never from the file. Milestone M1 is **read-only**: `account_info`, `list_folders`,
-`list_messages`, `search_messages` (exact or `fuzzy`), `get_message`, `get_thread`,
-`find_contacts`.
+never from the file. The server is **read-only** so far, with five tools:
+
+| Tool | What it does |
+|---|---|
+| `account_info` | accounts, permissions, server features, quota, identities, limits |
+| `list_folders` | top level first with subfolder counts (`Clients ▸ 87`); `parent=` drills down, `query=` searches all levels, `depth=` (≤ 3) |
+| `find_messages` | time window (`today`, `this_week` …), from/to/subject/body, unread/flagged/attachments — exact, server-side; plus `query` (wildcard or fuzzy) |
+| `get_message` | headers, text body (paged, fenced as untrusted), attachments; `thread=true` for the conversation |
+| `find_contacts` | recent correspondents; `query=` finds a person (deeper search), `sent_to` marks people you wrote to |
+
+`query` works the same everywhere: with `*` or `?` it is a case-insensitive,
+umlaut-folded wildcard pattern over whole words (`hub*`, `*gmbh`, `clients/m*` —
+`*` also crosses folder levels); anything else is matched fuzzily (typos,
+`Müller`/`Mueller`, name order). Lists are bounded; each result's footer says how
+to narrow it or fetch the next page (`cursor`).
 
 Claude Desktop (`claude_desktop_config.json`):
 
