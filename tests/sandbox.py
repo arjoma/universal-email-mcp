@@ -32,6 +32,7 @@ from email import policy
 from email.message import EmailMessage
 from email.utils import format_datetime
 from pathlib import Path
+from typing import Literal
 
 from imapclient import IMAPClient
 
@@ -45,6 +46,16 @@ WORK = "Sandbox"
 PRIVATE = "Sandbox-Private"
 WORK_USER = "lena@hofer-design.example"
 PRIVATE_USER = "lena.hofer@mail.example"
+USERS = {WORK: WORK_USER, PRIVATE: PRIVATE_USER}
+"""IMAP user names of the developer sandbox (the tests use fresh ones)."""
+
+CORPUS_VERSION = "2"
+"""Bump when the corpus or the seeding changes: ``up`` then recreates the container."""
+SEEDED_FOLDER = ".uem-sandbox-seeded"
+"""Created in the work account after both accounts are seeded: an interrupted seed
+leaves no marker. (Dovecot here has no METADATA, so the marker is an empty folder.)"""
+DEFAULT_FOLDERS = frozenset({"INBOX", "Sent", "Drafts", "Junk", "Trash"})
+"""Folders the Dovecot image creates for every user."""
 
 LENA = "Lena Hofer <lena@hofer-design.example>"
 LENA_PRIVATE = "Lena Hofer <lena.hofer@mail.example>"
@@ -1206,7 +1217,8 @@ def seed(
 ) -> dict[str, int]:
     """Create the folders and append the mails; ``connect(username)`` logs in.
 
-    ``users`` maps WORK / PRIVATE to the IMAP user names. Returns mails per account.
+    ``users`` maps WORK / PRIVATE to the IMAP user names. Creates ``SEEDED_FOLDER``
+    in the work account last. Returns mails per account.
     """
     counts: dict[str, int] = {}
     for account, user in users.items():
@@ -1222,15 +1234,35 @@ def seed(
                     counts[account] = counts.get(account, 0) + 1
         finally:
             c.logout()
+    c = connect(users[WORK])
+    try:
+        c.create_folder(SEEDED_FOLDER)
+    finally:
+        c.logout()
     return counts
 
 
-def is_seeded(client: IMAPClient) -> bool:
-    """True when the work mailbox already has the sandbox folders and mail."""
-    if not client.folder_exists(HUBER_FOLDER):
-        return False
-    status = client.folder_status("INBOX", [b"MESSAGES"])
-    return int(status[b"MESSAGES"]) > 0  # pyright: ignore[reportArgumentType]
+SeedState = Literal["seeded", "empty", "partial"]
+
+
+def seed_state(connect: Callable[[str], IMAPClient], users: dict[str, str]) -> SeedState:
+    """``seeded`` (marker present), ``empty`` (fresh mailboxes) or ``partial``
+    (mail or folders but no marker: an interrupted seed)."""
+    for account in sorted(users, key=lambda a: a != WORK):  # the marker lives in WORK
+        c = connect(users[account])
+        try:
+            names = {name for _flags, _delim, name in c.list_folders()}
+            if account == WORK and SEEDED_FOLDER in names:
+                return "seeded"
+            if names - DEFAULT_FOLDERS:
+                return "partial"
+            for name in names:
+                status = c.folder_status(name, [b"MESSAGES"])
+                if int(status[b"MESSAGES"]):  # pyright: ignore[reportArgumentType]
+                    return "partial"
+        finally:
+            c.logout()
+    return "empty"
 
 
 # --------------------------------------------------------------------------- config
@@ -1250,7 +1282,7 @@ def render_config(
     password_env: str = PASSWORD_ENV,
 ) -> str:
     """TOML config for both sandbox accounts (TLS without verification: self-signed)."""
-    users = users or {WORK: WORK_USER, PRIVATE: PRIVATE_USER}
+    users = users or USERS
     # TODO(M2): add an [accounts.smtp] endpoint once the sandbox runs an SMTP sink.
     accounts = [
         (WORK, users[WORK], '["read", "organize", "delete", "drafts"]'),
@@ -1258,7 +1290,7 @@ def render_config(
     ]
     out = [
         f"{CONFIG_MARKER} for the local sandbox mailbox.",
-        "# Rewritten by `up` as long as this first line is unchanged; remove it to keep edits.",
+        "# Rewritten by `up`, which refuses to overwrite a file without this first line.",
         "# Throw-away Dovecot in a container: self-signed certificate, fixed dev password.",
         "",
         "[settings]",

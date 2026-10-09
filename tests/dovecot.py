@@ -15,7 +15,7 @@ import socket
 import ssl
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from imapclient import IMAPClient
 
@@ -33,6 +33,20 @@ MAIL_TMPFS = "/srv/vmail:rw,mode=1777"
 
 class ContainerError(RuntimeError):
     """The container runtime failed or the server did not come up."""
+
+
+def run_runtime(cmd: Sequence[str], *, timeout: float = 60) -> str:
+    """Run a container runtime command; stdout, or ContainerError with its stderr."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise ContainerError(f"`{' '.join(cmd[:2])}` timed out after {timeout:g}s") from e
+    except OSError as e:
+        raise ContainerError(f"cannot run {cmd[0]}: {e}") from e
+    if r.returncode != 0:
+        detail = r.stderr.strip() or r.stdout.strip() or f"exit status {r.returncode}"
+        raise ContainerError(f"`{' '.join(cmd[:2])}` failed: {detail}")
+    return r.stdout
 
 
 def container_runtime() -> str | None:
@@ -83,7 +97,7 @@ def run_container(
     imaps_port: int | None = None,
     starttls_port: int | None = None,
     remove: bool = True,
-    labels: Sequence[str] = (),
+    labels: Mapping[str, str] | None = None,
 ) -> str:
     """Start the image detached on 127.0.0.1 and return the container id.
 
@@ -95,34 +109,33 @@ def run_container(
         cmd.append("--rm")
     if name:
         cmd += ["--name", name]
-    for label in labels:
-        cmd += ["--label", label]
+    for key, value in (labels or {}).items():
+        cmd += ["--label", f"{key}={value}"]
     for host_port, container_port in ((imaps_port, IMAPS_PORT), (starttls_port, STARTTLS_PORT)):
         cmd += ["-p", f"127.0.0.1:{host_port or ''}:{container_port}"]
     cmd += ["-e", f"USER_PASSWORD={password}", DOVECOT_IMAGE]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
-    except subprocess.CalledProcessError as e:
-        raise ContainerError(f"{rt} run failed: {e.stderr.strip() or e}") from e
-    except subprocess.TimeoutExpired as e:
-        raise ContainerError(f"{rt} run timed out") from e
-    return out.stdout.strip()
+    return run_runtime(cmd, timeout=600).strip()
+
+
+def start_container(rt: str, container: str) -> None:
+    """Start a stopped container."""
+    run_runtime([rt, "start", container])
 
 
 def host_port(rt: str, container: str, container_port: int) -> int:
     """Host port that ``container_port`` of a running container is published on."""
-    out = subprocess.run(
-        [rt, "port", container, f"{container_port}/tcp"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=30,
-    ).stdout
-    return int(out.strip().splitlines()[0].rsplit(":", 1)[1])
+    out = run_runtime([rt, "port", container, f"{container_port}/tcp"], timeout=30)
+    try:
+        return int(out.strip().splitlines()[0].rsplit(":", 1)[1])
+    except (IndexError, ValueError) as e:
+        raise ContainerError(
+            f"cannot read the host port of {container}:{container_port} from {out!r}"
+        ) from e
 
 
 def remove_container(rt: str, container: str) -> None:
-    subprocess.run([rt, "rm", "-f", container], capture_output=True, timeout=60)
+    """Remove the container and its anonymous volumes; ContainerError on failure."""
+    run_runtime([rt, "rm", "-f", "-v", container])
 
 
 def admin_client(host: str, port: int, user: str, password: str) -> IMAPClient:
