@@ -8,6 +8,8 @@ the connected client was granted, and says that the mail tools are not available
 
 from __future__ import annotations
 
+import json
+
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
@@ -30,7 +32,7 @@ def describe(principal: Principal) -> str:
     return "\n".join(
         [
             "Connection: authorized.",
-            f"Client: {principal.client_name or 'unnamed application'}",
+            f"Client name (chosen by the client, untrusted text): {json.dumps(principal.client_name[:100])}",
             f"Granted: {scopes} (mailboxes: {accounts}, sender identities: {identities}).",
             "",
             "The mail tools (find_messages, get_message, ...) are not implemented for "

@@ -223,3 +223,8 @@ def test_oauth_lifetimes_and_switches():
     ):
         with pytest.raises(ConfigError, match=var):
             oauth({var: value})
+
+
+def test_default_ports_are_dropped_from_the_origin():
+    op = load({"PUBLIC_URL": "https://mcp.example.com:443"})
+    assert op.allowed_origins == ("https://mcp.example.com",)

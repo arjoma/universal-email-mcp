@@ -200,6 +200,24 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       (MFA comes with OIDC SSO). A password change at the mail server does not end existing
       portal sessions or grants until their lifetime ends.
 - [ ] Audit events still go to stderr without a `session` field (3h).
+- [ ] Review leftovers of 3c: (a) CIMD fetch: the deadline starts after connect/TLS and every
+      resolved address is tried (N x 5 s); fetches and IMAP logins share the default thread
+      pool and the login semaphore is released on timeout while the thread runs on - give
+      them their own bounded executor and an overall deadline; (b) rate limits key IPv6 by
+      full address (use /64) and failed sign-ins have no global cap per login domain (the
+      mail server may ban the egress IP; document whitelisting); (c) browser-based clients
+      (MCP Inspector) are blocked by the Origin check and missing CORS on metadata,
+      `/register`, `/token`, `/revoke` - these use no cookies and could be exempted; (d)
+      granting `send` needs a fresh password (design section 6) - not enforced; (e) the
+      consent redirect after Allow crosses CSP `form-action` per hop (a callback that
+      redirects on to another origin is blocked in Chromium); answer with a 200 page that
+      continues via meta refresh; (f) reject repeated request parameters; `busy` error
+      detected by message text; HTML routes return JSON 500 on store errors; (g) login
+      hardening: reject CR/LF/NUL in passwords, quote the IMAP user name; the user id assumes
+      the mail server maps logins 1:1 to mailboxes (document); (h) a refresh with a narrower
+      `scope` still returns the full scope; (i) dead code: `login_profile`,
+      `RateLimiter.retry_after`, `Row.checked`; huge `UEM_*_TTL` values overflow at startup;
+      `--config` is silently ignored in OAuth mode.
 
 - [ ] Dev mode still serves the TOML accounts; the per-user service (3e) replaces them (in
       OAuth mode `/mcp` offers only `account_info` until then).

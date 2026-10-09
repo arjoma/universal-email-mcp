@@ -9,8 +9,10 @@ Matching is an exact string comparison, except for the loopback port.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
+_HOST_CHARS = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "localhost"})
 MAX_URI_LENGTH = 2000
 _FORBIDDEN_SCHEMES = frozenset({"http", "https", "file", "ftp", "ws", "wss", "blob", "data"})
@@ -31,7 +33,7 @@ def validate_redirect_uri(uri: str) -> str:
     """Return ``uri`` if acceptable, else raise :class:`RedirectError`."""
     if not uri or len(uri) > MAX_URI_LENGTH:
         raise RedirectError("redirect URI is empty or too long")
-    if any(not 0x21 <= ord(c) <= 0x7E for c in uri):
+    if any(not 0x21 <= ord(c) <= 0x7E or c == "\\" for c in uri):
         raise RedirectError("redirect URI contains spaces, control or non-ASCII characters")
     try:
         parts = urlsplit(uri)
@@ -46,8 +48,8 @@ def validate_redirect_uri(uri: str) -> str:
     if parts.username is not None or parts.password is not None:
         raise RedirectError("redirect URI must not contain credentials")
     if scheme == "https":
-        if not parts.hostname:
-            raise RedirectError("redirect URI has no host")
+        if not parts.hostname or not _HOST_CHARS.fullmatch(parts.hostname):
+            raise RedirectError("redirect URI has no valid host name")
         return uri
     if scheme == "http":
         if _host(parts.netloc) not in LOOPBACK_HOSTS:
@@ -96,7 +98,9 @@ def csp_form_target(uri: str) -> str:
     parts = urlsplit(uri)
     scheme = parts.scheme.lower()
     if is_loopback(uri):
-        return f"http://{_host(parts.netloc)}:*"
+        host = _host(parts.netloc)
+        # CSP host-sources have no IPv6 literal syntax; fall back to the scheme source.
+        return "http:" if host.startswith("[") else f"http://{host}:*"
     if scheme == "https":
         return f"https://{parts.netloc.rpartition('@')[2]}"
     return f"{scheme}:"

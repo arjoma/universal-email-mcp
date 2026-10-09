@@ -26,6 +26,9 @@ An unauthenticated `/mcp` request answers `401` with
 `WWW-Authenticate: Bearer realm=..., resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"`,
 from which MCP clients discover everything else.
 
+Send-only grants include `mail.read`. Granting send does not yet ask for the password again
+(design section 6 wants that; see `TODO.md`).
+
 The MCP Python SDK's server-side OAuth provider was not used: it assumes registered
 clients (no Client ID Metadata Documents) and ties the authorization UI to its provider
 interface. The SDK's *client* is what the end-to-end tests drive.
@@ -58,8 +61,10 @@ interface. The SDK's *client* is what the end-to-end tests drive.
 1. `/authorize`: `response_type=code`, `code_challenge` + `code_challenge_method=S256`
    (mandatory), optional `resource` (must be `PUBLIC_URL/mcp`; it is the default),
    `scope` (unknown scopes are dropped; only unknown ones is `invalid_scope`), `state`.
-   Errors after the client and redirect URI are verified go back to the client with `state`
-   and `iss`.
+   Protocol errors (bad PKCE, resource, scope, response type) are shown on an error page and
+   not redirected - anyone can register a client, so redirecting would make `/authorize` an
+   open redirect (RFC 9700 4.11.2). Only the user's own Deny goes back (`access_denied`,
+   with `state` and `iss`). `redirect_uri` at `/token` is optional but must match if sent.
 2. No browser session: the **sign-in page**. Address and password are verified by an IMAP
    login against the server `LOGIN_DOMAINS` assigns to the address's domain (never a server
    the user names). The password is used once and not stored. The user record is keyed by the
