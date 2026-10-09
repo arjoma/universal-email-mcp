@@ -8,26 +8,36 @@ from collections import Counter
 from datetime import datetime, timedelta
 from email import policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
+from pathlib import Path
 
 import pytest
 
 from tests.sandbox import (
+    ACCOUNT_FOLDERS,
     CLIENT_FOLDERS,
-    HOSTILE_FOLDER,
+    DEFAULT_FOLDERS,
     PASSWORD_ENV,
     PRIVATE,
+    SEEDED_FOLDER,
     WORK,
     SeedMail,
     build_corpus,
-    folders_for,
     render_config,
 )
 from universal_email_mcp.config import parse_config
 from universal_email_mcp.mail.mime import parse_header_block, parse_message
 
+DATA = Path(__file__).parent / "data"
 NOW = datetime(2026, 10, 9, 12, 0).astimezone()
-DEFAULT_FOLDERS = {"INBOX", "Sent", "Drafts", "Junk", "Trash"}
 FAKE_DOMAIN = re.compile(r"(^|\.)(example|test|invalid|example\.(com|org|net))$")
+# Host names outside addresses and URLs: anything after "www." and anything ending
+# in a common real top-level domain (file names like a.pdf or x.exe do not count).
+BARE_HOST = re.compile(
+    r"(?<![\w.@-])(www\.[\w-]+(?:\.[\w-]+)+"
+    r"|[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|at|de|ch|eu|io|info|biz|co|uk|us|app|dev|ai))\b",
+    re.IGNORECASE,
+)
 
 
 def _decoded_text(raw: bytes) -> str:
@@ -64,13 +74,14 @@ def test_only_fictitious_domains(corpus: list[SeedMail]):
         text = _decoded_text(m.raw)
         domains |= {d.lower().rstrip(".") for d in re.findall(r"[\w.+-]+@([\w.-]+)", text)}
         domains |= {d.lower() for d in re.findall(r"(?:https?|ftp)://([\w.-]+)", text)}
-    assert domains
+        domains |= {d.lower() for d in BARE_HOST.findall(text)}
+    assert "www.attacker.test" in domains  # the bare-host pattern works
     assert sorted(d for d in domains if not FAKE_DOMAIN.search(d)) == []
 
 
 def test_folders_dates_and_flags(corpus: list[SeedMail]):
     for m in corpus:
-        assert m.folder in DEFAULT_FOLDERS or m.folder in folders_for(m.account), m.folder
+        assert m.folder in DEFAULT_FOLDERS or m.folder in ACCOUNT_FOLDERS[m.account], m.folder
         assert m.when <= NOW
     recent = [m for m in corpus if not m.folder.startswith(("Archive", "Tax"))]
     assert all(m.when > NOW - timedelta(days=70) for m in recent)
@@ -82,14 +93,15 @@ def test_folders_dates_and_flags(corpus: list[SeedMail]):
 
 
 def test_large_folder_tree():
-    work = folders_for(WORK)
+    work = ACCOUNT_FOLDERS[WORK]
     assert len(set(work)) == len(work)
     clients = [f for f in work if f.startswith("Clients/") and f.count("/") == 1]
     assert len(clients) >= 100
     assert any(f.endswith("/2025") for f in CLIENT_FOLDERS)
     assert {"Clients/Müller", "Clients/Mueller Consulting", "Tax/2024", "Tax/2025"} <= set(work)
+    assert SEEDED_FOLDER not in work and not DEFAULT_FOLDERS & set(work)
     for f in work:  # every parent exists (Dovecot would create it, the role check would not)
-        if "/" in f and f != HOSTILE_FOLDER:
+        if "/" in f:
             assert f.rsplit("/", 1)[0] in work, f
 
 
@@ -110,7 +122,32 @@ def test_threads_and_hostile_samples(corpus: list[SeedMail]):
         "broken-encodings",
         "oversized-body",
         "oversized-attachment",
+        "utf7-body",
+        "thread-self-reference",
+        "thread-cycle-a",
+        "references-bomb",
+        "header-bomb",
+        "wide-multipart",
+        "minimal",
     } <= set(labels)
+
+
+def test_hostile_samples_are_tagged_and_dated(corpus: list[SeedMail]):
+    files = {p.stem for p in (DATA / "sandbox").glob("*.eml")}
+    labels = {m.hostile for m in corpus if m.hostile}
+    assert files <= labels  # every sample file is seeded
+    for m in corpus:
+        h = BytesParser(policy=policy.compat32).parsebytes(m.raw, headersonly=True)
+        if m.hostile is None:
+            assert h["X-UEM-Sandbox"] is None
+            assert parsedate_to_datetime(h["Date"]) == m.when, h["Subject"]
+            continue
+        assert m.raw.startswith(f"X-UEM-Sandbox: hostile {m.hostile}\r\n".encode())
+        assert len(h.get_all("Date") or []) == (0 if m.hostile == "minimal" else 1), m.hostile
+    minimal = next(m for m in corpus if m.hostile == "minimal")
+    assert not {"From", "Date", "Message-ID"} & set(
+        BytesParser(policy=policy.compat32).parsebytes(minimal.raw).keys()
+    )
 
 
 def test_rendered_config_loads():

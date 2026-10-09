@@ -1,0 +1,10 @@
+From: Loop <loop@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Re: Re: Re: I am my own parent
+Message-ID: <loop-self@attacker.test>
+In-Reply-To: <loop-self@attacker.test>
+References: <loop-self@attacker.test> <loop-self@attacker.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+In-Reply-To and References point at this message itself.

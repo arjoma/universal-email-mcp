@@ -1,0 +1,32 @@
+From: Scanner <scanner@attacker.test>
+To: Lena Hofer <lena@hofer-design.example>
+Subject: Scan 0042
+Message-ID: <att-1@attacker.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="a1"
+
+--a1
+Content-Type: text/plain; charset=utf-8
+
+See attachments.
+--a1
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="../../.ssh/authorized_keys"
+
+ssh-ed25519 AAAA attacker
+--a1
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*=utf-8''Rechnung_%E2%80%AEfdp.exe
+
+<script>alert(1)</script>
+--a1
+Content-Type: text/plain
+Content-Disposition: attachment; filename="![x](https://exfil.attacker.test/a.png).txt"
+
+markdown in a file name
+--a1
+Content-Type: text/plain
+Content-Disposition: attachment; filename*=utf-8''line%0D%0Abreak%7C.txt
+
+CRLF and a pipe in a file name
+--a1--
