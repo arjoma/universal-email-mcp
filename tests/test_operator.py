@@ -225,6 +225,29 @@ def test_oauth_lifetimes_and_switches():
             oauth({var: value})
 
 
+def test_portal_settings():
+    o = oauth().oauth
+    assert (
+        o.reauth_window.total_seconds() == 300 and o.max_accounts == 10 and o.max_identities == 10
+    )
+    o = oauth(
+        {
+            "UEM_REAUTH_WINDOW": "60",
+            "UEM_MAX_ACCOUNTS_PER_USER": "3",
+            "UEM_MAX_IDENTITIES_PER_USER": "4",
+        }
+    ).oauth
+    assert o.reauth_window.total_seconds() == 60 and o.max_accounts == 3 and o.max_identities == 4
+    for var, value in (
+        ("UEM_REAUTH_WINDOW", "0"),
+        ("UEM_REAUTH_WINDOW", "soon"),
+        ("UEM_MAX_ACCOUNTS_PER_USER", "0"),
+        ("UEM_MAX_IDENTITIES_PER_USER", "many"),
+    ):
+        with pytest.raises(ConfigError, match=var):
+            oauth({var: value})
+
+
 def test_default_ports_are_dropped_from_the_origin():
     op = load({"PUBLIC_URL": "https://mcp.example.com:443"})
     assert op.allowed_origins == ("https://mcp.example.com",)
