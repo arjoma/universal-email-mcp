@@ -143,6 +143,9 @@ class OperatorConfig:
     settings: Settings = Settings(allow_private_networks=False)
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     log_level: str = "INFO"
+    audit_log_client_ip: bool = False
+    """``AUDIT_LOG_CLIENT_IP``: sign-in and rate-limit audit events carry the keyed pseudonym of
+    the client's network (IPv4 /24, IPv6 /48). Off by default; addresses are never logged."""
     store: StoreSettings | None = None
     """Set in OAuth mode (``STORE_BACKEND``), ``None`` in the temporary dev mode."""
     pseudonym_key: bytes = field(default=b"", repr=False)
@@ -578,6 +581,7 @@ def load_operator_config(
         settings=settings,
         max_request_bytes=_number(env, "UEM_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES, int),
         log_level=level,
+        audit_log_client_ip=_flag(env, "AUDIT_LOG_CLIENT_IP", False),
         store=store_settings,
         pseudonym_key=pseudonym_key,
         oauth=_oauth(env),

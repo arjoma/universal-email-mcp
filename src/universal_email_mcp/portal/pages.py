@@ -29,7 +29,6 @@ from universal_email_mcp.models import Endpoint, ServerProfile
 from universal_email_mcp.oauth import signin
 from universal_email_mcp.oauth.clients import clean_text
 from universal_email_mcp.oauth.config import SCOPE_SEND, permission_of
-from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.oauth.redirects import display_host
 from universal_email_mcp.portal import ops
 from universal_email_mcp.portal.approvals import ApprovalPages
@@ -180,7 +179,7 @@ class PortalEndpoints:
     async def _post(self, request: Request) -> tuple[Auth, FormData] | Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
-            self.svc.audit("auth.csrf_failed", area="portal")
+            await self.svc.audit("auth.csrf_failed", area="portal")
             return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
         auth = await self._auth(request)
         if auth is None:
@@ -248,7 +247,7 @@ class PortalEndpoints:
         raw_address = form.get("address")
         typed = raw_address.strip() if isinstance(raw_address, str) else ""
         if not self.web.check_csrf(request, form):
-            self.svc.audit("auth.csrf_failed", area="portal")
+            await self.svc.audit("auth.csrf_failed", area="portal")
             return self._page(
                 request, "portal_signin.html", status=403, error="csrf", address=typed, next=nxt
             )
@@ -279,7 +278,7 @@ class PortalEndpoints:
     async def signout(self, request: Request) -> Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
-            self.svc.audit("auth.csrf_failed", area="portal")
+            await self.svc.audit("auth.csrf_failed", area="portal")
             return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
         raw = self.web.session_cookie(request)
         if raw:
@@ -319,13 +318,13 @@ class PortalEndpoints:
                 request, "reauth.html", status=status, auth=auth, error=error, next=nxt
             )
         await self.store.mark_reauth(auth.session)
-        self.svc.audit("portal.reauth", outcome="ok", user=short_id(auth.user.id))
+        await self.svc.audit("portal.reauth", outcome="ok", user=auth.user.id)
         return self._redirect(nxt)
 
     async def language(self, request: Request) -> Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
-            self.svc.audit("auth.csrf_failed", area="portal")
+            await self.svc.audit("auth.csrf_failed", area="portal")
             return self._page(request, "error.html", status=403, csrf=False, reason="csrf")
         lang = str(form.get("lang", "")).lower()
         response = self._redirect(safe_next(form.get("next"), "/portal"))
@@ -427,7 +426,7 @@ class PortalEndpoints:
             or not limits.test_user.allow(auth.user.id)
             or not limits.test_target.allow(target)
         ):
-            self.svc.audit("ratelimit.hit", scope="portal_test", user=short_id(auth.user.id))
+            await self.svc.audit("ratelimit.hit", scope="portal_test", user=auth.user.id)
             raise FormProblem("rate_limited")
 
     @staticmethod
@@ -471,12 +470,12 @@ class PortalEndpoints:
             await self.store.create(identity)
             if identity.is_default:
                 await ops.set_default_identity(self.store, auth.user.id, identity.id)
-        self.svc.audit(
+        await self.svc.audit(
             "portal.account_add",
-            user=short_id(auth.user.id),
+            user=auth.user.id,
             account=account.id,
             protocol=account.protocol,
-            identity=identity is not None,
+            with_identity=identity is not None,
         )
         return self._redirect(f"/portal/accounts/{account.id}", "account_added")
 
@@ -607,9 +606,9 @@ class PortalEndpoints:
                     ),
                 }
             )
-        self.svc.audit(
+        await self.svc.audit(
             "portal.account_test",
-            user=short_id(auth.user.id),
+            user=auth.user.id,
             account=account.id,
             outcome="ok" if all(r["outcome"].ok for r in results) else "failed",
         )
@@ -630,9 +629,9 @@ class PortalEndpoints:
             self.store, MailAccount, account.id, lambda a: replace(a, permissions=new)
         )
         await ops.clamp_grants(self.store, auth.user.id, self.svc.cfg.offered_scopes)
-        self.svc.audit(
+        await self.svc.audit(
             "portal.account_permissions",
-            user=short_id(auth.user.id),
+            user=auth.user.id,
             account=account.id,
             permissions=" ".join(new),
         )
@@ -696,7 +695,7 @@ class PortalEndpoints:
         if not outcome.ok:
             return again(f"test_{outcome.status}")
         await ops.set_password(self.store, auth.user.id, account.id, password)
-        self.svc.audit("portal.account_password", user=short_id(auth.user.id), account=account.id)
+        await self.svc.audit("portal.account_password", user=auth.user.id, account=account.id)
         return self._redirect(f"/portal/accounts/{account.id}", "password_saved")
 
     async def account_remove_get(self, request: Request) -> Response:
@@ -741,9 +740,9 @@ class PortalEndpoints:
         removal = await ops.remove_account(
             self.store, auth.user.id, account.id, self.svc.cfg.offered_scopes
         )
-        self.svc.audit(
+        await self.svc.audit(
             "portal.account_remove",
-            user=short_id(auth.user.id),
+            user=auth.user.id,
             account=account.id,
             grants=removal.grants_revoked if removal else 0,
             identities=removal.identities_removed if removal else 0,
@@ -905,7 +904,7 @@ class PortalEndpoints:
         elif existing is None and ident.is_default:
             await ops.set_default_identity(self.store, auth.user.id, ident.id)
         await ops.clamp_grants(self.store, auth.user.id, self.svc.cfg.offered_scopes)
-        self.svc.audit(event, user=short_id(auth.user.id), identity=ident.id, send=fields["send"])
+        await self.svc.audit(event, user=auth.user.id, identity=ident.id, can_send=fields["send"])
         return self._redirect("/portal/identities", "identity_saved")
 
     async def _again(
@@ -995,7 +994,7 @@ class PortalEndpoints:
         if ident is None:
             return self._not_found(request, auth)
         await ops.set_default_identity(self.store, auth.user.id, ident.id)
-        self.svc.audit("portal.identity_edit", user=short_id(auth.user.id), identity=ident.id)
+        await self.svc.audit("portal.identity_edit", user=auth.user.id, identity=ident.id)
         return self._redirect("/portal/identities", "identity_default")
 
     async def identity_remove_get(self, request: Request) -> Response:
@@ -1022,9 +1021,9 @@ class PortalEndpoints:
         if ident is None:
             return self._not_found(request, auth)
         touched = await ops.remove_identity(self.store, auth.user.id, ident.id)
-        self.svc.audit(
+        await self.svc.audit(
             "portal.identity_remove",
-            user=short_id(auth.user.id),
+            user=auth.user.id,
             identity=ident.id,
             grants=touched or 0,
         )
@@ -1067,8 +1066,8 @@ class PortalEndpoints:
         outcome = await self.ps.tester.submission(
             endpoint, ident.smtp_username, ident.smtp_password, net
         )
-        self.svc.audit(
-            "portal.identity_test", user=short_id(auth.user.id), identity=ident.id,
+        await self.svc.audit(
+            "portal.identity_test", user=auth.user.id, identity=ident.id,
             outcome=outcome.status,
         )  # fmt: skip
         return self._page(
@@ -1181,9 +1180,7 @@ class PortalEndpoints:
         if not preview:
             return await self._client_page(request, auth, grant, error="keep_one", status=400)
         await ops.reduce_grant(self.store, grant.id, offered, keep, idents)
-        self.svc.audit(
-            "portal.grant_edit", user=short_id(auth.user.id), grant=grant.id, scope=preview
-        )
+        await self.svc.audit("portal.grant_edit", user=auth.user.id, grant=grant.id, scope=preview)
         return self._redirect("/portal/clients", "client_saved")
 
     async def client_revoke(self, request: Request) -> Response:
@@ -1195,7 +1192,7 @@ class PortalEndpoints:
         if grant is None:
             return self._not_found(request, auth)
         await self.store.revoke_grant(grant.id)
-        self.svc.audit("portal.grant_revoke", user=short_id(auth.user.id), grant=grant.id)
+        await self.svc.audit("portal.grant_revoke", user=auth.user.id, grant=grant.id)
         return self._redirect("/portal/clients", "client_revoked")
 
 

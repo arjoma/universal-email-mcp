@@ -60,8 +60,9 @@ class OAuthService:
     login_slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(16))
     """Bounds the threads the mailbox login checks (sign-in, re-authentication) can occupy."""
 
-    def audit(self, name: str, **fields: Any) -> None:
-        audit.event(name, **fields)
+    async def audit(self, name: str, **fields: Any) -> None:
+        """Audit event plus the user's own-activity entry (see :mod:`universal_email_mcp.audit`)."""
+        await audit.record(name, **fields)
 
 
 def oauth_error(

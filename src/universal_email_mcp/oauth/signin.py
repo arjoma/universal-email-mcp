@@ -18,7 +18,7 @@ from starlette.requests import Request
 from universal_email_mcp.errors import AuthFailed, MailError
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.models import ServerProfile
-from universal_email_mcp.oauth.identity import Address, AddressError, parse_address, short_id
+from universal_email_mcp.oauth.identity import Address, AddressError, parse_address
 from universal_email_mcp.oauth.service import OAuthService
 from universal_email_mcp.portal.ops import ensure_primary
 from universal_email_mcp.portal.web import client_ip
@@ -76,7 +76,7 @@ async def _verify(
             log, logging.WARNING, "login server problem", event="auth.sign_in",
             error=type(e).__name__,
         )  # fmt: skip
-        svc.audit("auth.sign_in", outcome="unavailable", user=short_id(user_id))
+        await svc.audit("auth.sign_in", outcome="unavailable", user=user_id)
         return UNAVAILABLE
     return OK
 
@@ -86,7 +86,7 @@ async def check_login(
 ) -> LoginCheck:
     ip = client_ip(request, svc.cfg.trusted_proxy_hops)
     if not svc.limits.signin_ip.allow(ip or "-"):
-        svc.audit("ratelimit.hit", scope="signin_ip")
+        await svc.audit("ratelimit.hit", scope="signin_ip", ip=ip)
         return LoginCheck(RATE_LIMITED)
     if not valid_password(password):
         return LoginCheck(BAD_CREDENTIALS)
@@ -97,20 +97,20 @@ async def check_login(
         return LoginCheck(BAD_CREDENTIALS)
     user_id = svc.pseudonyms.user_id(address.normal)
     if svc.limits.signin_address.blocked(user_id):
-        svc.audit("ratelimit.hit", scope="signin_address", user=short_id(user_id))
+        await svc.audit("ratelimit.hit", scope="signin_address", user=user_id, ip=ip)
         return LoginCheck(RATE_LIMITED)
 
-    def failed(outcome: str) -> LoginCheck:
+    async def failed(outcome: str) -> LoginCheck:
         svc.limits.signin_address.add(user_id)
-        svc.audit("auth.sign_in", outcome=outcome, user=short_id(user_id))
+        await svc.audit("auth.sign_in", outcome=outcome, user=user_id, ip=ip)
         return LoginCheck(BAD_CREDENTIALS)
 
     profile = svc.login_domains.get(address.domain)
     if profile is None:
-        return failed("unknown_domain")
+        return await failed("unknown_domain")
     error = await _verify(svc, address, password, profile, user_id)
     if error == BAD_CREDENTIALS:
-        return failed("bad_credentials")
+        return await failed("bad_credentials")
     if error:
         return LoginCheck(error)
     svc.limits.signin_address.reset(user_id)
@@ -138,7 +138,7 @@ async def complete_sign_in(
     raw, _ = await svc.store.create_portal_session(
         check.user_id, svc.cfg.portal_max, fresh_login=True
     )
-    svc.audit("auth.sign_in", outcome="ok", user=short_id(check.user_id))
+    await svc.audit("auth.sign_in", outcome="ok", user=check.user_id)
     return raw
 
 
@@ -149,10 +149,10 @@ async def verify_user_password(
     an error code. Shares the sign-in limits (wrong passwords count against the user)."""
     ip = client_ip(request, svc.cfg.trusted_proxy_hops)
     if not svc.limits.signin_ip.allow(ip or "-"):
-        svc.audit("ratelimit.hit", scope="signin_ip")
+        await svc.audit("ratelimit.hit", scope="signin_ip", ip=ip)
         return RATE_LIMITED
     if svc.limits.signin_address.blocked(user.id):
-        svc.audit("ratelimit.hit", scope="signin_address", user=short_id(user.id))
+        await svc.audit("ratelimit.hit", scope="signin_address", user=user.id, ip=ip)
         return RATE_LIMITED
     if not valid_password(password):
         return BAD_CREDENTIALS
@@ -167,7 +167,7 @@ async def verify_user_password(
     error = await _verify(svc, address, password, profile, user.id)
     if error == BAD_CREDENTIALS:
         svc.limits.signin_address.add(user.id)
-        svc.audit("portal.reauth", outcome="bad_credentials", user=short_id(user.id))
+        await svc.audit("portal.reauth", outcome="bad_credentials", user=user.id)
     elif error == OK:
         svc.limits.signin_address.reset(user.id)
     return error

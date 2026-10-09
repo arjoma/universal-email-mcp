@@ -667,9 +667,17 @@ class Store:
         account: str = "",
         outcome: str = "",
         counts: dict[str, int] | None = None,
+        coalesce: bool = False,
     ) -> ActivityEntry:
         """Own-activity feed entry. Only short labels and integers are accepted, so that
-        subjects, addresses or other mail data cannot slip in by accident."""
+        subjects, addresses or other mail data cannot slip in by accident.
+
+        ``client`` is the id of the grant (the portal resolves it to the application's name
+        when it shows the entry), ``account`` an account id or name.
+
+        ``coalesce`` merges repeated events of the same kind within one hour into a single
+        entry whose ``calls`` count grows (and whose counts add up), so that a busy client
+        cannot fill the feed (and the send rate limit's scan of it) with read calls."""
         for text in (event, client, tool, account, outcome):
             if len(text) > ACTIVITY_MAX_TEXT or "@" in text:
                 raise ValueError("activity labels must be short names, not addresses or text")
@@ -677,20 +685,42 @@ class Store:
         if any(type(v) is not int or len(k) > ACTIVITY_MAX_TEXT for k, v in counts.items()):
             raise ValueError("activity counts must be integers")
         now = self.now()
-        return await self.create(
-            ActivityEntry(
-                id="e_" + secrets.token_hex(12),
-                user_id=user_id,
-                at=now,
-                event=event,
-                client=client,
-                tool=tool,
-                account=account,
-                outcome=outcome,
-                counts=dict(counts),
-                expires_at=now + self.policy.activity_ttl,
-            )
+        entry_id = "e_" + secrets.token_hex(12)
+        if coalesce:
+            hour = int(now.timestamp() // 3600)
+            key = "\0".join((user_id, event, client, tool, account, outcome, str(hour)))
+            entry_id = "ec_" + hashlib.sha256(key.encode()).hexdigest()[:24]
+            counts = {**counts, "calls": 1}
+        entry = ActivityEntry(
+            id=entry_id,
+            user_id=user_id,
+            at=now,
+            event=event,
+            client=client,
+            tool=tool,
+            account=account,
+            outcome=outcome,
+            counts=dict(counts),
+            expires_at=now + self.policy.activity_ttl,
         )
+        if not coalesce:
+            return await self.create(entry)
+        for _ in range(5):
+            try:
+                return await self.create(entry)
+            except AlreadyExists:
+                pass
+            current = await self.get(ActivityEntry, entry_id)
+            if current is None:  # expired between the two calls
+                continue
+            merged = {
+                k: current.counts.get(k, 0) + counts.get(k, 0) for k in {*current.counts, *counts}
+            }
+            try:
+                return await self.update(replace(current, at=now, counts=merged))
+            except StoreConflict:
+                continue
+        raise StoreConflict("activity entry is changing too fast")
 
     async def list_activity(self, user_id: str, limit: int = 100) -> list[ActivityEntry]:
         """Newest first."""

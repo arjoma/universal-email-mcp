@@ -30,6 +30,7 @@ of each account on every call (see ``service/userpool.py``).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import Any
@@ -42,7 +43,7 @@ from mcp.types import CallToolResult, TextContent
 from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from universal_email_mcp import __version__
+from universal_email_mcp import __version__, audit
 from universal_email_mcp.errors import Busy
 from universal_email_mcp.oauth.bearer import Principal
 from universal_email_mcp.server.app import (  # pyright: ignore[reportPrivateUsage]
@@ -134,11 +135,52 @@ class PerUserServer(MCPServer):
             return CallToolResult(
                 content=[TextContent(type="text", text="Not authenticated.")], is_error=True
             )
+        started = time.monotonic()
+        result: Any = None
         try:
             async with self.pool.call_slot(ctx):
-                return await ctx.server.call_tool(name, arguments, context)
+                result = await ctx.server.call_tool(name, arguments, context)
+            return result
         except Busy as e:
-            return _error_result(e)
+            result = _error_result(e)
+            return result
+        finally:
+            await self._audit_call(ctx, name, time.monotonic() - started, result)
+
+    async def _audit_call(self, ctx: UserContext, name: str, seconds: float, result: Any) -> None:
+        """One ``tool.call`` event (and feed entry): tool name, outcome code, duration
+        bucket and result counts - never the arguments or the result text."""
+        try:
+            code = "ok"
+            counts: dict[str, int] = {}
+            if result is None:
+                code = "EXCEPTION"
+            elif isinstance(result, CallToolResult):
+                data = result.structured_content or {}
+                if result.is_error:
+                    err = data.get("error")
+                    raw = err.get("code") if isinstance(err, dict) else None  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+                    code = raw if isinstance(raw, str) else "error"
+                for key in ("succeeded", "unchanged", "failed", "planned"):
+                    value = data.get(key)
+                    if type(value) is int and not result.is_error:
+                        counts[key] = value
+            await audit.record(
+                "tool.call",
+                coalesce=name in audit.READ_TOOLS,
+                user=ctx.user_id,
+                grant=ctx.grant_id,
+                tool=name if name in audit.READ_TOOLS | audit.WRITE_TOOLS else "unknown",
+                outcome="ok" if code == "ok" else "error",
+                code=None if code == "ok" else code,
+                dur=audit.duration_bucket(seconds),
+                accounts=len(ctx.records),
+                **counts,
+            )
+        except Exception:  # auditing never breaks a call (strict test mode re-raises)
+            if audit.is_strict():
+                raise
+            log.warning("tool.call audit failed", exc_info=False)
 
     async def _discovery_middleware(
         self, ctx: ServerRequestContext[Any, Any], call_next: CallNext

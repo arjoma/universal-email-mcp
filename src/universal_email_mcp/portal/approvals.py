@@ -38,7 +38,6 @@ from universal_email_mcp.errors import MailError
 from universal_email_mcp.mail.mime import sanitize_line
 from universal_email_mcp.oauth.bearer import Principal
 from universal_email_mcp.oauth.clients import clean_text
-from universal_email_mcp.oauth.identity import short_id
 from universal_email_mcp.server import render
 from universal_email_mcp.service.send import (
     SHOW_ATTACHMENTS,
@@ -271,31 +270,35 @@ class ApprovalPages:
         action = str(form.get("action", ""))
         if loaded.state != "pending" or action not in ("approve", "reject"):
             if loaded.state == "expired":
-                audit.event("approval.expired_use", approval=loaded.rec.id)
+                await audit.record("approval.expired_use", approval=loaded.rec.id)
             return await self._detail_page(request, auth, loaded, status=409)
-        who = {"user": short_id(auth.user.id), "approval": loaded.rec.id}
+        who: dict[str, Any] = {
+            "user": auth.user.id,
+            "approval": loaded.rec.id,
+            "grant": loaded.rec.grant_id,
+        }
         if action == "reject":
             try:
                 done = await self.store.decide_approval(loaded.rec.id, auth.user.id, False)
             except StoreConflict:
                 done = None
-            audit.event("approval.rejected", **who, done=done is not None)
+            await audit.record("approval.rejected", **who, done=done is not None)
             return self.ep._redirect("/portal/approvals", "approval_rejected")  # pyright: ignore[reportPrivateUsage]
         if not self.ep._fresh(auth):  # pyright: ignore[reportPrivateUsage]
             return self.ep._to_reauth(f"/portal/approvals/{loaded.rec.id}")  # pyright: ignore[reportPrivateUsage]
         return await self._approve(request, auth, loaded, who)
 
     async def _approve(
-        self, request: Request, auth: Auth, loaded: Loaded, who: Mapping[str, str]
+        self, request: Request, auth: Auth, loaded: Loaded, who: Mapping[str, Any]
     ) -> Response:
         rec = loaded.rec
         try:
             prepared, ctx = await self._prepare(loaded)
         except Changed:
-            audit.event("approval.refused", **who, reason="changed")
+            await audit.record("approval.refused", **who, reason="changed")
             return await self._detail_page(request, auth, loaded, status=409)
         except MailError as e:
-            audit.event("approval.refused", **who, reason=e.code)
+            await audit.record("approval.refused", **who, reason=e.code)
             return await self._detail_page(request, auth, loaded, status=409)
         if prepared.keep_reason is not None:  # policy "draft": nothing to approve, keep it
             self._pool().release(ctx)
@@ -314,13 +317,13 @@ class ApprovalPages:
                 else None
             )
             if consumed is None:
-                audit.event("approval.refused", **who, reason="already_decided")
+                await audit.record("approval.refused", **who, reason="already_decided")
                 return await self._detail_page(request, auth, loaded, status=409)
-            audit.event("approval.approved", **who)
+            await audit.record("approval.approved", **who)
             try:
                 result = await ctx.service.sender.execute(prepared, "accepted")
             except MailError as e:
-                audit.event("approval.send_failed", **who, code=e.code)
+                await audit.record("approval.send_failed", **who, code=e.code)
                 return self.ep._page(  # pyright: ignore[reportPrivateUsage]
                     request,
                     "approval_result.html",
