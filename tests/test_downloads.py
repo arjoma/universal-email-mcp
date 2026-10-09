@@ -172,6 +172,21 @@ def test_quoted_printable_hostile_endless_line_is_bounded():
     assert out == quopri.decodestring(b"a" * 2_000_000 + b"  =3")
 
 
+def test_quoted_printable_endless_whitespace_is_linear_and_bounded():
+    # security review M4: 16 MB of spaces took 17 s (quadratic) and was carried whole
+    import time
+
+    dec = make_decoder("quoted-printable")
+    started = time.monotonic()
+    held = total = 0
+    for _ in range(64):
+        total += len(dec.feed(b" " * (256 * 1024)))
+        held = max(held, len(dec._carry))  # pyright: ignore[reportAttributeAccessIssue]
+    total += len(dec.finish())
+    assert time.monotonic() - started < 3
+    assert held < 70_000 and total > 0
+
+
 def test_quoted_printable_endless_line_split_inside_escape():
     data = b"a" * 70_000 + b"=C3=A9" + b"b" * 70_000
     for size in (1, 7, 65_537, 70_001):
