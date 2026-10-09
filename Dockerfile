@@ -6,9 +6,14 @@
 #       -v ./config.local.toml:/config/config.toml:ro -e UEM_CONFIG=/config/config.toml \
 #       universal-email-mcp
 #
-# Build argument EXTRAS adds optional dependency groups, e.g. --build-arg EXTRAS=gcp.
+# Build argument EXTRAS adds optional dependency groups, e.g. --build-arg EXTRAS=gcp
+# (the Firestore client; required for STORE_BACKEND=firestore, see docs/deploy-gcp.md).
+# VERSION / REVISION only fill the image labels.
+#
+# The base image is pinned by digest (the multi-arch index of python:3.12-slim); bump it
+# deliberately (`podman manifest inspect python:3.12-slim`, or let Dependabot do it).
 
-FROM python:3.12-slim AS build
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11.18 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
@@ -22,7 +27,15 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable $(for e in $EXTRAS; do printf -- '--extra %s ' "$e"; done)
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+ARG VERSION=""
+ARG REVISION=""
+LABEL org.opencontainers.image.title="universal-email-mcp" \
+      org.opencontainers.image.description="Vendor-neutral MCP server for IMAP, POP3 and SMTP mailboxes" \
+      org.opencontainers.image.source="https://github.com/arjoma/universal-email-mcp" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
 RUN useradd --uid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin uem
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \

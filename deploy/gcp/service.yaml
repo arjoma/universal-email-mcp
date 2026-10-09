@@ -1,0 +1,112 @@
+# Cloud Run service template (Knative serving API) for universal-email-mcp.
+#
+# Placeholders are written with double underscores (SERVICE, IMAGE, ... in capitals);
+# cloudbuild.yaml fills them from its substitutions via deploy/gcp/render.sh and applies
+# the result with `gcloud run services replace`. Nothing in this file is secret: secrets
+# are only *references* to Secret Manager (secretKeyRef), resolved by Cloud Run at start.
+#
+# The reasoning behind the settings is in docs/deploy-gcp.md.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: "__SERVICE__"
+  labels:
+    app: universal-email-mcp
+  annotations:
+    # Public OAuth server: Cloud Run IAM must NOT gate requests (AI clients and browsers
+    # carry no Google identity); authentication is the server's own OAuth 2.1 / portal
+    # sign-in. This annotation is the supported equivalent of --allow-unauthenticated and
+    # works without an allUsers binding (which "domain restricted sharing" policies block).
+    run.googleapis.com/invoker-iam-disabled: "true"
+    # Without a load balancer: "all". With the recommended external load balancer (Cloud
+    # Armor, one IP, certificates): "internal-and-cloud-load-balancing", so the service
+    # cannot be reached around the load balancer.
+    run.googleapis.com/ingress: "__INGRESS__"
+    # Optional, with a custom domain only: do not answer on the *.run.app URL at all.
+    # run.googleapis.com/default-url-disabled: "true"
+spec:
+  template:
+    metadata:
+      annotations:
+        # Stateless: all state is in Firestore. min 0 scales to zero (a cold start takes a
+        # few seconds); use 1 for a pilot with real users. max bounds the mail-server
+        # connections: instances x UEM_MAX_CONNECTIONS.
+        autoscaling.knative.dev/minScale: "__MIN_INSTANCES__"
+        autoscaling.knative.dev/maxScale: "__MAX_INSTANCES__"
+        run.googleapis.com/execution-environment: gen2
+        # CPU is only allocated while a request is open. Background work (the idle
+        # connection sweeper) is best-effort and not needed between requests.
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+        # Static egress IP (only if a mail server must allow-list the instance): create
+        # network, subnet and Cloud NAT as in docs/deploy-gcp.md, then uncomment and fill
+        # NETWORK / SUBNET in the deployment's substitutions.
+        # run.googleapis.com/network-interfaces: '[{"network":"__NETWORK__","subnetwork":"__SUBNET__"}]'
+        # run.googleapis.com/vpc-access-egress: all-traffic
+    spec:
+      serviceAccountName: "__RUNTIME_SA__"
+      # 40 concurrent requests per instance stay far below the pool caps
+      # (UEM_MAX_CONCURRENT_CALLS_PER_USER, UEM_MAX_CONNECTIONS).
+      containerConcurrency: 40
+      # Seconds. Streaming attachment downloads and SSE need more than the 60 s default.
+      timeoutSeconds: 300
+      containers:
+        - name: server
+          image: "__IMAGE__"
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            # ---- public settings (substitutions of the private deploy repository) ----
+            - name: STORE_BACKEND
+              value: firestore
+            - name: PUBLIC_URL
+              value: "__PUBLIC_URL__"
+            - name: CONTENT_ORIGIN
+              value: "__CONTENT_ORIGIN__"
+            - name: LOGIN_DOMAINS
+              value: "__LOGIN_DOMAINS__"
+            - name: MAIL_SERVERS
+              value: "__MAIL_SERVERS__"
+            - name: FIRESTORE_PROJECT
+              value: "__PROJECT_ID__"
+            - name: FIRESTORE_PREFIX
+              value: "__FIRESTORE_PREFIX__"
+            # Cloud Run puts one proxy (the Google Front End) in front. With an external
+            # load balancer in front of Cloud Run verify the value (see the docs).
+            - name: UEM_TRUSTED_PROXY_HOPS
+              value: "__TRUSTED_PROXY_HOPS__"
+            - name: UEM_LOG_LEVEL
+              value: INFO
+            # More settings (limits, policy, token lifetimes): docs/operator-env.md.
+            # ---- secrets: references to Secret Manager, never values ----
+            - name: STORE_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: uem-store-keys
+                  key: latest
+            - name: PSEUDONYM_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: uem-pseudonym-key
+                  key: latest
+            # STORE_ACTIVE_KEY is only set during a key rotation (docs/deploy-gcp.md).
+          # Readiness gate: loaded config and one store round trip.
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3

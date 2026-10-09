@@ -141,4 +141,6 @@ podman run --rm -p 8080:8080 \
 
 The image is multi-stage (`uv` build, no dev dependencies), runs as an unprivileged
 user (uid 10001), honours `PORT` and has a `/health` healthcheck (Docker image
-format). `--build-arg EXTRAS=gcp` adds the Firestore client for later.
+format). `--build-arg EXTRAS=gcp` adds the Firestore client (needed for `STORE_BACKEND=firestore`). The base
+image is pinned by digest. `scripts/smoke_container.sh IMAGE` is the check CI runs. Deployment on
+Google Cloud: [deploy-gcp.md](deploy-gcp.md).

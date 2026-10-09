@@ -6,6 +6,20 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 
 ## Open work
 
+### 3i Deployment: for the first real pilot
+- [ ] Nothing in `deploy/gcp` was run against a real project (no cloud calls in CI): the
+      first pilot verifies `bootstrap.sh` flags (`--enable-pitr`, `--delete-protection`,
+      TTL commands), the build service account's permissions, the
+      `invoker-iam-disabled` annotation, the probes and `UEM_TRUSTED_PROXY_HOPS` behind a load
+      balancer, then corrects the docs.
+- [ ] Add `universal-email-mcp admin rotate-keys` (the guide uses a small Cloud Run job with
+      `python -c`) and a `--check` mode that reports the key ids still in use.
+- [ ] Audit events are JSON on stderr without `severity`; align with Cloud Logging
+      (work package 3h), then ship log-based metric/alert definitions as scripts.
+- [ ] Single-VM deployment: a `docker-compose.yml` is pointless with the memory store (all
+      accounts lost on restart); do it together with the SQLite store.
+- [ ] Dependabot (or similar) for the pinned base-image digest and the Trivy action.
+
 ### M1 read tools: review leftovers and sandbox findings
 - [ ] Time windows: `today`/`this_week` are computed in the local time zone, but IMAP
       `SINCE`/`BEFORE` compare the server's INTERNALDATE day (the zone stored with the

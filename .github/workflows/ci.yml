@@ -83,3 +83,38 @@ jobs:
         run: |
           uv export --locked --all-extras --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt
           uvx pip-audit==2.10.1 --disable-pip --no-deps --require-hashes --requirement /tmp/requirements.txt
+
+  container:
+    # The production image (with the Firestore client): builds, starts in OAuth mode with
+    # the memory store, answers the platform probes and refuses /mcp without a token.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --build-arg EXTRAS=gcp --build-arg REVISION="$GITHUB_SHA" --tag uem-ci:test .
+      - name: Smoke test
+        run: ENGINE=docker scripts/smoke_container.sh uem-ci:test
+      - name: Scan image for vulnerabilities (Trivy)
+        # Fixed HIGH/CRITICAL findings in the image fail the job; unfixed ones are
+        # ignored. A new base-image CVE can turn this red without any code change:
+        # rebuild with a newer digest pin (Dockerfile) rather than muting it.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: uem-ci:test
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          vuln-type: os,library
+
+  deploy-files:
+    # Static checks of the deployment files (YAML parses, shell syntax, shellcheck); the
+    # rest is in tests/test_deploy_files.py.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: shellcheck deploy/gcp/*.sh scripts/smoke_container.sh
