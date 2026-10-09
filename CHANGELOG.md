@@ -37,6 +37,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   characters in headers are refused, the policy's `max_recipients` applies. The result
   previews the draft and warns about a Reply-To to another domain, malformed
   addresses of the original and recipients never written to.
+- `move_messages(to="archive")`: files into the account's archive folder (SPECIAL-USE
+  `\Archive`, role detection or `folders.archive`). The scheme is detected from the
+  archive's subfolders (flat, `YYYY`, `YYYY/MM`, `YYYY-MM`; an empty archive is flat)
+  or fixed per account with `archive_scheme`; each message goes to the folder of its
+  `Date` header (trusted only if plausible: 1990 or later and not after the arrival date + 1 day; else INTERNALDATE, else now), missing
+  year/month folders are created once. No archive folder: `NO_ARCHIVE_FOLDER`.
+- `move_messages(with_conversation=true)`: also moves the rest of each message's
+  conversation in the same account (INBOX, Sent, the archive and the message's own
+  folder; mail filed in other folders is reported as left there, Trash/Junk/Drafts
+  never move). Only replies and ancestors of the message are followed - a hostile
+  reply cannot pull unrelated mail in. The batch limit counts the whole set.
+- `move_messages(dry_run=true)`: lists what would move and where, changes nothing
+  (no folders are created either); the result lists the ids to pass to a confirmed
+  move, which then searches nothing again.
 - `get_attachment`: reads one attachment by the id `get_message` lists. Text-like
   files (text, CSV, JSON, XML, HTML, SVG) come back as fenced, defanged, paged text;
   other files as an embedded resource (base64 blob); files over
@@ -127,6 +141,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Nothing is changed in other users' or shared namespaces.
 - New limit `max_batch_messages` (default 50): messages per mark/move/delete call;
   more are refused up front.
+
+### Changed
+
+- The conversation search (`get_message(thread=true)`) is limited by a time budget
+  (half of `limits.account_timeout`) instead of 25 folders; later rounds look only in
+  INBOX, Sent, the archive, the message's folder and folders that had hits.
 
 ### Security
 

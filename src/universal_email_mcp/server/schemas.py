@@ -354,7 +354,12 @@ class WriteItem(_Model):
     """What happened to one message of a mark/move/delete call."""
 
     id: str = Field(description="The id as given.")
-    status: Literal["ok", "unchanged", "failed"]
+    status: Literal["ok", "unchanged", "failed", "planned"] = Field(
+        description="planned = dry run: would be changed, nothing was."
+    )
+    conversation_member: bool = Field(
+        description="Conversation move: found as a member of the conversation of a given message."
+    )
     account: str
     folder: str = Field(description="Source folder (decoded display name).")
     subject: str
@@ -376,6 +381,8 @@ class WriteResult(_Model):
     succeeded: int
     unchanged: int
     failed: int
+    planned: int = Field(description="Dry run: messages that would be changed.")
+    dry_run: bool = Field(description="true: nothing was changed, this is the plan.")
     notes: list[str]
 
 

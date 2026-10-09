@@ -10,6 +10,7 @@ Nothing here trusts mail content: it is only matched, counted and passed on.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -53,7 +54,7 @@ from universal_email_mcp.service import folder_list, fuzzy
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourcePos, query_hash
 from universal_email_mcp.service.drafts import Drafter
 from universal_email_mcp.service.index import HeaderIndex
-from universal_email_mcp.service.organize import Organizer
+from universal_email_mcp.service.organize import Conversation, Organizer
 from universal_email_mcp.service.paging import (
     MAX_CURSOR_RETRIES,
     STOPPED_RETRYING,
@@ -66,7 +67,10 @@ from universal_email_mcp.service.trust import SentTo, SentToIndex
 
 DEFAULT_PAGE = 20
 MAX_THREAD_MESSAGES = 50
-MAX_THREAD_FOLDERS = 25
+THREAD_TIME_SHARE = 0.5
+"""A conversation search spends at most this share of ``limits.account_timeout`` on
+searching folders (it still has to fetch and answer); folders not reached in the
+first round are listed as not searched."""
 THREAD_ROUNDS = 4
 MAX_SAME_MESSAGE_ID = 5
 """Messages a conversation shows per Message-ID (the earliest arrivals; more are
@@ -92,6 +96,7 @@ OVERVIEW_ROLES: tuple[FolderRole, ...] = ("inbox", "drafts", "junk")
 """Special folders whose STATUS the account overview reads (three round trips)."""
 _CONTACT_ROLES: tuple[FolderRole, ...] = ("sent", "inbox")
 _THREAD_ROLES: tuple[FolderRole, ...] = ("inbox", "sent")
+_LATER_ROUND_ROLES: frozenset[FolderRole | None] = frozenset({"inbox", "sent", "archive"})
 _SKIP_FOR_THREADS: frozenset[FolderRole | None] = frozenset({"trash", "junk", "drafts"})
 
 THREAD_PARTICIPANT_THRESHOLD = 85.0
@@ -99,6 +104,10 @@ THREAD_PARTICIPANT_THRESHOLD = 85.0
 MAX_PARTICIPANT_TERMS = 10
 MAX_TERM_WORDS = 5
 MAX_TERM_CHARS = 60
+
+
+def _now() -> float:
+    return time.monotonic()
 
 
 # =========================================================================== results
@@ -335,7 +344,9 @@ class MailService:
         self.download_status = download_status or ("on" if download_links else "off")
         """One line for ``account_info``: links on (where, how long) or off (why)."""
         self._prefixes: dict[str, str] = {}
-        self.organize = Organizer(config, self.router, self.index, self._prefix)
+        self.organize = Organizer(
+            config, self.router, self.index, self._prefix, self._conversation_members
+        )
         """Mark, move, delete and create folders (the write side)."""
         self.sent_to = SentToIndex()
         """Per-account "written to" sets (contacts; the send-time check, WP 2d)."""
@@ -885,6 +896,104 @@ class MailService:
 
     # ------------------------------------------------------------ threads
 
+    def _collect_thread(
+        self, session: ImapSession, ref: MessageRef, cap: int, deadline: float | None = None
+    ) -> tuple[MessageSummary, list[MessageSummary], list[str], list[str]]:
+        notes: list[str] = []
+        first = session.fetch_summaries(ref.folder, [ref.uid], uidvalidity=ref.uidvalidity)
+        if not first:
+            raise InvalidRef("message not found (moved or deleted?)")
+        root = first[0]
+        ids = _thread_ids(root)
+        if not ids:
+            notes.append("the message has no Message-ID; showing it alone")
+            return root, [root], ids, notes
+        candidates = [
+            f
+            for f in session.list_folders()
+            if f.selectable and (f.role not in _SKIP_FOR_THREADS or f.name == ref.folder)
+        ]
+        scan = thread_folder_order(
+            candidates, root, ref.folder, self._prefix(session), self._own_addresses()
+        )
+        if deadline is None:
+            deadline = _now() + self.limits.account_timeout * THREAD_TIME_SHARE
+        with_hits: set[str] = set()
+        found = {(root.ref.folder, root.ref.uid): root}
+        followed = {root.ref}
+        searched: set[str] = set()
+        fetched = 0
+        for round_no in range(THREAD_ROUNDS):
+            # Only ids not searched yet (the server takes MAX_RELATED_IDS per
+            # search): no round is spent on ids it would not search anyway.
+            query = [i for i in ids if i not in searched][:MAX_RELATED_IDS]
+            if not query or fetched >= MAX_THREAD_FETCH:
+                break
+            searched.update(query)
+            left = MAX_THREAD_FETCH - fetched
+            budget = left
+            if round_no < THREAD_ROUNDS - 1:
+                budget = min(left, max(left // 2, MIN_THREAD_SHARE * len(with_hits or scan)))
+            spent = 0
+            # Later rounds look for ancestors and replies where the conversation
+            # already was found (and in INBOX, Sent, the archive and the message's
+            # own folder); the first round tries every folder, in order of
+            # promise, until the time budget is used up.
+            active = (
+                scan
+                if round_no == 0
+                else [
+                    f
+                    for f in scan
+                    if f.name in with_hits or f.name == ref.folder or f.role in _LATER_ROUND_ROLES
+                ]
+            )
+            for k, f in enumerate(active):
+                if _now() > deadline:
+                    if round_no == 0:
+                        skipped = [g.display_name for g in active[k:]]
+                        notes.append(
+                            f"searched {k} of {len(active)} folders before the time budget "
+                            "ran out (special folders, archive and folders named like the "
+                            "participants first); not searched: "
+                            + ", ".join(skipped[:5])
+                            + (f" (+{len(skipped) - 5})" if len(skipped) > 5 else "")
+                        )
+                    break
+                res = session.search_related(f.name, query)
+                if res.uids:
+                    with_hits.add(f.name)
+                fresh = [u for u in res.uids if (res.folder, u) not in found]
+                share = max(MIN_THREAD_SHARE, (budget - spent) // (len(active) - k))
+                take = _both_ends(fresh, min(cap * 2, share, MAX_THREAD_FETCH - fetched))
+                if not take:
+                    continue
+                fetched += len(take)
+                spent += len(take)
+                for m in self.index.summaries(
+                    session, res.folder, res.uidvalidity, take, refresh_flags=True
+                ):
+                    found[(m.ref.folder, m.ref.uid)] = m
+            # Search on from each Message-ID's current owner only (see
+            # _owners). Ownership can still change in a later round or through
+            # another account; _linked() settles the final membership.
+            for m in _owners(root, found.values()):
+                if m.ref in followed:
+                    continue
+                followed.add(m.ref)
+                ids += [i for i in _thread_ids(m) if i not in ids]
+        return root, list(found.values()), ids, notes
+
+    def _conversation_members(
+        self, session: ImapSession, ref: MessageRef, deadline: float
+    ) -> Conversation:
+        """The messages ``move_messages(with_conversation=true)`` moves along with
+        ``ref`` (same account only; see :func:`move_members`)."""
+        root, messages, _ids, notes = self._collect_thread(
+            session, ref, MAX_THREAD_MESSAGES, deadline
+        )
+        return Conversation(move_members(root, messages), notes)
+
     async def get_thread(self, message_id: str, *, limit: int | None) -> ThreadResult:
         ref, acc = self._ref(message_id)
         cap = max(1, min(limit or MAX_THREAD_MESSAGES, MAX_THREAD_MESSAGES))
@@ -892,70 +1001,7 @@ class MailService:
         def primary(
             session: ImapSession,
         ) -> tuple[MessageSummary, list[MessageSummary], list[str], list[str]]:
-            notes: list[str] = []
-            first = session.fetch_summaries(ref.folder, [ref.uid], uidvalidity=ref.uidvalidity)
-            if not first:
-                raise InvalidRef("message not found (moved or deleted?)")
-            root = first[0]
-            ids = _thread_ids(root)
-            if not ids:
-                notes.append("the message has no Message-ID; showing it alone")
-                return root, [root], ids, notes
-            candidates = [
-                f
-                for f in session.list_folders()
-                if f.selectable and (f.role not in _SKIP_FOR_THREADS or f.name == ref.folder)
-            ]
-            scan = thread_folder_order(
-                candidates, root, ref.folder, self._prefix(session), self._own_addresses()
-            )
-            if len(scan) > MAX_THREAD_FOLDERS:
-                skipped = [f.display_name for f in scan[MAX_THREAD_FOLDERS:]]
-                notes.append(
-                    f"searched {MAX_THREAD_FOLDERS} of {len(scan)} folders (special folders, "
-                    "archive and folders named like the participants first); not searched: "
-                    + ", ".join(skipped[:5])
-                    + (f" (+{len(skipped) - 5})" if len(skipped) > 5 else "")
-                )
-                scan = scan[:MAX_THREAD_FOLDERS]
-            found = {(root.ref.folder, root.ref.uid): root}
-            followed = {root.ref}
-            searched: set[str] = set()
-            fetched = 0
-            for round_no in range(THREAD_ROUNDS):
-                # Only ids not searched yet (the server takes MAX_RELATED_IDS per
-                # search): no round is spent on ids it would not search anyway.
-                query = [i for i in ids if i not in searched][:MAX_RELATED_IDS]
-                if not query or fetched >= MAX_THREAD_FETCH:
-                    break
-                searched.update(query)
-                left = MAX_THREAD_FETCH - fetched
-                budget = left
-                if round_no < THREAD_ROUNDS - 1:
-                    budget = min(left, max(left // 2, MIN_THREAD_SHARE * len(scan)))
-                spent = 0
-                for k, f in enumerate(scan):
-                    res = session.search_related(f.name, query)
-                    fresh = [u for u in res.uids if (res.folder, u) not in found]
-                    share = max(MIN_THREAD_SHARE, (budget - spent) // (len(scan) - k))
-                    take = _both_ends(fresh, min(cap * 2, share, MAX_THREAD_FETCH - fetched))
-                    if not take:
-                        continue
-                    fetched += len(take)
-                    spent += len(take)
-                    for m in self.index.summaries(
-                        session, res.folder, res.uidvalidity, take, refresh_flags=True
-                    ):
-                        found[(m.ref.folder, m.ref.uid)] = m
-                # Search on from each Message-ID's current owner only (see
-                # _owners). Ownership can still change in a later round or through
-                # another account; _linked() settles the final membership.
-                for m in _owners(root, found.values()):
-                    if m.ref in followed:
-                        continue
-                    followed.add(m.ref)
-                    ids += [i for i in _thread_ids(m) if i not in ids]
-            return root, list(found.values()), ids, notes
+            return self._collect_thread(session, ref, cap)
 
         async def work(
             a: Account,
@@ -1439,6 +1485,49 @@ def _linked(root: MessageSummary, messages: Sequence[MessageSummary]) -> list[Me
                     ids |= new
                     changed = True
     return [m for m in messages if id(m) in kept]
+
+
+def move_members(root: MessageSummary, messages: Sequence[MessageSummary]) -> list[MessageSummary]:
+    """The messages a conversation **move** takes along with ``root`` — stricter
+    than :func:`_linked` (what is shown), because a move changes the mailbox.
+
+    Links are followed in one direction each: *up* from the root only (the ids
+    its own In-Reply-To/References name, then those of the ancestors found under
+    these ids, if they are the id's owner), *down* from every kept message's own
+    Message-ID (replies whose In-Reply-To/References name it). The other
+    References of a reply are **not** followed upward: a hostile reply that lists
+    an unrelated mail's id in its References cannot pull that mail in. Only the
+    owner of a Message-ID (:func:`_owners`) extends the set, so a later claimant
+    of an id cannot pivot either. Identical copies of a kept mail (same
+    :func:`_copy_key`) come along. The result keeps the order of ``messages``.
+    """
+    owners = {id(m) for m in _owners(root, messages)}
+
+    def links(m: MessageSummary) -> set[str]:
+        return {i.casefold() for i in (m.in_reply_to, *m.references) if i}
+
+    keep = {id(root)}
+    known = {root.message_id.casefold()} if root.message_id else set[str]()
+    up = links(root)
+    changed = True
+    while changed:
+        changed = False
+        for m in messages:
+            if id(m) in keep:
+                continue
+            mid = m.message_id.casefold() if m.message_id else None
+            if mid is not None and mid in up and id(m) in owners:
+                keep.add(id(m))
+                known.add(mid)
+                up |= links(m)
+                changed = True
+            elif known & links(m):
+                keep.add(id(m))
+                if mid is not None and id(m) in owners:
+                    known.add(mid)
+                changed = True
+    kept_keys = {_copy_key(m) for m in messages if id(m) in keep}
+    return [m for m in messages if id(m) in keep or _copy_key(m) in kept_keys]
 
 
 MAX_SHARED_NOTES = 3
