@@ -530,7 +530,7 @@ async def test_audit_events_carry_no_addresses_or_subjects(
     assert '"event":"approval.rejected"' in audit_text
     for secret in ("alice@", "example.org", "stranger", "GEHEIM", "Hallo", u.box.user, "Max"):
         assert secret not in audit_text, secret
-    assert approval.id in audit_text
+    assert approval.id not in audit_text  # only the keyed pseudonym of the id is logged
 
 
 # ---------------------------------------------------------------- the approvals page
