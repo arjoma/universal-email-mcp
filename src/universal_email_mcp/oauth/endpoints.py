@@ -511,6 +511,7 @@ class OAuthEndpoints:
             error=error,
             address=user.primary_address,
             carried=carried,
+            form_action_extra=csp_form_target(req.redirect_uri),
             **self._page_context(req),
         )
 

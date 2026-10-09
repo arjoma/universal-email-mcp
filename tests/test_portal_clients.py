@@ -172,6 +172,8 @@ async def test_granting_send_asks_for_the_password_when_it_is_stale(alice, store
     clock.advance(minutes=10)
     page, r = approve(alice, a, [f"{main}:mail.read"], [ident])
     assert r.status_code == 200 and 'type="password"' in r.text  # asked, nothing granted yet
+    # the answer redirects to the client: CSP form-action must allow that hop on this page too
+    assert "form-action 'self' http://127.0.0.1:*" in r.headers["content-security-policy"]
     assert "send mail as you" in r.text
     assert "location" not in r.headers
     assert await store.list_for_user(Grant, ALICE) == []
