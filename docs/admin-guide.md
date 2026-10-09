@@ -51,14 +51,16 @@ Every key is explained in [`config.example.toml`](config.example.toml). The main
   `tls` (`tls` or `starttls`).
 * `[[identities]]`: sender addresses; `send = true` lets `send_message` use one (it needs an SMTP
   account and a `store_account` with the `drafts` permission).
-* `[policy]`, `[limits]`, `[downloads]`: see sections 5 to 7 below.
+* `[policy]` and `[limits]`: see sections 5 and 6 below. `[settings]` holds `allow_private_networks`
+  and the connect and read timeouts. `[downloads]` configures the loopback download links
+  (`enabled`, `port` 0 = random, `link_ttl` 86400 s, `max_download_bytes`).
 
 **Passwords are never written to the file.** Either name an environment variable
 (`password_env = "UEM_WORK_PASSWORD"`), or leave both out and use the OS keyring
 (service `universal-email-mcp`, key = the account name or `keyring_key`):
 
 ```bash
-uvx keyring set universal-email-mcp Work
+keyring set universal-email-mcp Work      # or: uv run keyring set ... from a checkout
 ```
 
 Prefer the keyring: environment variables put the password into the MCP client's configuration
@@ -71,8 +73,9 @@ your servers and user names.
 uvx universal-email-mcp probe --account Work     # read-only: capabilities, folders, quota; no message content
 ```
 
-`probe` accepts `--server PRESET_OR_HOST --user NAME` instead of `--account` (the password comes from `UEM_PASSWORD` or a prompt), plus `--port`,
-`--starttls`, `--ca-file` (self-signed servers), `--no-counts`, `--json`. `--insecure` turns TLS
+`probe` accepts `--server PRESET_OR_HOST --user NAME` instead of `--account` (the password comes from `UEM_PASSWORD` or a prompt), plus `--host`, `--port`,
+`--starttls`, `--config`, `--ca-file` (self-signed servers), `--public-only`, `--timeout`,
+`--no-counts`, `--json`. `--insecure` turns TLS
 verification off and exists for local test servers only.
 
 ```bash
@@ -201,14 +204,16 @@ something. Every send therefore follows the same path:
 | `on` | confirms only look-alike recipients (always confirmed) |
 
 4. If the client **cannot ask** (no elicitation support, or the legacy protocol over stateless
-   HTTP), nothing is sent without a person. Local mode keeps a draft. In remote mode
+   HTTP), the fallback applies. A client that declares elicitation is trusted to really ask the
+   user; one that auto-accepts defeats the question. Local mode keeps a draft. In remote mode
    `SEND_FALLBACK` decides:
    `portal` (default): the draft stays, a pending approval is created, and the user reads exactly
    what would go out on the portal page *Pending approvals* and approves it with a password check;
    `send-unless-flagged`: sends directly unless a recipient is new or a look-alike (those go to the
    portal), a trade-off for deployments whose clients cannot ask; `draft`: only a draft. There is
    deliberately no mode that sends unconfirmed in every case, and a look-alike recipient is never
-   sent without a human.
+   sent without a human. Note that `send-unless-flagged` and `UEM_SEND_POLICY=on` do send to
+   internal or known recipients (and, under `on`, new ones) without a question.
 
 Replay protection: a confirmation is sealed (AES-256-GCM, 10 minutes, bound to user, grant, tool
 and arguments), a send claims its content hash in the store for 10 minutes (`ALREADY_SENT`), and an
@@ -250,8 +255,10 @@ Losing a key makes the blobs sealed with it unreadable: users must add their mai
 
 **Pseudonym key.** Users are keyed by it, so changing it makes every user a stranger: their
 records stay behind under the old ids and they start from scratch. There is no migration tool.
-Treat the key as permanent; if it leaks, the effect is that someone with a list of addresses can
-test which of them use the service (and recognise them in logs) - not access to mail. Rotating it
+Treat the key as permanent; if it leaks, someone with a list of addresses can test which of them use
+the service and recognise them in logs. It gives no direct access to mail, but it is also the
+signing key of paging cursors and of the content-origin addresses, so with it and a guessable
+message id an attacker could forge a `/c/...` address and read the sanitised HTML of that message. Rotating it
 today means a planned reset of all users.
 
 **Request-state keys** need no variable: they derive from the store ring and follow its rotation.
@@ -328,17 +335,22 @@ the operator-side ones are manual.
 1. The user signs in to the portal and, under *Connected applications*, disconnects the client
    (tokens stop working at once), or uses *Privacy* > delete everything.
 2. If the mailbox password may be known, change it at the mail provider, then enter the new one
-   under *Mail accounts* > Password. Changing it makes stored copies useless; the next call shows
-   `REAUTH_REQUIRED` until updated.
+   under *Mail accounts* > Password. The next call shows `REAUTH_REQUIRED` until the stored copy is updated (signing in with the new
+   password refreshes "Main"; other accounts need the Password action).
 
 **B. The operator must cut a user off**
 1. Find the user's activity: compute the pseudonym and read the audit lines (section 9):
    `audit --user alice@example.org --since 7d export.json`.
 2. Revoke their grants by deleting the user's documents in the Firestore collection `grants`
-   (field `user_id`). An access or refresh token is valid only while its grant exists, so every
-   client of that user stops on the next request. The full user id is `u_` plus 32 hex digits;
-   `audit pseudonym` prints only the 14-character form used in logs. Compute the full one on a
-   trusted machine with the key in the environment:
+   (query the plain field `user_id`; document ids are hashes and cannot be guessed). An access or
+   refresh token is valid only while its grant exists, so every client of that user stops on the
+   next request. Grants, browser sessions (`portal_sessions`, also by `user_id`) and accounts are
+   separate records: also delete the user's `portal_sessions`, otherwise the user can still
+   consent again with a live session (up to 30 minutes idle / 12 hours). `Store.delete_user`
+   removes everything in the right order. The full user id is `u_` plus 32 hex digits;
+   `audit pseudonym` prints only the 14-character form used in logs. Compute the full one from a
+   checkout (`uv run`) on a trusted machine with the key in the environment; the address must be
+   written lowercase:
 
 ```bash
 PSEUDONYM_KEY="$(gcloud secrets versions access latest --secret=uem-pseudonym-key)" uv run python -c "
@@ -357,8 +369,10 @@ print(Pseudonyms(base64.b64decode(os.environ['PSEUDONYM_KEY'])).user_id('alice@e
 
 **C. A client application must be disabled**
 There is no deny list of clients. Delete the `grants` documents with that `client_id`
-(tokens die with them) and set `UEM_DCR=false` (and/or `UEM_DCR_REDIRECT_HOSTS`) so that it
-cannot register again. A client identified by a metadata document URL can still be authorised
+(tokens die with them) and also delete its record in `oauth_clients` (field `_id` = client id): an already registered
+client keeps working at `/authorize` until that record expires (30 days unused, extended on use).
+Set `UEM_DCR=false` so that no new registrations are accepted (`UEM_DCR_REDIRECT_HOSTS` only
+checks redirect hosts at registration). A client identified by a metadata document URL can still be authorised
 anew by users; tell them not to.
 
 **D. Stop the damage first, investigate second**
@@ -369,7 +383,7 @@ anew by users; tell them not to.
 **E. Keys**
 * Store key ring suspected leaked: rotate (section 7) and, if the database was copied too,
   ask users to change their mailbox passwords.
-* Pseudonym key leaked: see section 7; the exposure is limited to linking addresses to pseudonyms.
+* Pseudonym key leaked: see section 7 (linking addresses to pseudonyms, forged cursor and content-origin signatures).
 * Both keys and a database copy leaked: treat mailbox passwords as compromised for all users.
 
 **F. Afterwards**
