@@ -167,7 +167,7 @@ class MessageOut(_Model):
     source_truncated: bool
     thread: list[MessageItem] | None = Field(
         default=None,
-        description="With thread=true: the conversation, chronological (oldest first).",
+        description="With thread=true: the conversation by arrival time (oldest first).",
     )
     notes: list[str] = Field(default_factory=list[str])
     problems: list[Problem] = Field(
