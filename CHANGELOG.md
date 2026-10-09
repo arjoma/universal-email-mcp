@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The send confirmation (elicitation prompt and portal approval page) now covers every body the
+  recipients get: an HTML version that differs from the plain text, or is the only body, is shown
+  as text under its own heading, remote images are warned about, and cuts (also the 300000
+  character preview limit) are announced. Defanging of the shown text no longer takes minutes
+  on very long unbroken runs.
 - Sending in remote mode (work package 3f; `docs/oauth.md`, `docs/portal.md`,
   `docs/operator-env.md`): `send_message` is offered when the grant (`mail.send` for an
   identity), the identity ("sending allowed", complete outgoing login, copies to an account

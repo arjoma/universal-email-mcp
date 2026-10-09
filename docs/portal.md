@@ -94,6 +94,11 @@ text), its text is shown under its own heading too, with the same cut notices; r
 it (tracking pixels) are warned about, and a plain text cut at 300000 characters is announced.
 The elicitation prompt of local mode shows the same.
 
+If the draft has an HTML version that differs from the plain text (or there is no plain
+text), its text is shown under its own heading too, with the same cut notices; remote images in
+it (tracking pixels) are warned about, and a plain text cut at 300000 characters is announced.
+The elicitation prompt of local mode shows the same.
+
 **Send this message** needs the CSRF token and a password entry within `UEM_REAUTH_WINDOW`
 (otherwise the user is taken to `/portal/reauth` and back to the page). It sends **exactly the
 stored draft**: the page compares the draft's content hash with the one stored in the
