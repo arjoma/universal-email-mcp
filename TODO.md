@@ -53,3 +53,12 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       Message-ID can displace the original from the conversation.
 - [ ] `get_message` shows only the first of several inline `text/plain` parts and
       neither lists the others nor notes that text was left out (`wide-multipart`).
+- [ ] Look-alike senders are hard to spot: tables show only the display name, and a
+      fuzzy search for a real contact ranks a look-alike domain or a homoglyph
+      name (Cyrillic letters) as high as the original. Flag mixed scripts and
+      look-alike domains (also needed for the send-time recipient check).
+- [ ] `probe` prints folder names to the terminal unsanitised (bidi overrides;
+      other servers may allow terminal escape sequences).
+- [ ] After a partial fetch an attachment's size is reported as the truncated size.
+- [ ] Defanging of folder names is uneven (`http\[:\]attacker.test` keeps the
+      dots); a fake code fence in a body is left as is.
