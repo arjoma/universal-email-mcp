@@ -642,13 +642,18 @@ class Store:
         except AlreadyExists:
             marker = self._send_marker_id(user_id, content_hash)
             stale = await self.get_any(PendingApproval, marker)
-            if stale is None or stale.expires_at > now:
+            if stale is None:  # purged between the two calls: the way is free again
+                return await self.claim_send(user_id, content_hash, ttl)
+            if stale.expires_at > now:
                 return False
-            try:  # an expired, not yet purged marker: replace it, but only if nobody else did
-                await self.delete(PendingApproval, marker, expected_version=stale.version)
+            try:
+                # An expired, not yet purged marker: renew it in place. The replace only
+                # succeeds for the version that was read, so of several racers exactly one
+                # wins (a delete followed by a create would reuse version 1 and let a slow
+                # racer delete the winner's fresh marker).
+                await self.update(replace(stale, created_at=now, expires_at=now + ttl))
             except StoreConflict:
                 return False
-            return await self.claim_send(user_id, content_hash, ttl)
         return True
 
     async def release_send(self, user_id: str, content_hash: str) -> None:
@@ -677,7 +682,9 @@ class Store:
 
         ``coalesce`` merges repeated events of the same kind within one hour into a single
         entry whose ``calls`` count grows (and whose counts add up), so that a busy client
-        cannot fill the feed (and the send rate limit's scan of it) with read calls."""
+        cannot fill the feed (and the send rate limit's scan of it) with read calls. Racing
+        writers of one entry retry a few times; under heavy contention a call raises
+        ``StoreConflict`` and its count is not recorded (the entry never over-counts)."""
         for text in (event, client, tool, account, outcome):
             if len(text) > ACTIVITY_MAX_TEXT or "@" in text:
                 raise ValueError("activity labels must be short names, not addresses or text")
@@ -705,7 +712,7 @@ class Store:
         )
         if not coalesce:
             return await self.create(entry)
-        for _ in range(5):
+        for _ in range(3):
             try:
                 return await self.create(entry)
             except AlreadyExists:

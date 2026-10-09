@@ -96,7 +96,8 @@ policy decides whether the user must confirm. Then:
   one). At most 20 sends of a user wait for approval at once; asking again for the same message
   returns the same link.
 * **Audit** events (`send.*`, `approval.*`) carry pseudonymous user ids, grant and approval
-  ids, counts and size buckets - no address, subject or text.
+  pseudonyms, counts and size buckets - no address, subject or text ([audit.md](audit.md)). The
+  completed send is the one `send` entry of the user's activity feed (it also feeds the limit).
 
 ## Endpoints
 
@@ -207,10 +208,10 @@ expires on its own).
   IP per 15 minutes; client-document fetches 30 per IP per minute; registrations as above;
   token and revoke requests 300 per IP per minute. Behind a proxy set
   `UEM_TRUSTED_PROXY_HOPS`.
-* Audit events on stderr (`auth.sign_in`, `auth.consent`, `auth.token`, `auth.revoke`,
-  `auth.code_replay`, `auth.client_refused`, `auth.csrf_failed`, `ratelimit.hit`) carry
-  pseudonyms (`u_...`), grant ids and client ids, never addresses, passwords, tokens, codes
-  or IP addresses.
+* Audit events (JSON on stdout, [audit.md](audit.md): `auth.sign_in`, `auth.consent`, `auth.token`,
+  `auth.revoke`, `auth.code_replay`, `auth.client_refused`, `auth.csrf_failed`, `ratelimit.hit`, and
+  `tool.call` for every MCP tool call) carry pseudonyms (`u_...`, `c_...`, `g_...`), never
+  addresses, passwords, tokens, codes, client names or IP addresses.
 * All text the client controls (name, redirect host, state) is escaped by the template
   engine; the name is additionally stripped of control, bidi and zero-width characters.
 

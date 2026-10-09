@@ -579,11 +579,15 @@ async def test_coalesced_activity_merges_per_hour(store: Store, clock: Clock) ->
 
 
 async def test_coalesced_activity_survives_parallel_calls(store: Store) -> None:
-    await asyncio.gather(
-        *(store.record_activity("u_1", "tool.call", tool="t", coalesce=True) for _ in range(4))
+    got = await asyncio.gather(
+        *(store.record_activity("u_1", "tool.call", tool="t", coalesce=True) for _ in range(4)),
+        return_exceptions=True,
     )
+    assert all(isinstance(g, ActivityEntry | StoreConflict) for g in got), got
+    won = sum(isinstance(g, ActivityEntry) for g in got)
+    assert won >= 1
     (entry,) = await store.list_activity("u_1")
-    assert entry.counts["calls"] == 4
+    assert entry.counts["calls"] == won  # a lost race loses its count, never double counts
 
 
 @pytest.mark.parametrize(

@@ -14,8 +14,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       balancer, then corrects the docs.
 - [ ] Add `universal-email-mcp admin rotate-keys` (the guide uses a small Cloud Run job with
       `python -c`) and a `--check` mode that reports the key ids still in use.
-- [ ] Audit events are JSON on stderr without `severity`; align with Cloud Logging
-      (work package 3h), then ship log-based metric/alert definitions as scripts.
 - [ ] Single-VM deployment: a `docker-compose.yml` is pointless with the memory store (all
       accounts lost on restart); do it together with the SQLite store.
 
@@ -161,7 +159,7 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Sends per hour/day are counted from the user's activity entries (`event == "send"`,
       read as a whole list per check): fine for a feed of hundreds, but a counter record per
       user and window (or a Firestore count query) is needed before heavy use; two instances
-      can overshoot by one. WP 3h (activity feed) must not write a second `send` entry.
+      can overshoot by one. (3h writes no second `send` entry: the audit pipeline skips `send.sent`.)
 - [ ] The replay guard (`Store.claim_send`) keeps `user + content hash` for 10 minutes, so the
       same text to the same recipients cannot be sent twice within that time on purpose.
       A replayed confirmation of a *new* message still leaves one extra copy of the draft in
@@ -225,7 +223,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Remote `save_draft` needs an identity linked to a drafts-capable account; a grant without
       any such identity cannot draft (the error says so). 3d should create the identity/account
       pair in one step (design section 5).
-- [ ] Activity feed / audit events for tool calls (3h) are not written by the per-user service yet.
 - [ ] Review leftovers of 3e: (a) identities not granted but linked to a drafts-capable account
       are usable for drafts (From can be a non-granted identity; never sent) - decide whether drafts
       should need the identity grant; (b) `records` keeps decrypted passwords for the context
@@ -305,7 +302,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Portal sessions are not bound to IP or user agent; sign-in has no CAPTCHA or MFA
       (MFA comes with OIDC SSO). A password change at the mail server does not end existing
       portal sessions or grants until their lifetime ends.
-- [ ] Audit events still go to stderr without a `session` field (3h).
 - [ ] Review leftovers of 3c: (a) CIMD fetch: the deadline starts after connect/TLS and every
       resolved address is tried (N x 5 s); fetches and IMAP logins share the default thread
       pool and the login semaphore is released on timeout while the thread runs on - give
@@ -327,7 +323,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       service; drop it once the portal and the sandbox can stand in).
       `OperatorConfig.mail_servers` is parsed but unused until 3d.
 - [ ] Consider reporting not-ready after SIGTERM.
-- [ ] Audit events (`audit.py`) still go to stderr; 3h moves them to stdout JSON with pseudonyms.
 - [ ] No per-IP/per-token rate limiting on `/mcp` (M4 rate limits); 3e caps parallel calls and
       connections per user, not calls per minute.
 - [ ] uvicorn re-raises SIGTERM after the graceful stop, so the process exits with status 143
@@ -399,3 +394,29 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Before adding collaborators: tag ruleset `v*` (restrict create/update/delete,
       bypass: repository admin) so only admins can trigger PyPI releases. The `pypi`
       environment is already restricted to `v*` tags.
+
+### WP 3h (audit log and activity feed)
+- [ ] `universal-email-mcp audit` CLI (M4): summarise Cloud Logging per pseudonymous user
+      (`--user alice@...` recomputes the pseudonym from `PSEUDONYM_KEY`), counts per tool, failed
+      sign-ins; optional BigQuery sink.
+- [ ] Not in the user's feed yet: failed sign-ins (a record per arbitrary address would be a
+      write-amplification hole; needs "only for existing users"), refresh-token reuse and
+      authorization-code replay (the event has no user; look the grant up), rate-limit hits.
+      They are in the log and in the suggested alerts.
+- [ ] A disconnect ("You disconnected ...") cannot name the application afterwards because the
+      grant is gone; store the client name label with `portal.grant_revoke`.
+- [ ] Activity page: latest 200 entries only (no paging, filter or export); `list_activity`
+      still loads and decrypts the whole feed of the user (and `check_rate` the same for the
+      send limit). Reads are merged per hour, but a counter record per window / an indexed
+      `event` field would remove the scan.
+- [ ] A feed write is awaited inside the request (bounded by 3 s); on Firestore that is one
+      round trip per tool call. Batch or hand it to a background task if latency shows up.
+      Parallel merged writes of one entry contend (Firestore emulator: ~25 s for four racing
+      calls through retries); real Firestore is expected to be faster, measure it.
+- [ ] `tool.call` is audited in OAuth mode only: local mode logs `send.*` (no user), dev mode
+      (`UEM_DEV_TOKEN`) logs no tool calls at all.
+- [ ] `auth.sign_in ok` and `portal.*` events carry no `ip` (only failures and rate-limit hits
+      do, with `AUDIT_LOG_CLIENT_IP`); there is no `session` id in events.
+- [ ] Local per-install key (`audit.key` in the state directory): no rotation; deleting it
+      changes all pseudonyms (documented behaviour, but there is no command for it).
+

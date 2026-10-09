@@ -27,6 +27,7 @@ variables) and never logged.
 | `ALLOWED_ORIGINS` | - | More origins accepted in an `Origin` header (a request without `Origin` is fine). Any other gets 403. |
 | `UEM_MAX_REQUEST_BYTES` | `4194304` | Largest request body; more gets 413. |
 | `UEM_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. Logs are JSON lines on stdout. |
+| `AUDIT_LOG_CLIENT_IP` | `false` | Audit events of sign-ins and rate limits get `ip`: a keyed pseudonym of the client's network (IPv4 /24, IPv6 /48), never the address. Audit events themselves are always on (JSON lines on stdout, see [audit.md](audit.md)); the pseudonym key is `PSEUDONYM_KEY`, the `instance` field is Cloud Run's `K_REVISION`. |
 
 Command line: `serve [--config FILE] [--host ADDR] [--port N] [--insecure-local]`.
 The default bind address is `0.0.0.0` (container); `--insecure-local` binds

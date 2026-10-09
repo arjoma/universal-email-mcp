@@ -113,7 +113,7 @@ section 8):
   is announced with its size), a one-line summary of a quoted original, and up to 20
   attachments with sizes.
 - One audit line per attempt on stderr (JSON; counts per class, size bucket,
-  outcome - never addresses, subjects or text).
+  outcome - never addresses, subjects or text; see `docs/audit.md`).
 
 The archive scheme of an account (`archive_scheme` = `auto` | `flat` | `yearly` |
 `monthly`, see `docs/config.example.toml`) is detected from the archive folder's
@@ -225,7 +225,8 @@ Documents with Dynamic Client Registration as fallback). Users sign in with thei
 login, see a consent page and grant the connecting AI client what it may do; `/mcp` needs
 the resulting access token. A **self-service portal** at `/portal` lets each user add
 their mail accounts (IMAP or POP3, connection tested before it is saved), set permissions,
-manage sender identities, see the connected AI clients and disconnect or reduce them
+manage sender identities, see the connected AI clients and disconnect or reduce them, and read
+their own **Activity** feed (what the clients did, in plain words)
 ([`docs/portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md)).
 `/mcp` serves each user's own accounts from the store with exactly the tools the client's
 grant allows (read, organize, delete, drafts, and `send_message` when the grant, the
