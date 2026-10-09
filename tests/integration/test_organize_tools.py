@@ -185,11 +185,16 @@ async def test_mark_needs_something_to_change(env: Env):
 async def test_move_returns_working_new_ids(env: Env):
     async with connect(env.config()) as c:
         got = await ids(c, "Work")
-        md, data = await call(c, "move_messages", ids=[got["Angebot"]], to="Kunden/Hubr")
+        # a typo is never guessed: nothing moves, the candidates come back
+        r = await c.call_tool("move_messages", {"ids": [got["Angebot"]], "to": "Kunden/Hubr"})
+        assert code_of(r) == "AMBIGUOUS_FOLDER" and "Clients/Huber" in text(r)
+        assert "Angebot" in await ids(c, "Work")
+        # a unique leaf name is exact
+        md, data = await call(c, "move_messages", ids=[got["Angebot"]], to="HUBER")
         item = data["results"][0]
         assert item["status"] == "ok" and item["destination"] == "Clients/Huber"
         assert item["new_id"] and item["new_id"] != got["Angebot"]
-        assert any("approximate match" in n for n in data["notes"])
+        assert any("Clients/Huber" in n for n in data["notes"])
         assert "New ID" in md and item["new_id"] in md
         assert "Angebot" not in await ids(c, "Work")
         # the new id reads the message in its new place
@@ -311,7 +316,14 @@ async def test_tools_follow_the_permissions(env: Env):
         async with connect(cfg) as c:
             return {t.name for t in (await c.list_tools()).tools}
 
-    read = {"account_info", "list_folders", "find_messages", "get_message", "find_contacts"}
+    read = {
+        "account_info",
+        "list_folders",
+        "find_messages",
+        "get_message",
+        "get_attachment",
+        "find_contacts",
+    }
     org = {"mark_messages", "move_messages", "create_folder"}
     assert await tools(env.config(["read"])) == read
     assert await tools(env.config(["read", "organize"])) == read | org
@@ -421,7 +433,7 @@ async def test_forged_and_stale_ids_fail_per_message(env: Env):
 
 async def test_create_folder_nested_umlaut_and_parent_resolution(env: Env):
     async with connect(env.config()) as c:
-        md, data = await call(c, "create_folder", name="Müller & Söhne", parent="kunden")
+        md, data = await call(c, "create_folder", name="Müller & Söhne", parent="Clients")
         assert data["path"] == "Clients/Müller & Söhne" and data["created"] == [
             "Clients/Müller & Söhne"
         ]
@@ -560,3 +572,43 @@ async def test_create_folder_with_emoji_and_long_umlaut_names(env: Env):
         assert data["created"] == [long_name]
         _md, tree = await call(c, "list_folders", accounts=["Work"], query="urlaub*/gr*")
         assert "Urlaub 🌴/Größe" in {f["path"] for f in tree["folders"]}
+
+
+async def test_write_destinations_are_exact_after_normalisation(env: Env):
+    admin = env.work.admin()
+    try:
+        for f in ("Clients/Müller", "Projects", "Projects/Huber", "Clients/Meier", "Clients/Maier"):
+            admin.create_folder(f)
+    finally:
+        admin.logout()
+    async with connect(env.config()) as c:
+        got = await ids(c, "Work")
+        mids = [got["Angebot"], got["Rechnung"], got["Termin"], got[HOSTILE_SUBJECT]]
+        # typo: refused with candidates
+        r = await c.call_tool("move_messages", {"ids": [mids[0]], "to": "Clients/Mayer"})
+        assert code_of(r) == "AMBIGUOUS_FOLDER"
+        assert r.structured_content is not None
+        msg = r.structured_content["results"][0]["message"]
+        assert "did you mean" in msg and "Clients/Maier" in msg, msg
+        # two folders with the same leaf name: a choice, not a pick
+        r = await c.call_tool("move_messages", {"ids": [mids[0]], "to": "huber"})
+        assert code_of(r) == "AMBIGUOUS_FOLDER"
+        assert "Projects/Huber" in text(r) and "Clients/Huber" in text(r)
+        assert "Angebot" in await ids(c, "Work")
+        # a path suffix makes it unique; umlaut spellings and case are normalised
+        _md, d = await call(c, "move_messages", ids=[mids[0]], to="projects/huber")
+        assert d["results"][0]["destination"] == "Projects/Huber"
+        for spelling in ("mueller", "MÜLLER", "Clients/Muller"):
+            _md, d = await call(c, "move_messages", ids=[mids[1]], to=spelling)
+            assert d["results"][0]["destination"] == "Clients/Müller", spelling
+            mids[1] = d["results"][0]["new_id"] or mids[1]
+        # role names are exact
+        _md, d = await call(c, "move_messages", ids=[mids[2]], to="archive")
+        assert d["results"][0]["destination"] == "Archive"
+        # a parent is held to the same rule: nothing is created under a guessed one
+        r = await c.call_tool("create_folder", {"name": "Neu", "parent": "Clients/Mayer"})
+        assert code_of(r) == "AMBIGUOUS_FOLDER"
+        r = await c.call_tool("create_folder", {"name": "Neu", "parent": "huber"})
+        assert code_of(r) == "AMBIGUOUS_FOLDER"
+        _md, d = await call(c, "create_folder", name="Neu", parent="Projects/hUber")
+        assert d["created"] == ["Projects/Huber/Neu"]

@@ -79,8 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `local` and `probe --account` name the config file they loaded on stderr.
 - Organize tools (accounts with the `organize` / `delete` permission):
   - `mark_messages`: read/unread and flagged, by message id.
-  - `move_messages`: into another folder (name, role or approximate path;
-    ambiguity is returned as a choice). Uses `UID MOVE`; without MOVE it copies,
+  - `move_messages`: into another folder (exact name after case/umlaut
+    normalisation, unique leaf name, path suffix or role; a typo or an ambiguous
+    name changes nothing and returns the candidates). Uses `UID MOVE`; without MOVE it copies,
     flags and `UID EXPUNGE`s exactly the copied UIDs (UIDPLUS); with neither it
     refuses. A plain `EXPUNGE` is never issued. Moved messages get new ids
     (from `COPYUID`), returned in the result.

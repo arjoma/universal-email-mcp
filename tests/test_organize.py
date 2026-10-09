@@ -24,7 +24,14 @@ from universal_email_mcp.service.router import AccountRouter
 
 from .fakes import Connector, FakeSession
 
-READ_TOOLS = {"account_info", "list_folders", "find_messages", "get_message", "find_contacts"}
+READ_TOOLS = {
+    "account_info",
+    "list_folders",
+    "find_messages",
+    "get_message",
+    "get_attachment",
+    "find_contacts",
+}
 ORGANIZE_TOOLS = {"mark_messages", "move_messages", "create_folder"}
 
 # ---------------------------------------------------------------- folder names

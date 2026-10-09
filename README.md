@@ -60,8 +60,8 @@ again against the permissions of the account each message belongs to:
 | Tool | Permission | What it does |
 |---|---|---|
 | `mark_messages` | organize | read/unread and flagged, by message id (batch, capped) |
-| `move_messages` | organize | into another folder (name, role or approximate path; ambiguous names come back as a choice); moved messages get new ids |
-| `create_folder` | organize | a folder (nested levels, `parent=` approximate), subscribed; never renames or deletes folders |
+| `move_messages` | organize | into another folder (exact folder name, unique leaf name or role; a typo or ambiguous name changes nothing and returns the candidates); moved messages get new ids |
+| `create_folder` | organize | a folder (nested levels, `parent=` named exactly), subscribed; never renames or deletes folders |
 | `delete_messages` | delete | moves to Trash (recoverable); mail already in Trash stays; there is no permanent deletion |
 
 Changes are reported per message. They use UIDs checked against the folder's
