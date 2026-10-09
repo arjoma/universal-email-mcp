@@ -13,6 +13,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +64,16 @@ class ScriptedImapServer:
     pre_tls_caps: tuple[str, ...] = ("STARTTLS",)
     post_tls_caps: tuple[str, ...] = ("AUTH=PLAIN",)
     stall: frozenset[str] = frozenset()
+    greeting_literal: int = 0
+    """Greet with ``* OK {n}`` followed by ``n`` bytes (a hostile literal)."""
+    literal_after: dict[str, int] = field(default_factory=dict[str, int])
+    """Command -> size of a literal sent as untagged data before its tagged OK."""
+    flood_after: dict[str, int] = field(default_factory=dict[str, int])
+    """Command -> total bytes of ordinary untagged lines sent before its tagged OK."""
+    starttls_inject: bytes = b""
+    """Sent in the clear right behind the STARTTLS OK (a man in the middle)."""
+    trickle_greeting: float = 0.0
+    """Seconds between the bytes of the greeting (0 = send it at once)."""
     commands: list[str] = field(default_factory=list[str])
     stalled: threading.Event = field(default_factory=threading.Event)
     peer_closed: threading.Event = field(default_factory=threading.Event)
@@ -88,6 +99,16 @@ class ScriptedImapServer:
 
     # ------------------------------------------------------------ server side
 
+    @staticmethod
+    def _send_literal(conn: socket.socket, prefix: bytes, size: int) -> None:
+        conn.sendall(prefix + b" {%d}\r\n" % size)
+        chunk = b"A" * (1 << 16)
+        left = size
+        while left > 0:
+            conn.sendall(chunk[: min(left, len(chunk))])
+            left -= len(chunk)
+        conn.sendall(b"\r\n")
+
     def _accept(self) -> None:
         while True:
             try:
@@ -104,7 +125,14 @@ class ScriptedImapServer:
             if tls:
                 conn = self._tls.wrap_socket(conn, server_side=True)
             f = conn.makefile("rb")
-            conn.sendall(b"* OK scripted server ready\r\n")
+            if self.greeting_literal:
+                self._send_literal(conn, b"* OK", self.greeting_literal)
+            elif self.trickle_greeting:
+                for b in b"* OK scripted server ready\r\n":
+                    conn.sendall(bytes([b]))
+                    time.sleep(self.trickle_greeting)
+            else:
+                conn.sendall(b"* OK scripted server ready\r\n")
             while True:
                 line = f.readline()
                 if not line:
@@ -113,6 +141,11 @@ class ScriptedImapServer:
                 parts = line.decode("ascii", "replace").strip().split(" ", 2)
                 tag, cmd = parts[0], (parts[1].upper() if len(parts) > 1 else "")
                 self.commands.append(cmd)
+                if cmd in self.literal_after:
+                    self._send_literal(conn, b"* NOTE", self.literal_after[cmd])
+                if cmd in self.flood_after:
+                    for _ in range(self.flood_after[cmd] // 1000):
+                        conn.sendall(b"* NOTE " + b"x" * 992 + b"\r\n")
                 if cmd in self.stall:
                     self.stalled.set()
                     while f.readline():  # never answer; wait for the client to go away
@@ -124,7 +157,7 @@ class ScriptedImapServer:
                     out = "* CAPABILITY IMAP4rev1 " + " ".join(caps)
                     conn.sendall(f"{out}\r\n{tag} OK done\r\n".encode())
                 elif cmd == "STARTTLS":
-                    conn.sendall(f"{tag} OK begin TLS\r\n".encode())
+                    conn.sendall(f"{tag} OK begin TLS\r\n".encode() + self.starttls_inject)
                     conn = self._tls.wrap_socket(conn, server_side=True)
                     f = conn.makefile("rb")
                     tls = True

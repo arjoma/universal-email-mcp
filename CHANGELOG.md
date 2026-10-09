@@ -413,6 +413,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A hostile IMAP server can no longer exhaust memory: a literal above 32 MiB or more than
+  64 MiB of untagged data for one command (already in the greeting, before any login) ends the
+  connection with a protocol error. Header lists are fetched partially (64 KiB per message).
+- After STARTTLS, bytes the server sent before the upgrade are refused (Python 3.14 kept them
+  and parsed them as post-TLS responses, which let a man in the middle inject capabilities).
 - Hosts that users type in (free entry) are always connected to with public addresses only,
   also when the operator sets `UEM_ALLOW_PRIVATE_NETWORKS`: the accounts carry the rule, so it
   holds for every later connection and send, not only for the portal test. Site-local IPv6
