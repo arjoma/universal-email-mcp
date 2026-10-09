@@ -445,7 +445,13 @@ def parse_rate(var: str, raw: str) -> Rate:
     unit = 1
     if window_text[-1:] in _RATE_UNITS:
         unit, window_text = _RATE_UNITS[window_text[-1]], window_text[:-1]
-    if not sep or not count_text.strip().isascii() or not window_text.isascii():
+    if (
+        not sep
+        or not count_text.strip().isdecimal()
+        or not count_text.isascii()
+        or not window_text.isdecimal()
+        or not window_text.isascii()
+    ):
         raise _fail(
             var, f"{raw!r} is not COUNT/WINDOW", hint="Example: 20/15m (20 per 15 minutes)."
         )

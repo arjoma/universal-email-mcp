@@ -148,9 +148,14 @@ class PerUserServer(MCPServer):
         try:
             refusal = self.tool_rate.check(ctx.user_id, ctx.grant_id, name)
             if refusal is not None:  # before a pool slot, a lease or any mail server is touched
-                await audit.record(
-                    "ratelimit.hit", scope=refusal.scope, user=ctx.user_id, grant=ctx.grant_id
-                )
+                try:
+                    await audit.record(
+                        "ratelimit.hit", scope=refusal.scope, user=ctx.user_id, grant=ctx.grant_id
+                    )
+                except Exception:  # auditing never breaks a call (strict test mode re-raises)
+                    if audit.is_strict():
+                        raise
+                    log.warning("ratelimit.hit audit failed", exc_info=False)
                 raise self.tool_rate.error(refusal)
             async with self.pool.call_slot(ctx):
                 result = await ctx.server.call_tool(name, arguments, context)

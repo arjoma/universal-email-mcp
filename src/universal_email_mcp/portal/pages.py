@@ -182,7 +182,9 @@ class PortalEndpoints:
     async def _get(self, request: Request) -> Auth | Response:
         return await self._auth(request) or self._to_signin(request)
 
-    async def _post(self, request: Request) -> tuple[Auth, FormData] | Response:
+    async def _post(
+        self, request: Request, *, limited: bool = True
+    ) -> tuple[Auth, FormData] | Response:
         form = await request.form()
         if not self.web.check_csrf(request, form):
             await self.svc.audit("auth.csrf_failed", area="portal")
@@ -190,7 +192,7 @@ class PortalEndpoints:
         auth = await self._auth(request)
         if auth is None:
             return self._to_signin(request)
-        wait = await self._hit(request, auth.user.id, "portal")
+        wait = await self._hit(request, auth.user.id, "portal") if limited else 0
         if wait:
             return self._too_many(request, wait)
         return auth, form
@@ -342,7 +344,7 @@ class PortalEndpoints:
         )
 
     async def reauth_post(self, request: Request) -> Response:
-        got = await self._post(request)
+        got = await self._post(request, limited=False)  # a password check: signin_* limits apply
         if isinstance(got, Response):
             return got
         auth, form = got

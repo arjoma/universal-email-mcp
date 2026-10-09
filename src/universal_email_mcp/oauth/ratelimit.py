@@ -85,8 +85,13 @@ class RateLimiter:
         for key in [k for k, q in self._events.items() if not q or q[-1] <= cutoff]:
             del self._events[key]
         keep = self._max_keys - max(1, self._max_keys // 10)
+        # insertion order: oldest first, but keys that are blocked right now go last
+        for key in [k for k, q in self._events.items() if len(q) < self.limit]:
+            if len(self._events) <= keep:
+                return
+            del self._events[key]
         while len(self._events) > keep:
-            del self._events[next(iter(self._events))]  # insertion order: oldest first
+            del self._events[next(iter(self._events))]
 
     def add(self, key: str) -> None:
         """Record one event for ``key``."""
