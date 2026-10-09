@@ -111,3 +111,115 @@ def test_limits_and_policy_overlay_the_base_config():
     assert op.policy.internal_domains == ("company.example",)
     assert op.settings.allow_private_networks and op.max_request_bytes == 1000
     assert load().limits == Limits()
+
+
+# ---------------------------------------------------------------- OAuth mode
+
+OAUTH = {
+    "PUBLIC_URL": "https://mcp.example.com",
+    "STORE_BACKEND": "memory",
+    "LOGIN_DOMAINS": "example.org=imap.example.org",
+}
+KEY = "A" * 43 + "="  # 32 bytes of base64
+
+
+def oauth(extra: dict[str, str] | None = None) -> OperatorConfig:
+    return load_operator_config({**OAUTH, **(extra or {})})
+
+
+def test_oauth_mode_defaults():
+    op = oauth()
+    assert op.oauth_mode and op.dev_token is None and op.store is not None
+    assert op.store.backend == "memory" and op.store.ephemeral_keys
+    assert len(op.pseudonym_key) == 32
+    assert op.oauth.access_ttl.total_seconds() == 3600
+    assert op.oauth.refresh_ttl.days == 30 and op.oauth.absolute_max.days == 90
+    assert op.oauth.dcr_enabled and op.oauth.trusted_proxy_hops == 0
+    assert not load().oauth_mode  # dev mode has no store
+
+
+def test_oauth_mode_needs_url_and_login_domains():
+    with pytest.raises(ConfigError, match="LOGIN_DOMAINS"):
+        load_operator_config({k: v for k, v in OAUTH.items() if k != "LOGIN_DOMAINS"})
+    with pytest.raises(ConfigError, match="PUBLIC_URL"):
+        load_operator_config(
+            {
+                "STORE_BACKEND": "memory",
+                "ALLOWED_HOSTS": "x.example",
+                "LOGIN_DOMAINS": OAUTH["LOGIN_DOMAINS"],
+            }
+        )
+
+
+def test_oauth_and_dev_mode_are_exclusive():
+    with pytest.raises(ConfigError, match="STORE_BACKEND"):
+        load_operator_config({**OAUTH, "UEM_DEV_TOKEN": TOKEN})
+    with pytest.raises(ConfigError, match="STORE_BACKEND"):
+        load_operator_config(OAUTH, insecure_local=True)
+
+
+def test_store_backend_and_keys():
+    with pytest.raises(ConfigError, match="STORE_BACKEND"):
+        oauth({"STORE_BACKEND": "sqlite"})
+    with pytest.raises(ConfigError, match="STORE_KEYS"):
+        oauth({"STORE_BACKEND": "firestore", "PSEUDONYM_KEY": KEY})
+    with pytest.raises(ConfigError, match="PSEUDONYM_KEY"):
+        oauth({"STORE_BACKEND": "firestore", "STORE_KEYS": f"k1={KEY}"})
+    op = oauth(
+        {
+            "STORE_BACKEND": "firestore",
+            "STORE_KEYS": f"k1={KEY},k2={KEY}",
+            "STORE_ACTIVE_KEY": "k1",
+            "PSEUDONYM_KEY": KEY,
+            "FIRESTORE_PROJECT": "proj",
+            "FIRESTORE_PREFIX": "uem1_",
+        }
+    )
+    assert op.store is not None and not op.store.ephemeral_keys
+    assert (op.store.firestore_project, op.store.prefix) == ("proj", "uem1_")
+    assert op.store.keys.active == "k1"
+    assert KEY not in repr(op) and "A" * 40 not in repr(op.store)
+
+
+def test_secrets_from_files(tmp_path):
+    f = tmp_path / "pseudo"
+    f.write_text(KEY + "\n")
+    assert oauth({"PSEUDONYM_KEY_FILE": str(f)}).pseudonym_key == b"\x00" * 32
+    with pytest.raises(ConfigError, match="only one"):
+        oauth({"PSEUDONYM_KEY_FILE": str(f), "PSEUDONYM_KEY": KEY})
+    with pytest.raises(ConfigError, match="PSEUDONYM_KEY_FILE"):
+        oauth({"PSEUDONYM_KEY_FILE": str(tmp_path / "missing")})
+    with pytest.raises(ConfigError, match="base64"):
+        oauth({"PSEUDONYM_KEY": "not base64!"})
+    with pytest.raises(ConfigError, match="32 bytes"):
+        oauth({"PSEUDONYM_KEY": "QUJD"})
+
+
+def test_oauth_lifetimes_and_switches():
+    op = oauth(
+        {
+            "UEM_ACCESS_TOKEN_TTL": "600",
+            "UEM_REFRESH_TOKEN_TTL": "0",
+            "UEM_SESSION_MAX_AGE": "86400",
+            "UEM_PORTAL_IDLE_TIMEOUT": "300",
+            "UEM_DCR": "false",
+            "UEM_DCR_REDIRECT_HOSTS": "Claude.example, app.example",
+            "UEM_TRUSTED_PROXY_HOPS": "1",
+            "UEM_DEFAULT_LANGUAGE": "DE",
+        }
+    )
+    o = op.oauth
+    assert o.access_ttl.total_seconds() == 600 and o.refresh_ttl.total_seconds() == 0
+    assert o.absolute_max.days == 1 and o.portal_idle.total_seconds() == 300
+    assert not o.dcr_enabled and o.dcr_redirect_hosts == ("claude.example", "app.example")
+    assert o.trusted_proxy_hops == 1 and o.default_language == "de"
+    for var, value in (
+        ("UEM_ACCESS_TOKEN_TTL", "0"),
+        ("UEM_ACCESS_TOKEN_TTL", "soon"),
+        ("UEM_REFRESH_TOKEN_TTL", "-1"),
+        ("UEM_TRUSTED_PROXY_HOPS", "9"),
+        ("UEM_TRUSTED_PROXY_HOPS", "x"),
+        ("UEM_DCR", "maybe"),
+    ):
+        with pytest.raises(ConfigError, match=var):
+            oauth({var: value})

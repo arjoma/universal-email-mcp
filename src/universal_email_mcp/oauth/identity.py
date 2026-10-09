@@ -45,7 +45,7 @@ def parse_address(text: str) -> Address:
     if any(ord(c) < 0x21 or ord(c) == 0x7F for c in t) or any(c in t for c in '<>(),;:"\\'):
         raise AddressError("contains characters that are not allowed")
     local, sep, domain = t.rpartition("@")
-    if not sep or not local or len(local) > 64 or "@" in domain:
+    if not sep or not local or len(local) > 64 or "@" in local:
         raise AddressError("not an e-mail address")
     try:
         ascii_domain = normalize_hostname(domain)

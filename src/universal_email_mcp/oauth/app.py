@@ -150,11 +150,13 @@ async def build_oauth_app(
         ready_checks={"store": store_ready},
         resource_metadata_url=cfg.url("/.well-known/oauth-protected-resource" + MCP_PATH),
     )
-    return create_app(
+    app = create_app(
         settings,
         [oauth_group(svc), mcp, RouteGroup([], lifespan)],
         token_check=StoreTokenVerifier(store, cfg),
     )
+    app.state.oauth_service = svc  # for tests and later route groups (portal, WP 3d)
+    return app
 
 
 async def _purge_loop(store: Store) -> None:

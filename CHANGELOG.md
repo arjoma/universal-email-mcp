@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OAuth 2.1 authorization server for remote mode (work package 3c; `docs/oauth.md`).
+  `serve` without dev flags is now the OAuth server: `/.well-known/oauth-protected-resource`
+  (RFC 9728) and `/.well-known/oauth-authorization-server` (RFC 8414), `/authorize`
+  (authorization code, PKCE S256 required, RFC 8707 `resource` as token audience, RFC 9207
+  `iss`), `/token` (code exchange and refresh with rotation and replay detection),
+  `/revoke` (RFC 7009) and `/register` (RFC 7591 fallback: public clients, rate limited,
+  optional redirect-host allowlist). Clients are identified by Client ID Metadata Documents
+  (https URL fetched SSRF-safe: one resolution, every address checked, no redirects, size and
+  time limits, cached in the store) or by dynamic registration; redirect URIs are matched
+  exactly (loopback ports free per RFC 8252). Access and refresh tokens are opaque and stored
+  as hashes (1 h / 30 days sliding / 90 days absolute, configurable); a replayed authorization
+  code revokes the tokens issued from it, a replayed refresh token revokes the grant.
+  `/mcp` checks the bearer token and its audience and answers 401 with
+  `WWW-Authenticate: Bearer resource_metadata=...`.
+- Sign-in and consent pages (server-rendered Jinja2, strict CSP without scripts,
+  `frame-ancestors 'none'`, CSRF tokens, `__Host-` cookies, rate limits per address and IP).
+  Sign-in verifies the mailbox login by an IMAP login against the server `LOGIN_DOMAINS`
+  assigns to the address's domain; the password is not stored. The consent page lists the
+  client, where the answer goes and per mailbox read / organize / delete / drafts
+  (and send over sender identities) as grants. All end-user text goes through a translation
+  layer (message catalogs per language, English only for now; default language by operator,
+  cookie and browser preparation for a user switch).
+- Operator environment for the store and OAuth: `STORE_BACKEND` (`memory`, `firestore`),
+  `STORE_KEYS`/`STORE_KEYS_FILE`, `STORE_ACTIVE_KEY`, `PSEUDONYM_KEY`, `FIRESTORE_*`,
+  token and session lifetimes, `UEM_DCR*`, `UEM_TRUSTED_PROXY_HOPS`, `UEM_DEFAULT_LANGUAGE`;
+  `/ready` checks the store. Until the per-user service (3e), `/mcp` in OAuth mode offers
+  only `account_info`.
 - `universal-email-mcp serve` (remote mode, work package 3a - a dev/test preview): a
   Starlette app on uvicorn with `/mcp` (the SDK's Streamable HTTP in stateless mode:
   protocol 2026-07-28 and the legacy sessionless transport), `/health` (liveness) and

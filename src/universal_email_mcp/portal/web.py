@@ -10,7 +10,7 @@ is one place that decides how a page, a cookie and a form token look.
   submit); the ``__Host-`` prefix keeps sibling sites from planting the cookie. POSTs
   that browsers mark ``Sec-Fetch-Site: cross-site`` are refused outright.
 * Every page: strict CSP (own origin stylesheet, no scripts at all), ``frame-ancestors
-  'none'`` plus ``X-Frame-Options: DENY``, ``no-store``, no referrer.
+  'none'`` plus ``X-Frame-Options: DENY``, ``no-store``, ``Referrer-Policy: same-origin``.
 """
 
 from __future__ import annotations
@@ -148,4 +148,7 @@ def security_headers(response: Response, form_action_extra: str = "") -> None:
     response.headers["x-frame-options"] = "DENY"
     response.headers["cache-control"] = "no-store"
     response.headers["pragma"] = "no-cache"
-    response.headers["referrer-policy"] = "no-referrer"
+    # Not "no-referrer": with it browsers send "Origin: null" on our own form POSTs, which the
+    # Origin check rightly refuses. "same-origin" sends the real origin to us and nothing
+    # (neither Origin nor Referer) to the redirect target of the OAuth client.
+    response.headers["referrer-policy"] = "same-origin"

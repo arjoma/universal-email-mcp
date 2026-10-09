@@ -101,3 +101,58 @@ async def test_serve_process_serves_and_shuts_down_gracefully(tmp_path: Path):
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+
+
+async def test_serve_oauth_mode_process(tmp_path: Path):
+    """Without dev flags ``serve`` is the OAuth server: no TOML config needed, metadata and
+    a store-backed /ready, no secrets or tokens in the logs."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("UEM_", "STORE_"))}
+    env |= {
+        "STORE_BACKEND": "memory",
+        "PUBLIC_URL": f"http://127.0.0.1:{port}",
+        "LOGIN_DOMAINS": "example.org=imap.example.org",
+        "PORT": str(port),
+    }
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "universal_email_mcp", "serve", "--host", "127.0.0.1",
+        env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )  # fmt: skip
+    base = f"http://127.0.0.1:{port}"
+    try:
+        async with httpx2.AsyncClient() as http:
+            for _ in range(300):
+                try:
+                    if (await http.get(f"{base}/health")).status_code == 200:
+                        break
+                except httpx2.TransportError:
+                    pass
+                await asyncio.sleep(0.1)
+            else:
+                pytest.fail("serve did not come up")
+            ready = (await http.get(f"{base}/ready")).json()
+            assert ready["checks"] == {"config": True, "store": True}
+            meta = (await http.get(f"{base}/.well-known/oauth-authorization-server")).json()
+            assert meta["issuer"] == base and meta["token_endpoint"] == f"{base}/token"
+            r = await http.post(f"{base}/mcp", json={})
+            assert r.status_code == 401 and "resource_metadata" in r.headers["www-authenticate"]
+        proc.send_signal(signal.SIGTERM)
+        out, _err = await asyncio.wait_for(proc.communicate(), 20)
+        assert "memory without STORE_KEYS" in out.decode()
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+def test_serve_oauth_mode_refuses_incomplete_environment(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    for var in ("UEM_DEV_TOKEN", "STORE_BACKEND", "LOGIN_DOMAINS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    assert main(["serve"]) == 1
+    assert "LOGIN_DOMAINS" in capsys.readouterr().err
