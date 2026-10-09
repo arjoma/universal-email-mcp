@@ -52,8 +52,16 @@ jobs:
       - name: Unit tests
         run: uv run --locked pytest -q -m "not integration"
 
-      - name: Integration tests (Dovecot service)
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name firestore -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:8080/ >/dev/null && exit 0; sleep 2; done
+          docker logs firestore; exit 1
+
+      - name: Integration tests (Dovecot service, Firestore emulator)
         env:
+          UEM_TEST_FIRESTORE_HOST: 127.0.0.1:8080
           UEM_TEST_IMAP_HOST: 127.0.0.1
           UEM_TEST_IMAPS_PORT: "31993"
           UEM_TEST_STARTTLS_PORT: "31143"
