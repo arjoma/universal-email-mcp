@@ -383,7 +383,7 @@ def _problem_notes(problems: Sequence[AccountProblem]) -> list[str]:
 def _names(addrs: Sequence[Address] | Sequence[AddressOut], n: int = 2) -> str:
     parts = [a.name or a.email for a in addrs[:n]]
     more = f" +{len(addrs) - n}" if len(addrs) > n else ""
-    return escape_cell(", ".join(parts), 40) + more
+    return escape_cell(", ".join(parts), 40, address=True) + more
 
 
 def _overview_text(ov: Overview | None) -> str:
@@ -744,7 +744,7 @@ def build_server(
                     [
                         [
                             escape_cell(i.name, 40),
-                            escape_cell(", ".join(i.addresses), 80),
+                            escape_cell(", ".join(i.addresses), 80, address=True),
                             escape_cell(i.display_name, 40),
                             "★" if i.default else "",
                         ]
@@ -1099,7 +1099,7 @@ def build_server(
         )
 
         def addrs(a: Sequence[Address]) -> str:
-            return escape_cell(", ".join(str(x) for x in a), 200) or "–"
+            return escape_cell(", ".join(str(x) for x in a), 200, address=True) or "–"
 
         fields = [
             ["From", addrs(s.from_)],
@@ -1375,7 +1375,7 @@ def build_server(
             row = [
                 str(n),
                 escape_cell(c.name, 40) or "–",
-                escape_cell(c.email, 60),
+                escape_cell(c.email, 60, address=True),
                 {True: "yes", False: "no", None: "unknown"}[c.sent_to],
                 str(c.sent),
                 str(c.received),
@@ -1480,7 +1480,7 @@ def build_server(
                 row.append(escape_cell(i.account, 30))
             row += [
                 ("⛓ " if i.conversation_member else "") + (escape_cell(i.subject, 60) or "–"),
-                escape_cell(i.sender, 40) or "–",
+                escape_cell(i.sender, 40, address=True) or "–",
                 escape_cell(i.folder, 40),
                 result,
             ]
@@ -1656,7 +1656,7 @@ def build_server(
     if offer_drafts:
 
         def addr_cell(addrs: Sequence[Address]) -> str:
-            return escape_cell(", ".join(str(a) for a in addrs), 300) or "–"
+            return escape_cell(", ".join(str(a) for a in addrs), 300, address=True) or "–"
 
         @mcp.tool(
             name="save_draft",
@@ -1806,12 +1806,18 @@ def build_server(
             lines = [head]
             if res.reasons:
                 lines.append("Why: " + "; ".join(escape_cell(r, 200) for r in res.reasons))
-            rows = [["From", escape_cell(str(res.sender), 300)]]
+            rows = [["From", escape_cell(str(res.sender), 300, address=True)]]
             for c in res.recipients:
                 label = {"to": "To", "cc": "Cc", "bcc": "Bcc"}[c.field]
                 tag = c.klass.upper() + (": " + "; ".join(c.notes) if c.notes else "")
                 rows.append(
-                    [label, escape_cell(str(c.address), 200) + " [" + escape_cell(tag, 300) + "]"]
+                    [
+                        label,
+                        escape_cell(str(c.address), 200, address=True)
+                        + " ["
+                        + escape_cell(tag, 300)
+                        + "]",
+                    ]
                 )
             rows.append(["Subject", escape_cell(res.subject, 200) or "–"])
             if res.attachments:
