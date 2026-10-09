@@ -150,12 +150,11 @@ async def test_sdk_oauth_client_with_dynamic_registration(
         auth = provider(url, browser)
         async with mcp_client(url + "/mcp", None, auth=auth) as c:
             tools = {t.name for t in (await c.list_tools()).tools}
-            assert {"account_info", "find_messages"} <= tools  # the grant names no real account yet
-            # the consent page still offers the pseudo account `primary` (until the portal, 3d),
-            # which has no record: the per-user service finds no mailbox behind the grant
+            assert {"account_info", "find_messages"} <= tools
+            # the first sign-in created the real account "Main"; the per-user service serves it
+            # (the operator forbids private addresses here, so the server itself is refused)
             r = await c.call_tool("account_info", {})
-            assert r.is_error and "no accounts configured" in str(r.content[0])
-            assert "portal" in str(r.content[0])
+            assert "Main" in str(r.content[0])
         assert "E2E Client" in browser.seen_consent
         token = auth.context.current_tokens
         assert token is not None and token.refresh_token
