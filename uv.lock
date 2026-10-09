@@ -1529,6 +1529,7 @@ gcp = [
 dev = [
     { name = "basedpyright" },
     { name = "cmarkgfm" },
+    { name = "google-cloud-firestore" },
     { name = "httpx2" },
     { name = "markdown-it-py", extra = ["linkify"] },
     { name = "pytest" },
@@ -1556,6 +1557,7 @@ provides-extras = ["gcp"]
 dev = [
     { name = "basedpyright", specifier = ">=1.40.1" },
     { name = "cmarkgfm", specifier = ">=2025.10.22" },
+    { name = "google-cloud-firestore", specifier = ">=2.33" },
     { name = "httpx2", specifier = ">=2.13" },
     { name = "markdown-it-py", extras = ["linkify"], specifier = ">=4.2.0" },
     { name = "pytest", specifier = ">=9.1.1" },

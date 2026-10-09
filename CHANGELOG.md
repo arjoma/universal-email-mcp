@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebinding), request body limit, security headers on non-MCP responses, no CORS,
   generic errors without stack traces, request ids, JSON logs on stdout, graceful
   shutdown. Multi-stage `Dockerfile` (uv, non-root, `PORT`, healthcheck) and `.dockerignore`.
+- Store for remote mode (`universal_email_mcp.store`): records for users, mail accounts,
+  identities, portal sessions, OAuth clients, authorization codes, grants, access/refresh
+  tokens (stored as SHA-256 digests, refresh rotation with replay detection), pending
+  approvals and the own-activity feed, with TTLs, optimistic concurrency and GDPR
+  `export_user` / `delete_user`. Backends: in-memory and Firestore (extra `gcp`).
+  Secrets are sealed with an AES-256-GCM key ring (versioned keys, blobs bound to user,
+  record and field, `rotate_keys`). See `docs/stored-data.md`.
 - Folder map in the server instructions: in `local` mode the folder lists of all
   accounts are read at startup (in parallel, 3 s overall; a slow or unreachable
   account is shown as "not read at startup" and never blocks the server) and the

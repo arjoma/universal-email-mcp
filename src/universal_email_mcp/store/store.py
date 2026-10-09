@@ -1,0 +1,597 @@
+"""The async ``Store``: typed records on top of a :class:`Backend`, with sealing and expiry.
+
+Generic operations (``create`` / ``get`` / ``update`` / ``delete`` / ``list_for_user``) work for
+every record type; the flows that need atomicity or hashing have their own methods (portal
+sessions, authorization codes, grants and tokens with refresh rotation and replay detection,
+activity feed, GDPR export and delete). Expired records read as missing (injectable clock);
+backends with TTL policies delete them eventually, ``purge_expired()`` does it by hand.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import secrets
+import types
+import typing
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from typing import Any, TypeVar, cast
+
+from universal_email_mcp.errors import MailError
+from universal_email_mcp.store.backend import (
+    VERSION_KEY,
+    AlreadyExists,
+    Backend,
+    Doc,
+    Op,
+    StoreConflict,
+)
+from universal_email_mcp.store.crypto import Aad, KeyRing, hash_token, new_token
+from universal_email_mcp.store.records import (
+    ALL_RECORDS,
+    USER_OWNED,
+    ActivityEntry,
+    AuthCode,
+    Grant,
+    OAuthClient,
+    PendingApproval,
+    PortalSession,
+    Record,
+    Token,
+    User,
+)
+
+R = TypeVar("R", bound=Record)
+
+SEALED_KEY = "_sealed"
+ACTIVITY_MAX_TEXT = 64
+_BATCH = 400  # Firestore transactions allow 500 writes
+
+
+class InvalidToken(MailError):
+    code = "STORE_INVALID_TOKEN"
+
+
+class TokenReuse(InvalidToken):
+    """A rotated refresh token was presented again: the whole grant was revoked."""
+
+    code = "STORE_TOKEN_REUSE"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionPolicy:
+    """Lifetimes (design section 6.1). A zero ``refresh_ttl`` / ``absolute_max`` = unlimited."""
+
+    access_ttl: timedelta = timedelta(hours=1)
+    refresh_ttl: timedelta = timedelta(days=30)
+    absolute_max: timedelta = timedelta(days=90)
+    pending_grant_ttl: timedelta = timedelta(minutes=10)
+    auth_code_ttl: timedelta = timedelta(minutes=1)
+    client_unused_ttl: timedelta = timedelta(days=30)
+    activity_ttl: timedelta = timedelta(days=30)
+    approval_ttl: timedelta = timedelta(minutes=10)
+    touch_interval: timedelta = timedelta(minutes=5)
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedTokens:
+    """Raw tokens, shown to the client once; the store keeps only their digests."""
+
+    access_token: str = dataclasses.field(repr=False)
+    refresh_token: str = dataclasses.field(repr=False)
+    access_expires_at: datetime
+    refresh_expires_at: datetime | None
+    grant: Grant
+
+
+# --- record <-> document ----------------------------------------------------------------
+
+_hints: dict[type, dict[str, Any]] = {}
+
+
+def _field_hints(cls: type[Record]) -> dict[str, Any]:
+    if cls not in _hints:
+        _hints[cls] = typing.get_type_hints(cls)
+    return _hints[cls]
+
+
+def _is_tuple(hint: Any) -> bool:
+    if typing.get_origin(hint) is tuple:
+        return True
+    if typing.get_origin(hint) in (typing.Union, types.UnionType):
+        return any(_is_tuple(a) for a in typing.get_args(hint))
+    return False
+
+
+def _check_datetimes(value: Any) -> None:
+    if isinstance(value, datetime) and value.tzinfo is None:
+        raise ValueError("store datetimes must be timezone-aware")
+
+
+def _plain(value: Any) -> Any:
+    """JSON/Firestore friendly: tuples become lists."""
+    if isinstance(value, tuple | list):
+        return [_plain(v) for v in cast("Sequence[Any]", value)]
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in cast("dict[str, Any]", value).items()}
+    return value
+
+
+class Store:
+    def __init__(
+        self,
+        backend: Backend,
+        keys: KeyRing,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        policy: SessionPolicy | None = None,
+    ) -> None:
+        self.backend = backend
+        self.keys = keys
+        self.policy = policy or SessionPolicy()
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def __repr__(self) -> str:
+        return f"Store({type(self.backend).__name__}, {self.keys!r})"
+
+    def now(self) -> datetime:
+        return self._clock()
+
+    async def close(self) -> None:
+        await self.backend.close()
+
+    # -- codec ------------------------------------------------------------------------
+
+    def _aad(self, rec_cls: type[Record], owner: str, rec_id: str) -> Aad:
+        return Aad(owner, rec_cls.KIND, rec_id, SEALED_KEY)
+
+    def encode(self, rec: Record, version: int) -> Doc:
+        cls = type(rec)
+        doc: Doc = {}
+        sealed: dict[str, Any] = {}
+        for f in dataclasses.fields(rec):
+            if f.name in ("id", "version"):
+                continue
+            value = getattr(rec, f.name)
+            _check_datetimes(value)
+            (sealed if f.name in cls.SEALED else doc)[f.name] = _plain(value)
+        if sealed:
+            doc[SEALED_KEY] = self.keys.seal_json(sealed, self._aad(cls, rec.owner, rec.id))
+        doc[VERSION_KEY] = version
+        return doc
+
+    def decode(self, cls: type[R], rec_id: str, doc: Doc) -> R:
+        values: dict[str, Any] = {
+            k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY)
+        }
+        if cls.SEALED:
+            owner = rec_id if cls is User else str(doc.get("user_id", ""))
+            values.update(
+                self.keys.open_json(doc[SEALED_KEY], self._aad(cls, owner, rec_id)),
+            )
+        hints = _field_hints(cls)
+        for name, value in values.items():
+            if isinstance(value, list) and _is_tuple(hints.get(name)):
+                values[name] = tuple(cast("list[Any]", value))
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(
+            id=rec_id,
+            version=int(doc[VERSION_KEY]),
+            **{k: v for k, v in values.items() if k in known},
+        )
+
+    def _expired(self, doc: Doc) -> bool:
+        exp = doc.get("expires_at")
+        return isinstance(exp, datetime) and exp <= self.now()
+
+    # -- generic operations -----------------------------------------------------------
+
+    async def create(self, rec: R) -> R:
+        """Store a new record (version becomes 1); ``AlreadyExists`` if the id is taken."""
+        await self.backend.commit([Op("create", rec.KIND, rec.id, self.encode(rec, 1))])
+        return replace(rec, version=1)
+
+    async def get(self, cls: type[R], rec_id: str) -> R | None:
+        doc = await self.backend.get(cls.KIND, rec_id)
+        if doc is None or self._expired(doc):
+            return None
+        return self.decode(cls, rec_id, doc)
+
+    async def update(self, rec: R) -> R:
+        """Replace the record if ``rec.version`` is still current; ``StoreConflict`` otherwise.
+
+        The new version is ``rec.version + 1``. The write seals with the active key, which
+        is how old blobs migrate to a new key.
+        """
+        if rec.version < 1:
+            raise ValueError("update() needs a stored record (version >= 1)")
+        new = rec.version + 1
+        await self.backend.commit(
+            [Op("replace", rec.KIND, rec.id, self.encode(rec, new), rec.version)]
+        )
+        return replace(rec, version=new)
+
+    async def delete(
+        self, cls: type[Record], rec_id: str, *, expected_version: int | None = None
+    ) -> None:
+        """Delete; unconditional unless ``expected_version`` is given. Missing is fine."""
+        await self.backend.commit([Op("delete", cls.KIND, rec_id, None, expected_version)])
+
+    async def list_for_user(self, cls: type[R], user_id: str) -> list[R]:
+        """The user's live records of one type, oldest first."""
+        if cls not in USER_OWNED:
+            raise ValueError(f"{cls.__name__} has no user_id")
+        out = [
+            self.decode(cls, i, d)
+            for i, d in await self.backend.find(cls.KIND, "user_id", user_id)
+            if not self._expired(d)
+        ]
+        return sorted(out, key=lambda r: (_when(r), r.id))
+
+    async def take(self, cls: type[R], rec_id: str) -> R | None:
+        """Get and delete in one step; of two concurrent callers only one gets the record."""
+        rec = await self.get(cls, rec_id)
+        if rec is None:
+            return None
+        try:
+            await self.delete(cls, rec_id, expected_version=rec.version)
+        except StoreConflict:
+            return None
+        return rec
+
+    # -- users ------------------------------------------------------------------------
+
+    async def get_or_create_user(self, user_id: str, primary_address: str) -> User:
+        existing = await self.get(User, user_id)
+        if existing:
+            return existing
+        try:
+            return await self.create(
+                User(id=user_id, primary_address=primary_address, created_at=self.now())
+            )
+        except AlreadyExists:  # lost a race
+            again = await self.get(User, user_id)
+            assert again is not None
+            return again
+
+    # -- portal sessions --------------------------------------------------------------
+
+    async def create_portal_session(
+        self, user_id: str, ttl: timedelta = timedelta(hours=12)
+    ) -> tuple[str, PortalSession]:
+        """Returns ``(cookie value, record)``; only the digest is stored."""
+        raw, now = new_token("uem_ps"), self.now()
+        rec = PortalSession(
+            id=hash_token(raw), user_id=user_id, created_at=now, last_seen=now, expires_at=now + ttl
+        )
+        return raw, await self.create(rec)
+
+    async def get_portal_session(self, raw: str) -> PortalSession | None:
+        return await self.get(PortalSession, hash_token(raw))
+
+    async def delete_portal_session(self, raw: str) -> None:
+        await self.delete(PortalSession, hash_token(raw))
+
+    # -- oauth clients ----------------------------------------------------------------
+
+    async def register_client(self, client_id: str, **fields: Any) -> OAuthClient:
+        now = self.now()
+        return await self.create(
+            OAuthClient(
+                id=client_id,
+                created_at=now,
+                last_used=now,
+                expires_at=now + self.policy.client_unused_ttl,
+                **fields,
+            )
+        )
+
+    async def touch_client(self, client: OAuthClient) -> OAuthClient:
+        """Extend the unused-TTL (at most once per ``touch_interval``)."""
+        now = self.now()
+        if now - client.last_used < self.policy.touch_interval:
+            return client
+        new = replace(client, last_used=now, expires_at=now + self.policy.client_unused_ttl)
+        try:
+            return await self.update(new)
+        except StoreConflict:
+            return client
+
+    # -- authorization codes ----------------------------------------------------------
+
+    async def issue_auth_code(
+        self,
+        *,
+        user_id: str,
+        client_id: str,
+        grant_id: str,
+        redirect_uri: str,
+        code_challenge: str,
+        resource: str = "",
+        scope: str = "",
+    ) -> str:
+        raw = new_token("uem_ac")
+        await self.create(
+            AuthCode(
+                id=hash_token(raw),
+                user_id=user_id,
+                client_id=client_id,
+                grant_id=grant_id,
+                redirect_uri=redirect_uri,
+                code_challenge=code_challenge,
+                resource=resource,
+                scope=scope,
+                expires_at=self.now() + self.policy.auth_code_ttl,
+            )
+        )
+        return raw
+
+    async def redeem_auth_code(self, raw: str) -> AuthCode | None:
+        """Single use: the code is gone afterwards, a second call returns None."""
+        return await self.take(AuthCode, hash_token(raw))
+
+    # -- grants and tokens ------------------------------------------------------------
+
+    def _refresh_expiry(self, grant: Grant, now: datetime) -> datetime | None:
+        limits = [grant.absolute_expires_at]
+        if self.policy.refresh_ttl:
+            limits.append(now + self.policy.refresh_ttl)
+        real = [x for x in limits if x is not None]
+        return min(real) if real else None
+
+    async def create_grant(
+        self,
+        *,
+        user_id: str,
+        client_id: str,
+        client_name: str = "",
+        account_ids: Sequence[str] = (),
+        identity_ids: Sequence[str] = (),
+        scope: str = "",
+    ) -> Grant:
+        """Consent result. Lives ``pending_grant_ttl`` until tokens are issued for it."""
+        now = self.now()
+        absolute = now + self.policy.absolute_max if self.policy.absolute_max else None
+        return await self.create(
+            Grant(
+                id="g_" + secrets.token_hex(12),
+                user_id=user_id,
+                client_id=client_id,
+                client_name=client_name,
+                account_ids=tuple(account_ids),
+                identity_ids=tuple(identity_ids),
+                scope=scope,
+                created_at=now,
+                absolute_expires_at=absolute,
+                expires_at=now + self.policy.pending_grant_ttl,
+            )
+        )
+
+    def _token_pair(
+        self, grant: Grant, client_id: str, resource: str, now: datetime
+    ) -> tuple[IssuedTokens, list[Op]]:
+        refresh_exp = self._refresh_expiry(grant, now)
+        access_exp = now + self.policy.access_ttl
+        if refresh_exp is not None:
+            access_exp = min(access_exp, refresh_exp)
+        raw_a, raw_r = new_token("uem_at"), new_token("uem_rt")
+        ops: list[Op] = []
+        for raw, kind, exp in ((raw_a, "access", access_exp), (raw_r, "refresh", refresh_exp)):
+            tok = Token(
+                id=hash_token(raw),
+                user_id=grant.user_id,
+                grant_id=grant.id,
+                client_id=client_id,
+                token_type=kind,
+                resource=resource,
+                scope=grant.scope,
+                created_at=now,
+                expires_at=exp,
+            )
+            ops.append(Op("create", tok.KIND, tok.id, self.encode(tok, 1)))
+        new_grant = replace(grant, last_used=now, expires_at=refresh_exp, version=grant.version + 1)
+        ops.append(
+            Op(
+                "replace",
+                grant.KIND,
+                grant.id,
+                self.encode(new_grant, new_grant.version),
+                grant.version,
+            )
+        )
+        return IssuedTokens(raw_a, raw_r, access_exp, refresh_exp, new_grant), ops
+
+    async def issue_tokens(self, grant: Grant, *, resource: str = "") -> IssuedTokens:
+        """First token pair of a grant (after the code was redeemed)."""
+        issued, ops = self._token_pair(grant, grant.client_id, resource, self.now())
+        await self.backend.commit(ops)
+        return issued
+
+    async def rotate_refresh_token(self, raw: str, *, client_id: str) -> IssuedTokens:
+        """Exchange a refresh token for a new pair, atomically.
+
+        The old token stays as ``consumed`` until its expiry. Presenting it again (or racing
+        another exchange) revokes the whole grant and raises :class:`TokenReuse`.
+        """
+        old = await self.get(Token, hash_token(raw))
+        if old is None or old.token_type != "refresh" or old.client_id != client_id:
+            raise InvalidToken("unknown or expired refresh token")
+        grant = await self.get(Grant, old.grant_id)
+        if grant is None:
+            raise InvalidToken("the session no longer exists")
+        if old.consumed:
+            await self.revoke_grant(grant.id)
+            raise TokenReuse("refresh token was already used; session revoked")
+        issued, ops = self._token_pair(grant, client_id, old.resource, self.now())
+        used = replace(old, consumed=True)
+        ops.append(Op("replace", old.KIND, old.id, self.encode(used, old.version + 1), old.version))
+        try:
+            await self.backend.commit(ops)
+        except StoreConflict:
+            await self.revoke_grant(grant.id)
+            raise TokenReuse("refresh token was used concurrently; session revoked") from None
+        return issued
+
+    async def authenticate_access_token(self, raw: str) -> tuple[Token, Grant] | None:
+        """The live access token and its grant, or None. Touches ``last_used`` rarely."""
+        tok = await self.get(Token, hash_token(raw))
+        if tok is None or tok.token_type != "access":
+            return None
+        grant = await self.get(Grant, tok.grant_id)
+        if grant is None:
+            return None
+        now = self.now()
+        if grant.last_used is None or now - grant.last_used >= self.policy.touch_interval:
+            try:
+                grant = await self.update(replace(grant, last_used=now))
+            except StoreConflict:
+                pass  # someone else touched it; not worth failing the request
+        return tok, grant
+
+    async def revoke_grant(self, grant_id: str) -> None:
+        """Delete a grant with all its tokens and pending codes."""
+        ops: list[Op] = [Op("delete", Grant.KIND, grant_id)]
+        for cls in (Token, AuthCode):
+            for i, _ in await self.backend.find(cls.KIND, "grant_id", grant_id):
+                ops.append(Op("delete", cls.KIND, i))
+        await self._commit_chunks(ops)
+
+    async def revoke_token(self, raw: str) -> None:
+        """RFC 7009: revoking a refresh token ends the grant, an access token only itself."""
+        tok = await self.get(Token, hash_token(raw))
+        if tok is None:
+            return
+        if tok.token_type == "refresh":
+            await self.revoke_grant(tok.grant_id)
+        else:
+            await self.delete(Token, tok.id)
+
+    # -- pending approvals ------------------------------------------------------------
+
+    async def create_approval(
+        self, *, user_id: str, grant_id: str, identity_id: str, content_hash: str, draft_ref: str
+    ) -> PendingApproval:
+        now = self.now()
+        return await self.create(
+            PendingApproval(
+                id="a_" + secrets.token_hex(12),
+                user_id=user_id,
+                grant_id=grant_id,
+                identity_id=identity_id,
+                content_hash=content_hash,
+                draft_ref=draft_ref,
+                created_at=now,
+                expires_at=now + self.policy.approval_ttl,
+            )
+        )
+
+    async def decide_approval(self, approval_id: str, approve: bool) -> PendingApproval | None:
+        """Pending -> approved/declined (once). None if gone, expired or already decided;
+        ``StoreConflict`` if decided concurrently."""
+        cur = await self.get(PendingApproval, approval_id)
+        if cur is None or cur.status != "pending":
+            return None
+        return await self.update(replace(cur, status="approved" if approve else "declined"))
+
+    # -- activity ---------------------------------------------------------------------
+
+    async def record_activity(
+        self,
+        user_id: str,
+        event: str,
+        *,
+        client: str = "",
+        tool: str = "",
+        account: str = "",
+        outcome: str = "",
+        counts: dict[str, int] | None = None,
+    ) -> ActivityEntry:
+        """Own-activity feed entry. Only short labels and integers are accepted, so that
+        subjects, addresses or other mail data cannot slip in by accident."""
+        for text in (event, client, tool, account, outcome):
+            if len(text) > ACTIVITY_MAX_TEXT or "@" in text:
+                raise ValueError("activity labels must be short names, not addresses or text")
+        counts = counts or {}
+        if any(type(v) is not int or len(k) > ACTIVITY_MAX_TEXT for k, v in counts.items()):
+            raise ValueError("activity counts must be integers")
+        now = self.now()
+        return await self.create(
+            ActivityEntry(
+                id="e_" + secrets.token_hex(12),
+                user_id=user_id,
+                at=now,
+                event=event,
+                client=client,
+                tool=tool,
+                account=account,
+                outcome=outcome,
+                counts=dict(counts),
+                expires_at=now + self.policy.activity_ttl,
+            )
+        )
+
+    async def list_activity(self, user_id: str, limit: int = 100) -> list[ActivityEntry]:
+        """Newest first."""
+        rows = await self.list_for_user(ActivityEntry, user_id)
+        return rows[::-1][:limit]
+
+    # -- GDPR -------------------------------------------------------------------------
+
+    async def export_user(self, user_id: str) -> dict[str, Any]:
+        """Everything stored about the user as plain data: settings, accounts, identities,
+        sessions, activity. Passwords, token digests and keys are left out."""
+        user = await self.get(User, user_id)
+        out: dict[str, Any] = {"user": _export(user) if user else None}
+        for cls in USER_OWNED:
+            out[cls.KIND] = [_export(r) for r in await self.list_for_user(cls, user_id)]
+        return out
+
+    async def delete_user(self, user_id: str) -> dict[str, int]:
+        """Remove every record of the user (also expired ones) and return counts per kind.
+
+        The user record goes last, so an interrupted run can simply be repeated.
+        """
+        counts: dict[str, int] = {}
+        for cls in USER_OWNED:
+            rows = await self.backend.find(cls.KIND, "user_id", user_id)
+            await self._commit_chunks([Op("delete", cls.KIND, i) for i, _ in rows])
+            counts[cls.KIND] = len(rows)
+        existed = await self.backend.get(User.KIND, user_id) is not None
+        await self.delete(User, user_id)
+        counts[User.KIND] = int(existed)
+        return counts
+
+    # -- maintenance ------------------------------------------------------------------
+
+    async def purge_expired(self) -> int:
+        """Delete expired records (Firestore does this itself via TTL policies)."""
+        ops: list[Op] = []
+        for cls in ALL_RECORDS:
+            async for i, d in self.backend.scan(cls.KIND):
+                if self._expired(d):
+                    ops.append(Op("delete", cls.KIND, i))
+        await self._commit_chunks(ops)
+        return len(ops)
+
+    async def _commit_chunks(self, ops: list[Op]) -> None:
+        for i in range(0, len(ops), _BATCH):
+            await self.backend.commit(ops[i : i + _BATCH])
+
+
+def _when(rec: Record) -> datetime:
+    for name in ("created_at", "at"):
+        value = getattr(rec, name, None)
+        if isinstance(value, datetime):
+            return value
+    return datetime.min.replace(tzinfo=UTC)
+
+
+def _export(rec: Record) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for f in dataclasses.fields(rec):
+        if f.name in rec.EXPORT_EXCLUDE or f.name == "version":
+            continue
+        value = getattr(rec, f.name)
+        out[f.name] = value.isoformat() if isinstance(value, datetime) else _plain(value)
+    return out

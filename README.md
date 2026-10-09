@@ -208,6 +208,12 @@ claude mcp add --transport http email http://localhost:8080/mcp --header "Author
 Without a token the server refuses to start; `--insecure-local` (loopback only, no
 token) is for experiments on your own machine.
 
+## Remote mode: stored data
+
+Remote mode keeps users, accounts, sessions and tokens in a store (memory or Firestore,
+secrets encrypted with a rotatable key ring, no mail content): see
+[docs/stored-data.md](https://github.com/arjoma/universal-email-mcp/blob/main/docs/stored-data.md).
+
 ## Development
 
 To try the server without a real mailbox, start the sandbox: a throw-away local
