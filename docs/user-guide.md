@@ -22,8 +22,8 @@ It lets an AI assistant work with your ordinary mailboxes (IMAP, POP3, SMTP; not
 * **Write**: save drafts (new, reply, forward) and, if you allow it, send mail, always with a
   safety check and normally your confirmation.
 
-Everything is limited by *permissions* that you set (below). Mail is never copied to the server's
-database.
+Everything is limited by *permissions* that you set (below). Mail is never persisted in the server's
+database (it only passes through memory while a request is served).
 
 ## Connecting an AI client (remote mode)
 
@@ -87,7 +87,7 @@ Sending is irreversible, so it is guarded:
    domains), *written to before*, **new**, or **look-alike** (a possible typo or a confusing
    spelling of an address you know). Limits apply (number of recipients, mails per hour/day, size).
 3. Normally **your AI client asks you** before sending, showing sender, recipients with these
-   labels, subject, attachments and the text. Only your explicit yes sends it. Look-alike
+   labels, subject, attachments and the text. Only your explicit yes sends it (this relies on your AI client really asking you; use clients you trust). Look-alike
    recipients are always put to you.
 4. If your client **cannot ask**, then (depending on how your operator configured it) the message
    either stays a draft, or appears under **Pending approvals** in the portal. There you read
@@ -140,7 +140,7 @@ file names, and no search terms. Details: [stored-data.md](stored-data.md).
 * **Export**: *Privacy* > *Download my data* gives one JSON file with your accounts (without
   passwords), identities, applications, activity and approvals.
 * **Delete everything**: *Privacy* > *Delete all my data* removes all of it, disconnects every
-  application and signs you out. You type your address to confirm. Your mailbox at your provider
+  application and signs you out. You type your address to confirm, after a recent password entry. Your mailbox at your provider
   and its mail are not touched. Signing in again starts from scratch.
 * Your operator also keeps pseudonymous log lines (a code instead of your address, never mail
   content). The export shows your code so you can ask the operator about it; ask the operator
