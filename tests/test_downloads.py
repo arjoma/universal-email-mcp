@@ -40,10 +40,12 @@ def test_token_tampering_is_rejected():
     t = DownloadTokens()
     token = t.issue(REF, "2")
     body, mac = token.split(".", 2)[1:]
-    flipped = body[:-1] + ("A" if body[-1] != "A" else "B")
+    # (the last base64 character may carry unused bits, so flip an inner one)
+    flipped = body[:5] + ("A" if body[5] != "A" else "B") + body[6:]
+    bad_mac = ("A" if mac[3] != "A" else "B").join((mac[:3], mac[4:]))
     for bad in (
         f"d1.{flipped}.{mac}",
-        f"d1.{body}.{mac[:-1]}{'A' if mac[-1] != 'A' else 'B'}",
+        f"d1.{body}.{bad_mac}",
         f"d1.{body}.",
         f"d1.{body}",
         "d1.",
