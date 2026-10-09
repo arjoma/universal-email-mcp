@@ -109,6 +109,12 @@ class Identity(Record):
     smtp_password: str = field(default="", repr=False)
     copies_account_id: str = ""
     """Account that receives this identity's Drafts and Sent copies ("" = none)."""
+    smtp_account_id: str = ""
+    """The account whose server and login the SMTP settings above were copied from ("" =
+    entered by hand). The portal refreshes the copy when that account's password changes."""
+    send: bool = False
+    """The user allows AI clients to send as this identity (an upper bound: a client still
+    needs a grant, design sections 5 and 6)."""
     is_default: bool = False
     created_at: datetime
 
