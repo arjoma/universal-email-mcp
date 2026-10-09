@@ -4,7 +4,8 @@
 bytes decoded so far; ``finish()`` returns the rest. Together they produce exactly
 what :func:`mime.decode_transfer` returns for the concatenated input, but memory
 stays bounded by the chunk size: base64 carries over at most three characters,
-quoted-printable the incomplete last line (capped, see ``_QP_MAX_CARRY``).
+quoted-printable the incomplete last line (capped, see ``_QP_MAX_CARRY``; so is a
+run of trailing whitespace).
 Unknown encodings and 7bit/8bit/binary pass through, as in ``decode_transfer``.
 """
 
@@ -63,10 +64,12 @@ class _QuotedPrintable:
         if cut == 0 and len(buf) > _QP_MAX_CARRY:
             # No line end in sight: emit all but a possibly unfinished "=XX"
             # escape or whitespace/CR that a following line end would swallow.
-            cut = len(buf)
-            while cut > 0 and buf[cut - 1] in b" \t\r":
-                cut -= 1
-            if cut and b"=" in buf[max(0, cut - 2) : cut]:
+            cut = len(buf.rstrip(b" \t\r"))
+            if len(buf) - cut > _QP_MAX_CARRY:
+                # Endless whitespace (hostile): emit it. Linear time, bounded
+                # carry; a line end far later would not strip it any more.
+                cut = len(buf)
+            elif cut and b"=" in buf[max(0, cut - 2) : cut]:
                 cut = buf.rfind(b"=", 0, cut)
         self._carry = buf[cut:]
         return quopri.decodestring(buf[:cut]) if cut else b""

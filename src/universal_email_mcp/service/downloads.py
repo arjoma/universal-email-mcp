@@ -15,6 +15,7 @@ re-checks account, UIDVALIDITY and that the message still exists.
 
 from __future__ import annotations
 
+import asyncio
 import binascii
 import hashlib
 import hmac
@@ -151,6 +152,7 @@ async def iter_part(
     server returns less than the part's size, or the output exceeds ``max_bytes``."""
     ref, section, size = info.ref, info.leaf.section, info.leaf.size
     decoder = make_decoder(info.leaf.encoding)
+    identity = info.leaf.encoding.strip().lower() not in ("base64", "quoted-printable")
     chunk = chunk_bytes or CHUNK_BYTES
     offset = sent = 0
     while offset < size:
@@ -164,12 +166,13 @@ async def iter_part(
         if not raw:
             raise AttachmentNotFound("the server returned less data than the part's size")
         offset += len(raw)
-        out = decoder.feed(raw)
+        # Decoding is CPU work on hostile bytes: not on the event loop.
+        out = raw if identity else await asyncio.to_thread(decoder.feed, raw)
         sent += len(out)
         if sent > max_bytes:
             raise TooLarge("the attachment is larger than the download limit")
         if out:
             yield out
-    tail = decoder.finish()
+    tail = await asyncio.to_thread(decoder.finish)
     if tail:
         yield tail
