@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from universal_email_mcp.bounded import run_daemon
 from universal_email_mcp.config import Config, resolve_password
 from universal_email_mcp.errors import (
     AccountTimeout,
@@ -38,6 +39,7 @@ from universal_email_mcp.errors import (
     ServerUnreachable,
 )
 from universal_email_mcp.mail.imap import ImapSession
+from universal_email_mcp.mail.net import Deadline
 from universal_email_mcp.mail.pop3 import Pop3Session, Pop3State
 from universal_email_mcp.models import Account, AccountKind, MessageRef
 
@@ -73,7 +75,9 @@ class ConnectionHooks(Protocol):
 
 def connect_imap(account: Account, config: Config) -> ImapSession:
     password = resolve_password(account)
-    return ImapSession.for_account(account, password, net=config.net_policy(account))
+    net = config.net_policy(account)
+    with Deadline(net.total_timeout):  # connect + login are bounded in absolute time
+        return ImapSession.for_account(account, password, net=net)
 
 
 DEFAULT_CONNECTORS: Mapping[AccountKind, Connector] = {"imap": connect_imap}
@@ -146,39 +150,7 @@ def _in_thread(fn: Callable[[Any], None], session: Any) -> None:
     threading.Thread(target=fn, args=(session,), name="uem-cleanup", daemon=True).start()
 
 
-def _run_daemon[**P, T](
-    loop: asyncio.AbstractEventLoop, fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs
-) -> asyncio.Future[T]:
-    """Like ``loop.run_in_executor`` but on a daemon thread of its own: a mail server
-    that hangs (TLS handshake, dead connection) keeps its worker only until the
-    socket times out, and neither ``asyncio.run`` nor the interpreter waits for it
-    at exit. Callers serialise per account, so threads stay few."""
-    fut: asyncio.Future[T] = loop.create_future()
-
-    def deliver(result: T | None, error: BaseException | None) -> None:
-        if fut.cancelled():
-            return
-        if error is not None:
-            if isinstance(error, StopIteration):  # not allowed in a future
-                error = RuntimeError("worker raised StopIteration")
-            fut.set_exception(error)
-        else:
-            fut.set_result(result)  # pyright: ignore[reportArgumentType]
-
-    def run() -> None:
-        try:
-            result = fn(*args, **kwargs)
-        except BaseException as e:  # noqa: BLE001 - handed to the awaiting task
-            error, result = e, None
-        else:
-            error = None
-        try:
-            loop.call_soon_threadsafe(deliver, result, error)
-        except RuntimeError:  # the loop is closed: nobody is waiting any more
-            pass
-
-    threading.Thread(target=run, name="uem-worker", daemon=True).start()
-    return fut
+_run_daemon = run_daemon
 
 
 def _release_after(session: Any, fut: asyncio.Future[Any]) -> None:
@@ -219,9 +191,9 @@ class AccountRouter:
                 header_budget=max(1.0, 0.4 * lim.account_timeout),
                 max_message_bytes=lim.max_message_bytes,
             )
-        return Pop3Session.for_account(
-            account, resolve_password(account), net=config.net_policy(account), state=state
-        )
+        net = config.net_policy(account)
+        with Deadline(net.total_timeout):
+            return Pop3Session.for_account(account, resolve_password(account), net=net, state=state)
 
     # ------------------------------------------------------------ selection
 

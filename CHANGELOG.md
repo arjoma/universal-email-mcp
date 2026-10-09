@@ -413,6 +413,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A mail server that trickles bytes (or stalls the TLS handshake) can no longer pin threads
+  and starve the instance: sign-in verification, the portal connection tests, SMTP submission,
+  client-metadata fetches and connection clean-up no longer use asyncio's shared default
+  executor, every connect, test, login check and submission has an absolute deadline
+  (`NetPolicy.total_timeout`, 60 s) enforced by a watchdog that shuts the sockets down, and
+  idle or forced connection closes abort the socket instead of waiting for a polite LOGOUT.
+  Sending no longer holds the sender lock during the SMTP conversation (the rate limit is
+  reserved up front and given back when the send certainly did not happen).
 - A hostile IMAP server can no longer exhaust memory: a literal above 32 MiB or more than
   64 MiB of untagged data for one command (already in the greeting, before any login) ends the
   connection with a protocol error. Header lists are fetched partially (64 KiB per message).

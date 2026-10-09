@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from universal_email_mcp.errors import AuthFailed, ConfigError, MailError
+from universal_email_mcp.bounded import run_deadline
+from universal_email_mcp.errors import AuthFailed, ConfigError, MailError, ServerUnreachable
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.mail.net import NetPolicy, Resolver
 from universal_email_mcp.models import ServerProfile, TlsSettings
@@ -21,6 +22,7 @@ from universal_email_mcp.presets import normalize_hostname
 
 MAX_ADDRESS = 254
 MIN_PSEUDONYM_KEY_BYTES = 32
+MAX_CONCURRENT_CHECKS = 16
 
 
 class AddressError(ValueError):
@@ -94,6 +96,9 @@ class ImapLoginVerifier:
     net: NetPolicy
     tls: TlsSettings = TlsSettings()
     resolver: Resolver | None = None
+    _slots: asyncio.Semaphore = field(
+        default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_CHECKS), repr=False, compare=False
+    )
 
     async def verify(self, address: Address, password: str, profile: ServerProfile) -> None:
         if profile.imap is None:
@@ -112,7 +117,13 @@ class ImapLoginVerifier:
             )
             session.close()
 
-        await asyncio.to_thread(attempt)
+        # Own daemon thread under an absolute deadline (never the shared default executor),
+        # and at most a few checks at a time.
+        try:
+            async with self._slots:
+                await run_deadline(attempt, seconds=self.net.total_timeout, expired_as_timeout=True)
+        except TimeoutError:
+            raise ServerUnreachable("the mail server did not answer in time") from None
 
 
 __all__ = [

@@ -108,6 +108,7 @@ class World:
                 user_id=await self.user(user),
                 name=name,
                 host=self.server.host,
+                preset=self.server.host,
                 port=self.server.imaps_port,
                 username=mb.user,
                 password=password or self.server.password,
