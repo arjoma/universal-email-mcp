@@ -29,7 +29,8 @@ variables) and never logged.
 | `UEM_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. Logs are JSON lines on stdout. |
 | `AUDIT_LOG_CLIENT_IP` | `false` | Audit events of sign-ins and rate limits get `ip`: a keyed pseudonym of the client's network (IPv4 /24, IPv6 /48), never the address. Audit events themselves are always on (JSON lines on stdout, see [audit.md](audit.md)); the pseudonym key is `PSEUDONYM_KEY`, the `instance` field is Cloud Run's `K_REVISION`. |
 
-Command line: `serve [--config FILE] [--host ADDR] [--port N] [--insecure-local]`.
+Command line: `serve [--config FILE] [--host ADDR] [--port N] [--insecure-local]`. `--config` only
+belongs to the development mode; in OAuth mode it is refused (the accounts live in the store).
 The default bind address is `0.0.0.0` (container); `--insecure-local` binds
 `127.0.0.1` only, needs no token and leaves `/mcp` **open** - for trying things
 out on your own machine, and nothing else.
@@ -70,6 +71,9 @@ out on your own machine, and nothing else.
 | `UEM_DCR_REDIRECT_HOSTS` | any | Comma separated hosts a dynamically registered `https` redirect URI may use (loopback is always allowed). |
 | `UEM_TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front (Cloud Run: `1`). Decides which `X-Forwarded-For` entry is the client address for rate limits; `0` uses the socket peer. Set it wrong and rate limits count the proxy, or can be dodged by a forged header. |
 | `UEM_DEFAULT_LANGUAGE` | `en` | Default language of all end-user pages for visitors without a cookie or matching `Accept-Language` (`en` or `de`; other values fall back to English). |
+
+Every duration above must be a whole number of seconds, at most `315360000` (10 years);
+larger values are refused at startup, naming the variable.
 
 The scopes clients can obtain follow the policy: with `UEM_READ_ONLY=true` only
 `mail.read`, `mail.send` is not offered when `UEM_SEND_POLICY=off`.

@@ -201,6 +201,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     if not (os.environ.get("UEM_DEV_TOKEN") or args.insecure_local):
         # OAuth mode: accounts live in the store, there is no TOML config.
+        if args.config:
+            raise ConfigError(
+                "--config does not apply to OAuth mode: the accounts live in the store",
+                hint="Drop --config, or set UEM_DEV_TOKEN / pass --insecure-local to serve "
+                "a TOML config in development mode.",
+            )
         from universal_email_mcp.server.serve import run_serve_oauth
 
         run_serve_oauth(load_operator_config(host=args.host, port=args.port))

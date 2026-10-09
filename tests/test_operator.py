@@ -219,6 +219,11 @@ def test_oauth_lifetimes_and_switches():
         ("UEM_REFRESH_TOKEN_TTL", "-1"),
         ("UEM_TRUSTED_PROXY_HOPS", "9"),
         ("UEM_TRUSTED_PROXY_HOPS", "x"),
+        # would overflow the calendar when added to "now" (OverflowError at the first token)
+        ("UEM_ACCESS_TOKEN_TTL", "99999999999999"),
+        ("UEM_REFRESH_TOKEN_TTL", str(10**18)),
+        ("UEM_SESSION_MAX_AGE", "9" * 30),
+        ("UEM_PORTAL_SESSION_MAX", "315360001"),
         ("UEM_DCR", "maybe"),
     ):
         with pytest.raises(ConfigError, match=var):
