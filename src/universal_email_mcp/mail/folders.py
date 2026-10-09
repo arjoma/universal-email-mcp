@@ -55,14 +55,21 @@ ROLE_NAMES: dict[FolderRole, tuple[str, ...]] = {
 
 
 def decode_folder_name(wire: str) -> str:
-    """Decode an IMAP modified-UTF-7 folder name; returns ``wire`` unchanged if invalid."""
+    """Decode an IMAP modified-UTF-7 folder name; returns ``wire`` unchanged if invalid
+    (also when the result would hold a lone UTF-16 surrogate)."""
     if "&" not in wire:
         return wire
     try:
         decoded = _utf7_decode(wire.encode("ascii"))
     except (UnicodeError, ValueError):
         return wire
-    return decoded if isinstance(decoded, str) else wire
+    if not isinstance(decoded, str):
+        return wire
+    try:
+        decoded.encode("utf-8")  # a lone surrogate (``&2D0-``) would kill the JSON writer
+    except UnicodeEncodeError:
+        return wire
+    return decoded
 
 
 def _norm(s: str) -> str:
