@@ -242,24 +242,15 @@ someone who could read the secret leaves.
    seals new blobs with `k2`; old blobs still open with `k1`. (The old revision keeps
    working until traffic moves: it has `k1` pinned and only the ring it started with.)
 3. Re-seal what nobody has written since, as a one-off Cloud Run job with the same image,
-   service account and secrets (the command is safe to repeat; it prints counts per record kind):
+   service account and secrets (the image's entrypoint is `universal-email-mcp`, so the job
+   runs `admin rotate-keys`; safe to repeat; it prints counts per record kind, `--dry-run` only
+   counts, exit status 3 means some records could not be read):
    ```bash
-   CODE='import asyncio
-   from universal_email_mcp.operator import load_operator_config
-   from universal_email_mcp.oauth.app import make_store
-   from universal_email_mcp.store.rotation import rotate_keys
-   async def main():
-       store = make_store(load_operator_config())
-       try:
-           print(await rotate_keys(store))
-       finally:
-           await store.close()
-   asyncio.run(main())'
    IMAGE=$(gcloud run services describe universal-email-mcp --region "$REGION" \
      --format 'value(spec.template.spec.containers[0].image)')
    gcloud run jobs deploy uem-rotate-keys --region "$REGION" --image "$IMAGE" \
      --service-account "uem-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
-     --command python --args "^|^-c|$CODE" \
+     --args "admin,rotate-keys" \
      --set-env-vars "^|^STORE_BACKEND=firestore|FIRESTORE_PROJECT=${PROJECT_ID}|PUBLIC_URL=https://mail.example.org|LOGIN_DOMAINS=example.org=imap.example.org|STORE_ACTIVE_KEY=k2" \
      --set-secrets "STORE_KEYS=uem-store-keys:latest,PSEUDONYM_KEY=uem-pseudonym-key:latest"
    gcloud run jobs execute uem-rotate-keys --region "$REGION" --wait

@@ -30,7 +30,7 @@ from universal_email_mcp.store.records import (
     Token,
     User,
 )
-from universal_email_mcp.store.rotation import rotate_keys
+from universal_email_mcp.store.rotation import RotationReport, rotate_keys
 from universal_email_mcp.store.store import (
     CodeReplay,
     InvalidToken,
@@ -66,6 +66,7 @@ __all__ = [
     "User",
     "hash_token",
     "new_token",
+    "RotationReport",
     "rotate_keys",
     "tokens_equal",
 ]

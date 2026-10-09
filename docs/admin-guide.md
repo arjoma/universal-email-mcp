@@ -244,10 +244,10 @@ repository, a ticket or a command line. Both are required with the Firestore bac
 1. Pin the active key to the current one (`STORE_ACTIVE_KEY=k1`) and deploy, so instances that
    start later do not pick up a new key early.
 2. Add `k2` to the ring, set `STORE_ACTIVE_KEY=k2`, deploy: new and changed records use `k2`.
-3. Re-seal what nobody has written since: `rotate_keys(store)` from
-   `universal_email_mcp.store.rotation`. **There is no `universal-email-mcp admin rotate-keys`
-   command yet** (it is in `TODO.md`); the guide runs a small one-off job that calls the function.
-   It prints counts per record kind and is safe to repeat.
+3. Re-seal what nobody has written since: `universal-email-mcp admin rotate-keys` (the same
+   environment as `serve`; add `--dry-run` to only count). It prints counts per record kind and
+   is safe to repeat. Records it cannot read are reported as `UNREADABLE` (exit status 3) and
+   skipped; look at them before you remove the old key.
 4. When a second run reports 0, remove `k1` from the ring. Keep the old secret version until
    backups sealed with `k1` have expired: a restored backup needs the key that sealed it.
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import logging
 import secrets
 import types
 import typing
@@ -47,6 +48,10 @@ from universal_email_mcp.store.records import (
 R = TypeVar("R", bound=Record)
 
 SEALED_KEY = "_sealed"
+UNREADABLE = (CryptoError, KeyError, TypeError, ValueError)
+"""What reading a damaged record can raise (crypto failure, missing or wrongly typed field,
+bad JSON)."""
+log = logging.getLogger(__name__)
 _META_FIELDS = frozenset({"id", "version", "extra", "extra_sealed"})
 ACTIVITY_MAX_TEXT = 64
 _BATCH = 400  # Firestore transactions allow 500 writes
@@ -757,11 +762,38 @@ class Store:
 
     async def export_user(self, user_id: str) -> dict[str, Any]:
         """Everything stored about the user as plain data: settings, accounts, identities,
-        sessions, activity. Passwords, token digests and keys are left out."""
-        user = await self.get(User, user_id)
-        out: dict[str, Any] = {"user": _export(user) if user else None}
+        sessions, activity. Passwords, token digests and keys are left out.
+
+        A record that cannot be read (damaged, or sealed with a key that is gone) does not
+        stop the export: it appears as ``{"unreadable": true}`` (with its id, unless the id is
+        a secret) so that the user sees that something is missing, and a warning without any
+        content is logged."""
+        out: dict[str, Any] = {"user": None}
+        try:
+            user = await self.get(User, user_id)
+            out["user"] = _export(user) if user else None
+        except UNREADABLE:
+            out["user"] = {"unreadable": True}
+            log.warning("export: the user record is unreadable")
         for cls in USER_OWNED:
-            out[cls.KIND] = [_export(r) for r in await self.list_for_user(cls, user_id)]
+            rows: list[dict[str, Any]] = []
+            bad = 0
+            decoded: list[Record] = []
+            for rec_id, doc in await self.backend.find(cls.KIND, "user_id", user_id):
+                if self._expired(doc):
+                    continue
+                try:
+                    decoded.append(self.decode(cls, rec_id, doc))
+                except UNREADABLE:
+                    bad += 1
+                    marker: dict[str, Any] = {"unreadable": True}
+                    if "id" not in cls.EXPORT_EXCLUDE:
+                        marker = {"id": rec_id, **marker}
+                    rows.append(marker)
+            rows = [_export(r) for r in sorted(decoded, key=lambda r: (_when(r), r.id))] + rows
+            if bad:
+                log.warning("export: %d unreadable %s record(s)", bad, cls.KIND)
+            out[cls.KIND] = rows
         return out
 
     async def delete_user(self, user_id: str) -> dict[str, int]:

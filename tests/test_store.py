@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -38,6 +39,7 @@ from universal_email_mcp.store import (
     hash_token,
     rotate_keys,
 )
+from universal_email_mcp.store.backend import Op
 from universal_email_mcp.store.records import ALL_RECORDS, DELETE_ORDER, USER_OWNED, Record
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
@@ -267,9 +269,12 @@ async def test_key_rotation(backend: Backend, clock: Clock) -> None:
     doc = await backend.get("accounts", "r1")
     assert doc and doc["_sealed"].startswith("e1.k2.")
     # ... and rotate_keys migrates the rest
-    assert await rotate_keys(new) == {"users": 1, "accounts": 0, "identities": 0,
-                                      "approvals": 0, "activity": 0}  # fmt: skip
-    assert await rotate_keys(new) == {k: 0 for k in ("users", "accounts", "identities", "approvals", "activity")}  # fmt: skip
+    first = await rotate_keys(new)
+    assert first.resealed == {"users": 1, "accounts": 0, "identities": 0,
+                              "approvals": 0, "activity": 0}  # fmt: skip
+    assert first.unreadable == {} and not first.dry_run
+    again_run = await rotate_keys(new)
+    assert again_run.resealed == {k: 0 for k in ("users", "accounts", "identities", "approvals", "activity")}  # fmt: skip
     again = await only_k2.get(MailAccount, "r1")
     assert again and again.password == PASSWORD
     assert (await only_k2.get(User, "u_1")) is not None
@@ -891,3 +896,85 @@ async def test_claim_send_expired_marker_is_replaced_once(store: Store, clock: C
     clock.advance(minutes=11)  # expired, not purged
     got = await asyncio.gather(*(store.claim_send("u_1", "h" * 64, ttl) for _ in range(4)))
     assert sum(got) == 1
+
+
+# --- one damaged record must not stop rotation or export -----------------------------------
+
+
+async def damage(backend: Backend, collection: str, rec_id: str) -> None:
+    """Break the sealed blob of a stored record (as a bad write or tampering would)."""
+    doc = await backend.get(collection, rec_id)
+    assert doc is not None
+    version = doc["_v"]
+    if "_sealed" in doc:
+        broken = {**doc, "_sealed": doc["_sealed"][:-6] + "AAAAAA"}
+    else:  # nothing sealed (tokens): lose a required field instead
+        broken = {k: v for k, v in doc.items() if k != "client_id"}
+    await backend.commit([Op("replace", collection, rec_id, broken, version)])
+
+
+async def sealed_by(backend: Backend, rec_id: str) -> str:
+    doc = await backend.get("accounts", rec_id)
+    assert doc is not None
+    return doc["_sealed"].split(".")[1]
+
+
+async def test_rotate_keys_skips_and_counts_a_damaged_record(
+    backend: Backend, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    old = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    for rid in ("r1", "r2", "r3"):
+        await old.create(make(MailAccount, rid=rid))
+    await damage(backend, "accounts", "r2")
+    new = Store(backend, KeyRing({"k1": KEY1, "k2": KEY2}), clock=clock)
+
+    caplog.set_level(logging.WARNING)
+    dry = await rotate_keys(new, dry_run=True)
+    assert dry.dry_run and dry.resealed["accounts"] == 2 and dry.unreadable == {"accounts": 1}
+    assert await sealed_by(backend, "r1") == "k1"  # nothing written
+
+    report = await rotate_keys(new)
+    assert report.resealed["accounts"] == 2 and report.unreadable == {"accounts": 1}
+    assert report.total_unreadable == 1
+    for rid, key in (("r1", "k2"), ("r3", "k2"), ("r2", "k1")):
+        assert await sealed_by(backend, rid) == key
+    text = caplog.text
+    assert "1 unreadable accounts" in text
+    assert PASSWORD not in text and "r2" not in text and "alice" not in text  # no content, no id
+    # a second run: the good ones are done, the damaged one is still reported
+    again = await rotate_keys(new)
+    assert again.resealed["accounts"] == 0 and again.unreadable == {"accounts": 1}
+
+
+async def test_rotate_keys_counts_a_record_with_a_key_that_is_gone(
+    backend: Backend, clock: Clock
+) -> None:
+    old = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    await old.create(make(MailAccount))
+    only_k2 = Store(backend, KeyRing({"k2": KEY2}), clock=clock)
+    report = await rotate_keys(only_k2)
+    assert report.unreadable == {"accounts": 1}
+
+
+async def test_export_marks_a_damaged_record_and_goes_on(
+    backend: Backend, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    await store.create(make(User))
+    await store.create(make(MailAccount, rid="a1"))
+    await store.create(make(MailAccount, rid="a2"))
+    await store.create(make(Token, rid="t" * 64))
+    await damage(backend, "accounts", "a2")
+    await damage(backend, "tokens", "t" * 64)
+    caplog.set_level(logging.WARNING)
+    data = await store.export_user("u_1")
+    assert data["user"]["primary_address"] == "alice@example.org"
+    names = [a for a in data["accounts"] if "name" in a]
+    assert len(names) == 1 and names[0]["name"] == "Work"
+    assert {"id": "a2", "unreadable": True} in data["accounts"]
+    assert data["tokens"] == [{"unreadable": True}]  # a token's id is a secret: not exported
+    assert PASSWORD not in repr(data) and PASSWORD not in caplog.text
+    assert "unreadable accounts record" in caplog.text
+
+    await damage(backend, "users", "u_1")
+    assert (await store.export_user("u_1"))["user"] == {"unreadable": True}
