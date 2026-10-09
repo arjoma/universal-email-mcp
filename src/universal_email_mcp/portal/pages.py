@@ -29,6 +29,7 @@ from universal_email_mcp.models import Endpoint, ServerProfile
 from universal_email_mcp.oauth import signin
 from universal_email_mcp.oauth.clients import clean_text
 from universal_email_mcp.oauth.config import SCOPE_SEND, permission_of
+from universal_email_mcp.oauth.ratelimit import ip_group
 from universal_email_mcp.oauth.redirects import display_host
 from universal_email_mcp.portal import ops
 from universal_email_mcp.portal.activity import ActivityPages
@@ -98,6 +99,10 @@ def single_line(value: object, limit: int) -> str:
     if not isinstance(value, str):
         return ""
     return header_text(value, "field", max_chars=limit)
+
+
+_HIT_SCOPES = {"portal": "portal_action", "viewer": "viewer", "download": "download"}
+"""``ratelimit.hit`` scope of each kind of per-user portal limit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +190,41 @@ class PortalEndpoints:
         auth = await self._auth(request)
         if auth is None:
             return self._to_signin(request)
+        wait = await self._hit(request, auth.user.id, "portal")
+        if wait:
+            return self._too_many(request, wait)
         return auth, form
+
+    def _ip_key(self, request: Request) -> str:
+        return ip_group(client_ip(request, self.svc.cfg.trusted_proxy_hops))
+
+    async def _hit(self, request: Request | None, user_id: str, kind: str) -> int:
+        """Count a request against the per-user limit of ``kind`` (``portal``: state-changing
+        requests, also per network; ``viewer``: message pages and frames; ``download``: raw
+        mail and attachments). 0 = go on, else the seconds to wait (and the hit is audited)."""
+        limits = self.svc.limits
+        user_limiter = {
+            "portal": limits.portal_user,
+            "viewer": limits.viewer_user,
+            "download": limits.download_user,
+        }[kind]
+        ip_limiter = limits.portal_ip if kind == "portal" and request is not None else None
+        ip = self._ip_key(request) if request is not None and ip_limiter is not None else ""
+        wait = max(
+            user_limiter.retry_after(user_id), ip_limiter.retry_after(ip) if ip_limiter else 0
+        )
+        if wait:
+            await self.svc.audit("ratelimit.hit", scope=_HIT_SCOPES[kind], user=user_id)
+            return wait
+        user_limiter.add(user_id)
+        if ip_limiter is not None:
+            ip_limiter.add(ip)
+        return 0
+
+    def _too_many(self, request: Request, wait: int) -> Response:
+        response = self._page(request, "error.html", status=429, csrf=False, reason="ratelimited")
+        response.headers["retry-after"] = str(wait)
+        return response
 
     def _fresh(self, auth: Auth) -> bool:
         return self.store.reauth_fresh(auth.session, self.svc.cfg.reauth_window)
@@ -421,7 +460,7 @@ class PortalEndpoints:
 
     async def _check_limits(self, request: Request, auth: Auth, target: str) -> None:
         limits = self.svc.limits
-        ip = client_ip(request, self.svc.cfg.trusted_proxy_hops) or "-"
+        ip = self._ip_key(request)
         if (
             not limits.test_ip.allow(ip)
             or not limits.test_user.allow(auth.user.id)

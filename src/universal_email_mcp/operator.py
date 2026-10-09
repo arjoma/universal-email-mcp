@@ -36,6 +36,7 @@ from universal_email_mcp.config import (
 )
 from universal_email_mcp.errors import ConfigError
 from universal_email_mcp.models import ServerProfile
+from universal_email_mcp.oauth.config import RATE_PREFIX, RATE_VARIABLES, Rate, RateLimits
 from universal_email_mcp.presets import (
     normalize_hostname,
     parse_login_domains,
@@ -151,6 +152,8 @@ class OperatorConfig:
     pseudonym_key: bytes = field(default=b"", repr=False)
     oauth: OAuthSettings = OAuthSettings()
     pool: PoolSettings = PoolSettings()
+    rate_limits: RateLimits = RateLimits()
+    """``UEM_RATE_*``: every in-memory rate limit (per instance), see ``docs/operator-env.md``."""
     max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES
     """Largest decoded attachment or ``.eml`` the portal viewer streams."""
     content_origin: str | None = None
@@ -430,6 +433,49 @@ def _pool(env: Mapping[str, str]) -> PoolSettings:
     )
 
 
+_RATE_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+MAX_RATE_COUNT = 100_000
+MAX_RATE_WINDOW = timedelta(days=7)
+
+
+def parse_rate(var: str, raw: str) -> Rate:
+    """``COUNT/WINDOW`` - ``5/15m``, ``300/1m``, ``30/10s`` (units s, m, h, d; bare = seconds)."""
+    count_text, sep, window_text = raw.strip().partition("/")
+    window_text = window_text.strip().lower()
+    unit = 1
+    if window_text[-1:] in _RATE_UNITS:
+        unit, window_text = _RATE_UNITS[window_text[-1]], window_text[:-1]
+    if not sep or not count_text.strip().isascii() or not window_text.isascii():
+        raise _fail(
+            var, f"{raw!r} is not COUNT/WINDOW", hint="Example: 20/15m (20 per 15 minutes)."
+        )
+    try:
+        count, window = int(count_text), int(window_text) * unit
+    except ValueError:
+        raise _fail(
+            var, f"{raw!r} is not COUNT/WINDOW", hint="Example: 20/15m (20 per 15 minutes)."
+        ) from None
+    if not 1 <= count <= MAX_RATE_COUNT:
+        raise _fail(var, f"the count must be between 1 and {MAX_RATE_COUNT}")
+    if not 1 <= window <= MAX_RATE_WINDOW.total_seconds():
+        raise _fail(var, "the window must be between 1 second and 7 days")
+    return Rate(count, timedelta(seconds=window))
+
+
+def _rate_limits(env: Mapping[str, str]) -> RateLimits:
+    changes = {
+        field_name: parse_rate(var, raw)
+        for var, field_name in RATE_VARIABLES.items()
+        if (raw := _text(env, var)) is not None
+    }
+    unknown = sorted(
+        k for k in env if k.startswith(RATE_PREFIX) and k not in RATE_VARIABLES and env[k].strip()
+    )
+    if unknown:
+        raise _fail(unknown[0], "is not a rate limit", hint="See docs/operator-env.md.")
+    return replace(RateLimits(), **changes)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -586,6 +632,7 @@ def load_operator_config(
         pseudonym_key=pseudonym_key,
         oauth=_oauth(env),
         pool=_pool(env),
+        rate_limits=_rate_limits(env),
         max_download_bytes=_number(env, "UEM_MAX_DOWNLOAD_BYTES", DEFAULT_MAX_DOWNLOAD_BYTES, int),
         content_origin=content_origin,
     )

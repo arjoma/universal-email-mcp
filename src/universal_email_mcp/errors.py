@@ -22,7 +22,7 @@ class MailError(Exception):
         self.message = message
         self.hint = hint if hint is not None else self.default_hint
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int]:
         """Serialisable form for tool error results: ``{"code", "message", "hint"}``."""
         return {"code": self.code, "message": self.message, "hint": self.hint}
 
@@ -155,7 +155,7 @@ class AmbiguousFolder(MailError):
         super().__init__(message, hint=hint)
         self.choices = choices
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int]:
         d = super().to_dict()
         d["choices"] = "; ".join(self.choices)
         return d
@@ -218,6 +218,19 @@ class RecipientsRefused(MailError):
 class RateLimited(MailError):
     code = "RATE_LIMITED"
     default_hint = "The send limit of the policy is reached. Wait, or ask the user to raise it."
+
+    def __init__(
+        self, message: str, *, hint: str | None = None, retry_after: int | None = None
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.retry_after = retry_after
+        """Seconds to wait before trying again, when known."""
+
+    def to_dict(self) -> dict[str, str | int]:
+        data = super().to_dict()
+        if self.retry_after is not None:
+            data["retry_after"] = self.retry_after
+        return data
 
 
 class SendOutcomeUnknown(MailError):

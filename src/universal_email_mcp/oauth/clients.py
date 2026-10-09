@@ -32,7 +32,7 @@ from universal_email_mcp.oauth.fetch import (
     check_document_url,
     fetch_document,
 )
-from universal_email_mcp.oauth.ratelimit import RateLimiter
+from universal_email_mcp.oauth.ratelimit import RateLimiter, ip_group
 from universal_email_mcp.oauth.redirects import RedirectError, host_allowed, validate_redirect_uri
 from universal_email_mcp.store import AlreadyExists, OAuthClient, Store, StoreConflict
 
@@ -191,7 +191,7 @@ class ClientRegistry:
         cached = await self._store.get(OAuthClient, client_id)
         if cached is not None and cached.registration == "cimd":
             return ClientInfo(cached.id, cached.name, cached.redirect_uris, "cimd")
-        if self._fetch_limiter is not None and not self._fetch_limiter.allow(ip or "-"):
+        if self._fetch_limiter is not None and not self._fetch_limiter.allow(ip_group(ip)):
             raise ClientError(
                 "Too many requests. Please try again in a minute.", "fetch rate limit"
             )

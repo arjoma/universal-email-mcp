@@ -19,6 +19,7 @@ from universal_email_mcp.errors import AuthFailed, MailError
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.models import ServerProfile
 from universal_email_mcp.oauth.identity import Address, AddressError, parse_address
+from universal_email_mcp.oauth.ratelimit import ip_group
 from universal_email_mcp.oauth.service import OAuthService
 from universal_email_mcp.portal.ops import ensure_primary
 from universal_email_mcp.portal.web import client_ip
@@ -85,7 +86,7 @@ async def check_login(
     svc: OAuthService, request: Request, typed_address: str, password: object
 ) -> LoginCheck:
     ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-    if not svc.limits.signin_ip.allow(ip or "-"):
+    if not svc.limits.signin_ip.allow(ip_group(ip)):
         await svc.audit("ratelimit.hit", scope="signin_ip", ip=ip)
         return LoginCheck(RATE_LIMITED)
     if not valid_password(password):
@@ -148,7 +149,7 @@ async def verify_user_password(
     """Re-authentication: is ``password`` the user's mailbox password? Returns ``OK`` or
     an error code. Shares the sign-in limits (wrong passwords count against the user)."""
     ip = client_ip(request, svc.cfg.trusted_proxy_hops)
-    if not svc.limits.signin_ip.allow(ip or "-"):
+    if not svc.limits.signin_ip.allow(ip_group(ip)):
         await svc.audit("ratelimit.hit", scope="signin_ip", ip=ip)
         return RATE_LIMITED
     if svc.limits.signin_address.blocked(user.id):

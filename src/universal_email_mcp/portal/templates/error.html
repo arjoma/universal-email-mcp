@@ -23,12 +23,15 @@
 {% elif reason == "reauth" %}
 <p>{{ _("The mail server rejected the stored password of this account. Enter the password again on the mail accounts page.") }}</p>
 <p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
+{% elif reason == "ratelimited" %}
+<p>{{ _("You are doing this too often. Please wait a moment and try again.") }}</p>
+<p><a href="/portal/accounts">{{ _("Back to your mail accounts") }}</a></p>
 {% elif reason == "busy" %}
 <p>{{ _("Too many requests. Please try again in a minute.") }}</p>
 {% else %}
 <p>{{ _("This request is not valid, so nothing was done.") }}</p>
 {% endif %}
-{% if reason not in ("csrf", "notfound", "messagegone", "toolarge", "unavailable", "reauth") %}
+{% if reason not in ("csrf", "notfound", "messagegone", "toolarge", "unavailable", "reauth", "ratelimited") %}
 <p class="hint">{{ _("You can close this window and start again in the application.") }}</p>
 {% endif %}
 {% endblock %}

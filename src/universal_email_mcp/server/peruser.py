@@ -44,13 +44,15 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from universal_email_mcp import __version__, audit
-from universal_email_mcp.errors import Busy
+from universal_email_mcp.errors import Busy, RateLimited
 from universal_email_mcp.oauth.bearer import Principal
+from universal_email_mcp.oauth.config import RateLimits
 from universal_email_mcp.server.app import (  # pyright: ignore[reportPrivateUsage]
     SERVER_NAME,
     _error_result,
 )
 from universal_email_mcp.server.http import _send_json  # pyright: ignore[reportPrivateUsage]
+from universal_email_mcp.service.toolrate import ToolRateLimiter
 from universal_email_mcp.service.userpool import UserContext, UserPool
 from universal_email_mcp.store import KeyRing
 
@@ -102,7 +104,12 @@ def request_state_security(
 class PerUserServer(MCPServer):
     """An ``MCPServer`` whose tools, schemas and instructions come from the current user."""
 
-    def __init__(self, pool: UserPool, security: RequestStateSecurity | None = None) -> None:
+    def __init__(
+        self,
+        pool: UserPool,
+        security: RequestStateSecurity | None = None,
+        rates: RateLimits | None = None,
+    ) -> None:
         super().__init__(
             SERVER_NAME,
             title="Universal e-mail (IMAP)",
@@ -111,6 +118,7 @@ class PerUserServer(MCPServer):
             request_state_security=security,
         )
         self.pool = pool
+        self.tool_rate = ToolRateLimiter(rates or RateLimits())
         self._lowlevel_server.__class__ = _DynamicInstructionsServer
 
     # --- the tool surface of the current user ------------------------------------------
@@ -138,10 +146,16 @@ class PerUserServer(MCPServer):
         started = time.monotonic()
         result: Any = None
         try:
+            refusal = self.tool_rate.check(ctx.user_id, ctx.grant_id, name)
+            if refusal is not None:  # before a pool slot, a lease or any mail server is touched
+                await audit.record(
+                    "ratelimit.hit", scope=refusal.scope, user=ctx.user_id, grant=ctx.grant_id
+                )
+                raise self.tool_rate.error(refusal)
             async with self.pool.call_slot(ctx):
                 result = await ctx.server.call_tool(name, arguments, context)
             return result
-        except Busy as e:
+        except (Busy, RateLimited) as e:
             result = _error_result(e)
             return result
         finally:

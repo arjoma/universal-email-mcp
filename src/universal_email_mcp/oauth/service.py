@@ -12,38 +12,55 @@ from starlette.responses import JSONResponse
 from universal_email_mcp import audit
 from universal_email_mcp.models import ServerProfile
 from universal_email_mcp.oauth.clients import ClientRegistry
-from universal_email_mcp.oauth.config import OAuthConfig
+from universal_email_mcp.oauth.config import OAuthConfig, Rate
 from universal_email_mcp.oauth.identity import LoginVerifier, Pseudonyms
 from universal_email_mcp.oauth.ratelimit import RateLimiter
 from universal_email_mcp.portal.web import Portal
 from universal_email_mcp.store import Store
 
 
+def _limiter(rate: Rate) -> RateLimiter:
+    return RateLimiter(rate.count, rate.seconds)
+
+
 @dataclass(slots=True)
 class Limiters:
+    """The limiters of the authorization server and the portal (tool calls have their own,
+    :class:`~universal_email_mcp.service.toolrate.ToolRateLimiter`). Per instance."""
+
     signin_address: RateLimiter
     signin_ip: RateLimiter
+    authorize_ip: RateLimiter
     register_ip: RateLimiter
     register_global: RateLimiter
     token_ip: RateLimiter
     client_fetch: RateLimiter
+    portal_user: RateLimiter
+    portal_ip: RateLimiter
     test_user: RateLimiter
     test_ip: RateLimiter
     test_target: RateLimiter
+    viewer_user: RateLimiter
+    download_user: RateLimiter
 
     @classmethod
     def from_config(cls, cfg: OAuthConfig) -> Limiters:
         r = cfg.rate_limits
         return cls(
-            signin_address=RateLimiter(r.signin_per_address, r.signin_window.total_seconds()),
-            signin_ip=RateLimiter(r.signin_per_ip, r.signin_window.total_seconds()),
-            register_ip=RateLimiter(r.register_per_ip, r.register_window.total_seconds()),
-            register_global=RateLimiter(r.register_global, r.register_window.total_seconds()),
-            token_ip=RateLimiter(r.token_per_ip, r.token_window.total_seconds()),
-            client_fetch=RateLimiter(r.client_fetch_per_ip, r.client_fetch_window.total_seconds()),
-            test_user=RateLimiter(r.test_per_user, r.test_window.total_seconds()),
-            test_ip=RateLimiter(r.test_per_ip, r.test_window.total_seconds()),
-            test_target=RateLimiter(r.test_per_target, r.signin_window.total_seconds()),
+            signin_address=_limiter(r.signin_address),
+            signin_ip=_limiter(r.signin_ip),
+            authorize_ip=_limiter(r.authorize_ip),
+            register_ip=_limiter(r.register_ip),
+            register_global=_limiter(r.register_global),
+            token_ip=_limiter(r.token_ip),
+            client_fetch=_limiter(r.client_fetch_ip),
+            portal_user=_limiter(r.portal_user),
+            portal_ip=_limiter(r.portal_ip),
+            test_user=_limiter(r.test_user),
+            test_ip=_limiter(r.test_ip),
+            test_target=_limiter(r.test_target),
+            viewer_user=_limiter(r.viewer_user),
+            download_user=_limiter(r.download_user),
         )
 
 
