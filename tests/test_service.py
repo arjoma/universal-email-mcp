@@ -19,7 +19,7 @@ from universal_email_mcp.errors import (
     StaleCursor,
 )
 from universal_email_mcp.mail.imap import SearchCriteria
-from universal_email_mcp.models import MessageRef
+from universal_email_mcp.models import Address, MessageRef
 from universal_email_mcp.server.app import build_server
 from universal_email_mcp.service.cursor import Cursor, CursorCodec, SourcePos, query_hash
 from universal_email_mcp.service.index import HeaderIndex
@@ -641,6 +641,33 @@ async def test_pages_show_current_flags_not_cached_ones():
     assert "FLAGS INBOX 3" in a.calls and not any(c.startswith("FETCH") for c in a.calls)
 
 
+async def test_fuzzy_results_show_current_flags_not_cached_ones():
+    a = FakeSession("A", {"INBOX": [1, 2]})
+    for uid in (1, 2):
+        a.folders["INBOX"][uid] = summary("A", "INBOX", uid, subject="Rechnung Huber")
+    svc, _ = _service(A=a)
+    q = parse("rechnung")
+    assert q is not None
+
+    async def run():
+        return await svc.query_search(
+            tool="find_messages",
+            args={"q": "rechnung"},
+            accounts=None,
+            folders=None,
+            criteria=SearchCriteria(),
+            query=q,
+            threshold=75,
+            limit=5,
+            cursor=None,
+        )
+
+    assert all(not h.summary.flagged for h in (await run()).hits)  # fills the header cache
+    a.folders["INBOX"][2] = replace(a.folders["INBOX"][2], flags=("\\Flagged",))
+    again = await run()
+    assert {h.summary.ref.uid: h.summary.flagged for h in again.hits} == {1: False, 2: True}
+
+
 async def test_cursor_stops_retrying_a_persistently_failing_account():
     a, b = FakeSession("A", {"INBOX": [1]}), FakeSession("B", {"INBOX": [1]})
     svc, conn = _service(A=a, B=b)
@@ -666,3 +693,30 @@ async def test_list_folders_keeps_tree_indentation():
     rows = {line.split(" | ")[0][2:] for line in text.splitlines()[2:] if line.startswith("| ")}
     assert {"Clients", "└ Clients/Huber", "│ └ Clients/Huber/2025"} <= rows
     await svc.aclose()
+
+
+async def test_listing_flags_look_alike_senders():
+    a = FakeSession("A", {"INBOX": [1, 2, 3]})
+    for uid, (name, addr) in {
+        1: ("Anna Huber", "anna@huber-bau.at"),
+        2: ("Anna Hubеr", "anna@huber-bau.at"),  # Cyrillic е in the name  # noqa: RUF001
+        3: ("Anna", "anna@раура.com"),  # Cyrillic domain that reads like "paypa"  # noqa: RUF001
+    }.items():
+        a.folders["INBOX"][uid] = replace(summary("A", "INBOX", uid), from_=(Address(name, addr),))
+    svc, _ = _service(A=a)
+    async with Client(build_server(svc)) as c:
+        r = await c.call_tool("find_messages", {})
+        text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
+    rows = [ln for ln in text.splitlines() if ln.startswith("| ") and "look-alike" in ln]
+    assert len(rows) == 2
+    assert any("mixed scripts" in r for r in rows) and any("look-alike letters" in r for r in rows)
+    assert text.count("look-alike sender") == 2
+
+
+def test_sender_warning_unit():
+    from universal_email_mcp.service.recipients import sender_warning
+
+    assert sender_warning("Jürgen Müller", "j.mueller@example.de") is None
+    assert sender_warning("Иван Петров", "ivan@почта.рф") is None  # honest Cyrillic  # noqa: RUF001
+    assert sender_warning("田中 太郎", "tanaka@example.jp") is None
+    assert sender_warning("Anna", "anna@exаmple.com") == "mixed scripts"  # noqa: RUF001

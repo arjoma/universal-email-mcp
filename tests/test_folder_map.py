@@ -174,3 +174,8 @@ def test_failed_account_line_and_block():
 
 def test_fence_account_name_is_cleaned():
     assert fence({"A`\nB": FolderMap(())}).splitlines()[1] == "A' B: (no folders)"
+
+
+def test_names_with_commas_are_quoted():
+    fm = build_map([fi("Müller, Hans"), fi("Clients"), fi("Clients/Huber, Anna"), fi("Clients/X")])
+    assert fm.text() == 'Clients ▸ 2 ("Huber, Anna", X), "Müller, Hans"'

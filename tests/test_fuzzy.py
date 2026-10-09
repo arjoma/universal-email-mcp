@@ -143,6 +143,15 @@ def test_rank_umlaut_subject_and_recipient():
     }
 
 
+def test_words_spread_over_fields_add_up():
+    # "Huber" is the sender, "Rechnung" the subject: neither field alone matches both words
+    m = replace(CORPUS[1], from_=(Address("Anna Huber", "anna@huber-bau.at"),))
+    q = parse("rechnung huber")
+    assert q is not None and score_message(q, m) >= 90
+    other = replace(CORPUS[1], from_=(Address("Maier GmbH", "office@maier-gmbh.at"),))
+    assert score_message(q, other) < fuzzy.DEFAULT_THRESHOLD
+
+
 def test_message_texts_are_bounded():
     many = tuple(Address(f"Person {i}", f"p{i}@example.org") for i in range(500))
     m = replace(CORPUS[0], to=many)

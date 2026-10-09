@@ -220,5 +220,15 @@ def message_texts(m: MessageSummary) -> list[str]:
 
 
 def score_message(query: Query, m: MessageSummary) -> float:
-    """0–100 for a message's headers (never its body)."""
-    return query.score(message_texts(m))
+    """0–100 for a message's headers (never its body).
+
+    A multi-word fuzzy query is also scored against sender + subject and
+    recipients + subject, so words spread over fields ("rechnung huber") add up."""
+    texts = message_texts(m)
+    if query.pattern is None and len(query.text.split()) > 1:
+        subject = fuzzy.strip_subject_prefixes(m.subject)
+        for people in (m.from_, (*m.to, *m.cc)[:MAX_ADDRESSES]):
+            names = " ".join(a.name or a.email for a in people[:MAX_ADDRESSES])
+            if names:
+                texts.append(f"{names} {subject}")
+    return query.score(texts)
