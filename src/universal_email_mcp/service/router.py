@@ -43,6 +43,9 @@ from universal_email_mcp.models import Account, AccountKind, MessageRef
 
 log = logging.getLogger(__name__)
 
+CLOSE_WAIT = 5.0
+"""Longest :meth:`AccountRouter.aclose` waits for connections to be released."""
+
 DEFAULT_IDLE_TTL = 120.0
 """Idle connections older than this are closed and reopened on next use."""
 
@@ -181,7 +184,7 @@ def _run_daemon[**P, T](
 def _release_after(session: Any, fut: asyncio.Future[Any]) -> None:
     if not fut.cancelled():
         fut.exception()  # retrieved: the caller is gone, the error was expected
-    _in_thread(_close_quietly, session)
+    _in_thread(_discard, session)
 
 
 class AccountRouter:
@@ -335,7 +338,7 @@ class AccountRouter:
             return
         session = fut.result()
         if self._closed:  # a connect that finished after aclose(): nobody will close it later
-            _in_thread(_close_quietly, session)
+            _in_thread(_discard, session)
             return
         if self._hooks is not None:
             self._hooks.connect_succeeded(slot.account)
@@ -343,13 +346,13 @@ class AccountRouter:
             slot.session = session
             slot.last_used = self._clock()
         elif slot.session is not session:  # pragma: no cover - defensive
-            _in_thread(_close_quietly, session)
+            _in_thread(_discard, session)
 
     async def _ensure(self, slot: _Slot) -> tuple[Any, bool]:
         now = self._clock()
         if slot.session is not None and now - slot.last_used > self._idle_ttl:
             old, slot.session = slot.session, None
-            await asyncio.to_thread(_close_quietly, old)
+            _in_thread(_discard, old)
         if slot.session is not None:
             return slot.session, False
         session = await self._connect(slot)
@@ -367,6 +370,7 @@ class AccountRouter:
         async with slot.lock:
             for attempt in (1, 2):
                 session, fresh = await self._ensure(slot)
+                writes = getattr(session, "writes_started", 0)
                 fut = _run_daemon(asyncio.get_running_loop(), fn, session)
                 try:
                     result = await asyncio.shield(fut)
@@ -377,9 +381,17 @@ class AccountRouter:
                     _in_thread(_abort_quietly, session)
                     fut.add_done_callback(functools.partial(_release_after, session))
                     raise
-                except ServerUnreachable:
+                except ServerUnreachable as e:
                     slot.session = None
-                    await asyncio.to_thread(_discard, session)
+                    _in_thread(_discard, session)
+                    if getattr(session, "writes_started", 0) != writes:
+                        # A write command may have reached the server: running it again
+                        # could apply it twice (an APPEND would duplicate the message).
+                        e.hint = (e.hint + " " if e.hint else "") + (
+                            "The connection broke while the mailbox was being changed; "
+                            "check the result before repeating it."
+                        )
+                        raise
                     if fresh or attempt == 2:
                         raise
                     log.info("account %s: connection lost, reconnecting", account.name)
@@ -389,7 +401,7 @@ class AccountRouter:
                     raise
                 except Exception as e:
                     slot.session = None
-                    await asyncio.to_thread(_discard, session)
+                    _in_thread(_discard, session)
                     log.exception("account %s: unexpected backend error", account.name)
                     raise ProtocolError(f"unexpected backend error: {type(e).__name__}") from e
                 slot.last_used = self._clock()
@@ -446,7 +458,7 @@ class AccountRouter:
         if slot.session is None or slot.lock.locked():
             return
         session, slot.session = slot.session, None
-        _in_thread(_close_quietly, session)
+        _in_thread(_discard, session)
 
     def close_idle(self, older_than: float) -> int:
         """Close connections idle for more than ``older_than`` seconds; returns how many."""
@@ -470,4 +482,10 @@ class AccountRouter:
         sessions = [s.session for s in self._slots.values() if s.session is not None]
         for s in self._slots.values():
             s.session = None
-        await asyncio.gather(*(asyncio.to_thread(_close_quietly, s) for s in sessions))
+        if not sessions:
+            return
+        loop = asyncio.get_running_loop()
+        # Own daemon threads (a dead server must not occupy the default executor), and a
+        # bounded wait: the sockets are aborted first, so this normally takes no time.
+        pending = [_run_daemon(loop, _discard, s) for s in sessions]
+        await asyncio.wait(pending, timeout=CLOSE_WAIT)

@@ -437,6 +437,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A connection that broke while a write (flag change, move, append, folder creation) was in
+  flight is no longer retried on a new connection, which could have applied it twice (an
+  APPEND duplicated the message); the error says to check the result first. The move fallback
+  (COPY + UID EXPUNGE) no longer withdraws a `\\Deleted` mark that another client had set on
+  a message before.
 - A timed-out account no longer blocks the server until the read time-out, and
   retries against a stalling server share one connection attempt.
 - Paging no longer skips messages deleted between pages; cursors stop retrying
