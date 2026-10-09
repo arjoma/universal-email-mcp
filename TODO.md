@@ -47,6 +47,12 @@ Ideas parked for after 0.1.0. See `docs/plans/2026-09-30-design.md` for the v1 s
       operator config, `universal-email-mcp admin rotate-keys` (calls `store.rotate_keys`).
 - [ ] Store: activity feed is listed by a per-user query sorted in Python (no composite
       index); fine for 30 days of events, add `order_by` + index or a per-user cap if feeds grow.
+- [ ] Store review leftovers: auth-code replay detection (consumed marker, revoke issued
+      tokens); `update` drops unknown fields (rolling deploys); `rotate_keys`/`export_user`
+      abort on one corrupt record (skip and report); expired records can still be `update`d;
+      `delete_user` is not atomic against concurrent writes (tombstone); Firestore ids
+      `.`/`..`/`__x__`/>1500 bytes for hostile CIMD client ids (hash them); transaction reads
+      one by one (`get_all`); portal session touch/reauth methods; reject `k01` key ids.
 - [ ] Store: a pseudonym-key change needs a user-id migration; authorization-code replay
       (second redeem) is not yet turned into a revocation of the tokens issued from it (3c).
 - [ ] More provider presets (IONOS, Strato, World4You, Hetzner, all-inkl, …),

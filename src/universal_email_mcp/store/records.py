@@ -55,16 +55,18 @@ class MailAccount(Record):
     """One incoming mailbox. Server profile is plain, login name and password are sealed."""
 
     KIND: ClassVar[str] = "accounts"
-    SEALED: ClassVar[tuple[str, ...]] = ("username", "password")
+    SEALED: ClassVar[tuple[str, ...]] = ("host", "port", "tls", "username", "password")
     EXPORT_EXCLUDE: ClassVar[tuple[str, ...]] = ("password",)
 
     user_id: str
     name: str
     protocol: str = "imap"
     """``imap`` or ``pop3``."""
-    host: str
-    port: int
-    tls: str = "implicit"
+    host: str = field(repr=False)
+    """Server settings are sealed too: a database writer must not be able to repoint an
+    account at another host and receive the decrypted password."""
+    port: int = field(repr=False)
+    tls: str = field(default="implicit", repr=False)
     """``implicit`` or ``starttls``."""
     preset: str = ""
     username: str = field(repr=False)
@@ -80,6 +82,9 @@ class Identity(Record):
 
     KIND: ClassVar[str] = "identities"
     SEALED: ClassVar[tuple[str, ...]] = (
+        "smtp_host",
+        "smtp_port",
+        "smtp_tls",
         "addresses",
         "display_name",
         "signature",
@@ -92,9 +97,9 @@ class Identity(Record):
     addresses: tuple[str, ...] = field(repr=False)
     display_name: str = field(default="", repr=False)
     signature: str = field(default="", repr=False)
-    smtp_host: str = ""
-    smtp_port: int = 465
-    smtp_tls: str = "implicit"
+    smtp_host: str = field(default="", repr=False)
+    smtp_port: int = field(default=465, repr=False)
+    smtp_tls: str = field(default="implicit", repr=False)
     smtp_username: str = field(default="", repr=False)
     smtp_password: str = field(default="", repr=False)
     copies_account_id: str = ""

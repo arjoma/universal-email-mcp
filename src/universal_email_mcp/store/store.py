@@ -27,7 +27,7 @@ from universal_email_mcp.store.backend import (
     Op,
     StoreConflict,
 )
-from universal_email_mcp.store.crypto import Aad, KeyRing, hash_token, new_token
+from universal_email_mcp.store.crypto import Aad, CryptoError, KeyRing, hash_token, new_token
 from universal_email_mcp.store.records import (
     ALL_RECORDS,
     USER_OWNED,
@@ -166,6 +166,8 @@ class Store:
             k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY)
         }
         if cls.SEALED:
+            if not isinstance(doc.get(SEALED_KEY), str):
+                raise CryptoError("record has no sealed data")
             owner = rec_id if cls is User else str(doc.get("user_id", ""))
             values.update(
                 self.keys.open_json(doc[SEALED_KEY], self._aad(cls, owner, rec_id)),
@@ -403,35 +405,50 @@ class Store:
         return IssuedTokens(raw_a, raw_r, access_exp, refresh_exp, new_grant), ops
 
     async def issue_tokens(self, grant: Grant, *, resource: str = "") -> IssuedTokens:
-        """First token pair of a grant (after the code was redeemed)."""
-        issued, ops = self._token_pair(grant, grant.client_id, resource, self.now())
-        await self.backend.commit(ops)
-        return issued
+        """First token pair of a pending grant (after the code was redeemed); once only."""
+        for _ in range(3):
+            fresh = await self.get(Grant, grant.id)
+            if fresh is None or fresh.last_used is not None:
+                raise InvalidToken("the grant is gone or already has tokens")
+            issued, ops = self._token_pair(fresh, fresh.client_id, resource, self.now())
+            try:
+                await self.backend.commit(ops)
+                return issued
+            except StoreConflict:
+                continue
+        raise StoreConflict("grant changed concurrently")
 
     async def rotate_refresh_token(self, raw: str, *, client_id: str) -> IssuedTokens:
         """Exchange a refresh token for a new pair, atomically.
 
         The old token stays as ``consumed`` until its expiry. Presenting it again (or racing
-        another exchange) revokes the whole grant and raises :class:`TokenReuse`.
+        another exchange) revokes the whole grant and raises :class:`TokenReuse`. A concurrent
+        change of the grant alone (e.g. ``last_used``) is retried, not treated as replay.
         """
-        old = await self.get(Token, hash_token(raw))
-        if old is None or old.token_type != "refresh" or old.client_id != client_id:
-            raise InvalidToken("unknown or expired refresh token")
-        grant = await self.get(Grant, old.grant_id)
-        if grant is None:
-            raise InvalidToken("the session no longer exists")
-        if old.consumed:
-            await self.revoke_grant(grant.id)
-            raise TokenReuse("refresh token was already used; session revoked")
-        issued, ops = self._token_pair(grant, client_id, old.resource, self.now())
-        used = replace(old, consumed=True)
-        ops.append(Op("replace", old.KIND, old.id, self.encode(used, old.version + 1), old.version))
-        try:
-            await self.backend.commit(ops)
-        except StoreConflict:
-            await self.revoke_grant(grant.id)
-            raise TokenReuse("refresh token was used concurrently; session revoked") from None
-        return issued
+        grant_id = ""
+        for _ in range(3):
+            old = await self.get(Token, hash_token(raw))
+            if old is None or old.token_type != "refresh" or old.client_id != client_id:
+                raise InvalidToken("unknown or expired refresh token")
+            grant = await self.get(Grant, old.grant_id)
+            if grant is None:
+                raise InvalidToken("the session no longer exists")
+            grant_id = grant.id
+            if old.consumed:
+                await self.revoke_grant(grant.id)
+                raise TokenReuse("refresh token was already used; session revoked")
+            issued, ops = self._token_pair(grant, client_id, old.resource, self.now())
+            used = replace(old, consumed=True)
+            ops.append(
+                Op("replace", old.KIND, old.id, self.encode(used, old.version + 1), old.version)
+            )
+            try:
+                await self.backend.commit(ops)
+                return issued
+            except StoreConflict:
+                continue  # re-read: if the token was consumed meanwhile, that is replay
+        await self.revoke_grant(grant_id)
+        raise TokenReuse("refresh token was used concurrently; session revoked")
 
     async def authenticate_access_token(self, raw: str) -> tuple[Token, Grant] | None:
         """The live access token and its grant, or None. Touches ``last_used`` rarely."""
@@ -486,13 +503,29 @@ class Store:
             )
         )
 
-    async def decide_approval(self, approval_id: str, approve: bool) -> PendingApproval | None:
-        """Pending -> approved/declined (once). None if gone, expired or already decided;
-        ``StoreConflict`` if decided concurrently."""
+    async def decide_approval(
+        self, approval_id: str, user_id: str, approve: bool
+    ) -> PendingApproval | None:
+        """Pending -> approved/declined (once), only by the owning user. None if gone,
+        expired, foreign or already decided; ``StoreConflict`` if decided concurrently."""
         cur = await self.get(PendingApproval, approval_id)
-        if cur is None or cur.status != "pending":
+        if cur is None or cur.user_id != user_id or cur.status != "pending":
             return None
         return await self.update(replace(cur, status="approved" if approve else "declined"))
+
+    async def consume_approval(
+        self, approval_id: str, user_id: str, content_hash: str
+    ) -> PendingApproval | None:
+        """Single use: take an *approved* approval of this user for exactly this content."""
+        cur = await self.get(PendingApproval, approval_id)
+        if (
+            cur is None
+            or cur.user_id != user_id
+            or cur.status != "approved"
+            or cur.content_hash != content_hash
+        ):
+            return None
+        return await self.take(PendingApproval, approval_id)
 
     # -- activity ---------------------------------------------------------------------
 

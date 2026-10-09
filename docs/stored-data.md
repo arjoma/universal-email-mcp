@@ -32,8 +32,8 @@ single-field equality (`user_id`, `grant_id`), no composite index is needed.
 | Record (collection) | Plain fields | Sealed (AES-256-GCM) | Lifetime |
 |---|---|---|---|
 | user (`users`) | pseudonym id, default identity, created | primary address, settings | until deleted |
-| account (`accounts`) | name, protocol, host, port, TLS, permissions, preset | login name, **password** | until removed |
-| identity (`identities`) | SMTP host/port/TLS, copies account, default flag | addresses, display name, signature, SMTP login and **password** | until removed |
+| account (`accounts`) | name, protocol, permissions, preset | host, port, TLS, login name, **password** | until removed |
+| identity (`identities`) | copies account, default flag | SMTP host/port/TLS, addresses, display name, signature, SMTP login and **password** | until removed |
 | portal session (`portal_sessions`) | user, times, id = SHA-256 of the cookie | - | 12 h (configurable) |
 | OAuth client (`oauth_clients`) | CIMD URL / DCR id, name, redirect URIs | - | 30 days unused (extended on use) |
 | authorization code (`auth_codes`) | client, grant, PKCE challenge, id = SHA-256 of the code | - | 1 minute, single use |
@@ -46,8 +46,8 @@ A *grant* is a connected AI client in the portal's "Connected AI clients" list. 
 tokens rotate on every use; the old one stays (marked consumed) until it expires, and
 presenting it again revokes the whole grant (replay detection).
 
-Activity entries accept only short labels (no `@`, max 64 characters) and integer counts, so
-mail data cannot slip in by accident. Account fields hold the account *name* the user chose.
+Activity entries accept only short labels (no `@`, max 64 characters) and integer counts, a
+tripwire against accidents; callers must still pass names and counts only. Account fields hold the account *name* the user chose.
 
 ### Privacy: export and delete
 
@@ -97,6 +97,11 @@ Generate a key: `python -c "import base64,os;print(base64.b64encode(os.urandom(3
    nobody has written since. It reports counts per record kind and is safe to repeat.
 3. Remove `k1` from the ring. Losing a key makes the blobs sealed with it unreadable: keep
    the ring in Secret Manager with versions.
+
+Server settings are sealed so that someone with write access to the database cannot repoint
+an account at another host. Rollback of a record to an older blob of itself is not prevented.
+With a name `prefix`, the TTL loop above needs the prefixed collection names. `touch_client`
+must be called by the caller to extend an OAuth client.
 
 Not covered: a compromised running instance (it holds the keys), and rotation of the
 pseudonym key (users are keyed by it; a change needs a migration).
