@@ -68,12 +68,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser(
         "serve",
-        help="run the MCP server over HTTP (remote mode preview, dev token)",
+        help="run the MCP server over HTTP (remote mode: OAuth; or the dev mode)",
         description=(
-            "Run the MCP server over Streamable HTTP (/mcp, /health, /ready). TEMPORARY dev "
-            "mode until OAuth exists: serves the accounts of a local config file and requires "
-            "the bearer token in $UEM_DEV_TOKEN, or --insecure-local (127.0.0.1 only, no token). "
-            "Operator settings come from the environment, see docs/operator-env.md."
+            "Run the MCP server over Streamable HTTP (/mcp, /health, /ready, OAuth endpoints). "
+            "Default is OAuth mode (STORE_BACKEND, PUBLIC_URL, LOGIN_DOMAINS ... from the "
+            "environment, see docs/operator-env.md). TEMPORARY dev mode: with $UEM_DEV_TOKEN "
+            "(static bearer token) or --insecure-local (127.0.0.1 only, no token) it serves the "
+            "accounts of a local config file."
         ),
     )
     serve.add_argument("--config", help="config file (default: $UEM_CONFIG or platform dir)")
@@ -187,6 +188,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from universal_email_mcp.operator import load_operator_config
     from universal_email_mcp.server.serve import run_serve
 
+    if not (os.environ.get("UEM_DEV_TOKEN") or args.insecure_local):
+        # OAuth mode: accounts live in the store, there is no TOML config.
+        from universal_email_mcp.server.serve import run_serve_oauth
+
+        run_serve_oauth(load_operator_config(host=args.host, port=args.port))
+        return 0
     cfg = _load_config(args.config)
     op = load_operator_config(
         base=cfg, host=args.host, port=args.port, insecure_local=args.insecure_local

@@ -116,9 +116,7 @@ class ImapLoginVerifier:
         await asyncio.to_thread(attempt)
 
 
-def login_profile(
-    domains: Mapping[str, ServerProfile], address: Address
-) -> ServerProfile | None:
+def login_profile(domains: Mapping[str, ServerProfile], address: Address) -> ServerProfile | None:
     return domains.get(address.domain)
 
 

@@ -14,6 +14,8 @@
 <p class="signed-in">{% trans address=address %}Signed in as {{ address }}.{% endtrans %}</p>
 {% if error == "csrf" %}
 <p class="error" role="alert">{{ _("The form has expired. Please try again.") }}</p>
+{% elif error == "nothing" %}
+<p class="error" role="alert">{{ _("Select at least one permission, or choose Deny.") }}</p>
 {% endif %}
 <form method="post" action="/authorize">
   {% for name, value in hidden.items() %}

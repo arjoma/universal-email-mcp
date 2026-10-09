@@ -380,6 +380,7 @@ async def test_portal_session_idle_and_absolute_timeout(store: Store, clock: Clo
     clock.advance(minutes=31)
     assert await store.authenticate_portal_session(raw, idle_timeout=idle) is None
     raw2, _ = await store.create_portal_session("u_1", ttl=timedelta(hours=1))
+    got = None
     for _ in range(3):
         clock.advance(minutes=25)
         got = await store.authenticate_portal_session(raw2, idle_timeout=idle)
