@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Sign in") }}{% endblock %}
+{% block heading %}{{ _("Sign in") }}{% endblock %}
+{% block body %}
+<p>{{ _("An application asks for access to your mailbox through this service. Sign in with your e-mail address and password to continue.") }}</p>
+{% include "_client.html" %}
+{% if error == "bad_credentials" %}
+<p class="error" role="alert">{{ _("Sign-in failed. Check your e-mail address and password.") }}</p>
+{% elif error == "rate_limited" %}
+<p class="error" role="alert">{{ _("Too many attempts. Please wait a few minutes and try again.") }}</p>
+{% elif error == "unavailable" %}
+<p class="error" role="alert">{{ _("The mail server could not be reached. Please try again later.") }}</p>
+{% elif error == "csrf" %}
+<p class="error" role="alert">{{ _("The form has expired. Please try again.") }}</p>
+{% endif %}
+<form method="post" action="/authorize" autocomplete="on">
+  {% for name, value in hidden.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="signin">
+  <label for="address">{{ _("E-mail address") }}</label>
+  <input id="address" name="address" type="email" inputmode="email" autocomplete="username" required autofocus maxlength="254" value="{{ address }}">
+  <label for="password">{{ _("Password") }}</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+  <p class="hint">{{ _("Your password is only used to check your login with your mail provider. It is not stored.") }}</p>
+  <div class="buttons">
+    <button type="submit" class="primary">{{ _("Sign in") }}</button>
+  </div>
+</form>
+{% endblock %}

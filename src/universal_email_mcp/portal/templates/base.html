@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}{% endblock %} - {{ _("Universal e-mail") }}</title>
+<link rel="stylesheet" href="/portal/assets/portal.css">
+</head>
+<body>
+<main>
+<h1>{% block heading %}{% endblock %}</h1>
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

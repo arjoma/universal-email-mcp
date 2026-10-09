@@ -54,6 +54,12 @@ class InvalidToken(MailError):
     code = "STORE_INVALID_TOKEN"
 
 
+class CodeReplay(InvalidToken):
+    """An authorization code was redeemed twice: the grant (and its tokens) was revoked."""
+
+    code = "STORE_CODE_REPLAY"
+
+
 class TokenReuse(InvalidToken):
     """A rotated refresh token was presented again: the whole grant was revoked."""
 
@@ -69,6 +75,7 @@ class SessionPolicy:
     absolute_max: timedelta = timedelta(days=90)
     pending_grant_ttl: timedelta = timedelta(minutes=10)
     auth_code_ttl: timedelta = timedelta(minutes=1)
+    consumed_code_ttl: timedelta = timedelta(minutes=10)
     client_unused_ttl: timedelta = timedelta(days=30)
     activity_ttl: timedelta = timedelta(days=30)
     approval_ttl: timedelta = timedelta(minutes=10)
@@ -280,6 +287,26 @@ class Store:
     async def get_portal_session(self, raw: str) -> PortalSession | None:
         return await self.get(PortalSession, hash_token(raw))
 
+    async def authenticate_portal_session(
+        self, raw: str, *, idle_timeout: timedelta
+    ) -> PortalSession | None:
+        """The live session, or None when unknown, past its absolute expiry or idle for
+        longer than ``idle_timeout``. ``last_seen`` is refreshed at most once per
+        ``touch_interval`` (a lost race is harmless)."""
+        rec = await self.get_portal_session(raw)
+        if rec is None:
+            return None
+        now = self.now()
+        if now - rec.last_seen > idle_timeout:
+            await self.delete(PortalSession, rec.id)
+            return None
+        if now - rec.last_seen >= self.policy.touch_interval:
+            try:
+                rec = await self.update(replace(rec, last_seen=now))
+            except StoreConflict:
+                pass
+        return rec
+
     async def delete_portal_session(self, raw: str) -> None:
         await self.delete(PortalSession, hash_token(raw))
 
@@ -338,8 +365,25 @@ class Store:
         return raw
 
     async def redeem_auth_code(self, raw: str) -> AuthCode | None:
-        """Single use: the code is gone afterwards, a second call returns None."""
-        return await self.take(AuthCode, hash_token(raw))
+        """Single use. None for an unknown or expired code.
+
+        The code stays as ``consumed`` for ``consumed_code_ttl``; presenting it again (or
+        racing another redeem) revokes the grant with the tokens issued from the code and
+        raises :class:`CodeReplay` (RFC 6749 section 4.1.2).
+        """
+        cur = await self.get(AuthCode, hash_token(raw))
+        if cur is None:
+            return None
+        if cur.consumed:
+            await self.revoke_grant(cur.grant_id)
+            raise CodeReplay("authorization code was already used; session revoked")
+        used = replace(cur, consumed=True, expires_at=self.now() + self.policy.consumed_code_ttl)
+        try:
+            await self.update(used)
+        except StoreConflict:
+            await self.revoke_grant(cur.grant_id)
+            raise CodeReplay("authorization code was used concurrently; session revoked") from None
+        return cur
 
     # -- grants and tokens ------------------------------------------------------------
 
@@ -357,6 +401,7 @@ class Store:
         client_id: str,
         client_name: str = "",
         account_ids: Sequence[str] = (),
+        account_scopes: dict[str, str] | None = None,
         identity_ids: Sequence[str] = (),
         scope: str = "",
     ) -> Grant:
@@ -370,6 +415,7 @@ class Store:
                 client_id=client_id,
                 client_name=client_name,
                 account_ids=tuple(account_ids),
+                account_scopes=dict(account_scopes or {}),
                 identity_ids=tuple(identity_ids),
                 scope=scope,
                 created_at=now,

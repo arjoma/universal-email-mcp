@@ -32,6 +32,7 @@ from universal_email_mcp.store.records import (
 )
 from universal_email_mcp.store.rotation import rotate_keys
 from universal_email_mcp.store.store import (
+    CodeReplay,
     InvalidToken,
     IssuedTokens,
     SessionPolicy,
@@ -45,6 +46,7 @@ __all__ = [
     "AlreadyExists",
     "AuthCode",
     "Backend",
+    "CodeReplay",
     "CryptoError",
     "Grant",
     "Identity",

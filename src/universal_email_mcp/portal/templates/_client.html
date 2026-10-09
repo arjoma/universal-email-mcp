@@ -1,0 +1,11 @@
+{# The application asking for access. Every value here is chosen by the client: shown
+   escaped (autoescape), cleaned of control characters, and length-limited in Python. #}
+<section class="client" aria-label="{{ _('Application') }}">
+  <p class="client-name">{% if client.name %}{{ client.name }}{% else %}<em>{{ _("(unnamed application)") }}</em>{% endif %}</p>
+  <dl>
+    <dt>{{ _("Identified by") }}</dt>
+    <dd>{% if client.registration == "cimd" %}<code>{{ client.id }}</code>{% else %}{{ _("Self-registered application (name not verified)") }}{% endif %}</dd>
+    <dt>{{ _("After you decide, you are sent to") }}</dt>
+    <dd><code>{{ redirect_host }}</code></dd>
+  </dl>
+</section>
