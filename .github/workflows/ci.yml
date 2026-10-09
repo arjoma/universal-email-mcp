@@ -46,7 +46,7 @@ jobs:
       # tmpfs: Dovecot fsyncs every write, which makes seeding ~100x slower on disk.
       - name: Start Dovecot
         env:
-          IMAGE: dovecot/dovecot:2.4.5@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553
+          IMAGE: ghcr.io/dovecot/dovecot:2.4.5@sha256:6b71744668f3da04e28e1fca14eb496224f99030eaef95564d29906dce189c90  # same as tests/dovecot.py
         run: |
           for i in 1 2 3 4 5; do docker pull "$IMAGE" && break; [ "$i" = 5 ] && exit 1; sleep $((i * 30)); done
           docker run -d --name dovecot --tmpfs /srv/vmail:rw,mode=1777 \

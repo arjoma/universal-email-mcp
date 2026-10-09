@@ -23,8 +23,9 @@ from collections.abc import Mapping, Sequence
 from imapclient import IMAPClient
 
 DOVECOT_IMAGE = (
-    "docker.io/dovecot/dovecot:2.4.5"
-    "@sha256:c807be4fb5a97d9c3a90770569d3a6c4cbdcb36742ad41f90409cbd929166553"
+    # Dovecot's own GHCR copy (Docker Hub limits anonymous pulls on CI runners).
+    "ghcr.io/dovecot/dovecot:2.4.5"
+    "@sha256:6b71744668f3da04e28e1fca14eb496224f99030eaef95564d29906dce189c90"
 )
 IMAPS_PORT = 31993
 """Implicit-TLS IMAP port inside the container."""
