@@ -266,7 +266,7 @@ async def test_raw_headers_and_source(env: Env):
         ref = env.put(addr, raw)
         mid = ref.encode()
         page = b.page(f"/m/{mid}/headers")
-        assert "Received" in page and "mx.example.com" in page
+        assert "Received" in page and re.search(r"from mx\.example\.com\s+by mail", page)
         assert "Authentication-Results" in page and "dkim=pass" in page
         assert "Message-ID" in page
         eml = b.get(f"/m/{mid}/eml")
