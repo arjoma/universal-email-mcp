@@ -31,6 +31,7 @@ from universal_email_mcp.oauth.clients import clean_text
 from universal_email_mcp.oauth.config import SCOPE_SEND, permission_of
 from universal_email_mcp.oauth.redirects import display_host
 from universal_email_mcp.portal import ops
+from universal_email_mcp.portal.activity import ActivityPages
 from universal_email_mcp.portal.approvals import ApprovalPages
 from universal_email_mcp.portal.i18n import LANG_COOKIE, language_name
 from universal_email_mcp.portal.service import PortalService
@@ -743,7 +744,7 @@ class PortalEndpoints:
         await self.svc.audit(
             "portal.account_remove",
             user=auth.user.id,
-            account=account.id,
+            account=account.name,  # the account is gone afterwards: the feed keeps its name
             grants=removal.grants_revoked if removal else 0,
             identities=removal.identities_removed if removal else 0,
         )
@@ -1199,6 +1200,7 @@ class PortalEndpoints:
 def portal_group(ps: PortalService) -> RouteGroup:
     ep = PortalEndpoints(ps)
     approvals = ApprovalPages(ep)
+    activity = ActivityPages(ep)
     get, post = ["GET"], ["POST"]
     routes = [
         Route("/portal", ep.home, methods=get),
@@ -1231,6 +1233,7 @@ def portal_group(ps: PortalService) -> RouteGroup:
         Route("/portal/clients/{grant_id}", ep.client_get, methods=get),
         Route("/portal/clients/{grant_id}", ep.client_save, methods=post),
         Route("/portal/clients/{grant_id}/revoke", ep.client_revoke, methods=post),
+        Route("/portal/activity", activity.index, methods=get),
         Route("/portal/approvals", approvals.index, methods=get),
         Route("/portal/approvals/{approval_id}", approvals.detail, methods=get),
         Route("/portal/approvals/{approval_id}", approvals.decide, methods=post),

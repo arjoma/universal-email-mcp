@@ -1,0 +1,70 @@
+{% extends "portal_base.html" %}
+{% block title %}{{ _("Activity") }}{% endblock %}
+{% block heading %}{{ _("Activity") }}{% endblock %}
+{% block body %}
+<p class="hint">{% trans days=days %}What your connected applications and you did lately, newest first. Only counts and names are kept, never the content of your mail. Entries disappear after {{ days }} day.{% pluralize %}What your connected applications and you did lately, newest first. Only counts and names are kept, never the content of your mail. Entries disappear after {{ days }} days.{% endtrans %}</p>
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">{{ _("When") }}</th>
+      <th scope="col">{{ _("What happened") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in rows %}
+    {% set client = e.client if e.client else _("an application that is no longer connected") %}
+    {% set account = e.account if e.account else _("a mail account that no longer exists") %}
+    {% set n = e.counts.succeeded|default(0) %}
+    <tr>
+      <td>{{ e.when }}</td>
+      <td>
+        {%- if e.event == "auth.sign_in" %}{{ _("You signed in to the portal.") }}
+        {%- elif e.event == "auth.consent" %}{% trans client=client %}You connected {{ client }}.{% endtrans %}
+        {%- elif e.event == "auth.revoke" %}{% trans client=client %}{{ client }} disconnected itself.{% endtrans %}
+        {%- elif e.event == "portal.grant_edit" %}{% trans client=client %}You changed what {{ client }} may do.{% endtrans %}
+        {%- elif e.event == "portal.grant_revoke" %}{% trans client=client %}You disconnected {{ client }}.{% endtrans %}
+        {%- elif e.event == "portal.account_add" %}{% trans account=account %}You added the mail account {{ account }}.{% endtrans %}
+        {%- elif e.event == "portal.account_test" %}{% trans account=account %}You tested the connection of the mail account {{ account }}.{% endtrans %}
+        {%- elif e.event == "portal.account_permissions" %}{% trans account=account %}You changed the permissions of the mail account {{ account }}.{% endtrans %}
+        {%- elif e.event == "portal.account_password" %}{% trans account=account %}You changed the password of the mail account {{ account }}.{% endtrans %}
+        {%- elif e.event == "portal.account_remove" %}{% trans account=account %}You removed the mail account {{ account }}.{% endtrans %}
+        {%- elif e.event == "portal.identity_add" %}{{ _("You added a sender identity.") }}
+        {%- elif e.event == "portal.identity_edit" %}{{ _("You changed a sender identity.") }}
+        {%- elif e.event == "portal.identity_remove" %}{{ _("You removed a sender identity.") }}
+        {%- elif e.event == "portal.identity_test" %}{{ _("You tested a sender identity.") }}
+        {%- elif e.event == "tool.call" %}
+          {%- if e.tool == "find_messages" %}{% trans client=client, count=e.calls %}{{ client }} searched your mail once.{% pluralize count %}{{ client }} searched your mail {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "get_message" %}{% trans client=client, count=e.calls %}{{ client }} read a message once.{% pluralize count %}{{ client }} read messages {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "get_attachment" %}{% trans client=client, count=e.calls %}{{ client }} read an attachment once.{% pluralize count %}{{ client }} read attachments {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "list_folders" %}{% trans client=client, count=e.calls %}{{ client }} listed your folders once.{% pluralize count %}{{ client }} listed your folders {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "find_contacts" %}{% trans client=client, count=e.calls %}{{ client }} searched your contacts once.{% pluralize count %}{{ client }} searched your contacts {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "account_info" %}{% trans client=client, count=e.calls %}{{ client }} looked up your account information once.{% pluralize count %}{{ client }} looked up your account information {{ count }} times.{% endtrans %}
+          {%- elif e.tool == "mark_messages" %}{% trans client=client, count=n %}{{ client }} marked {{ count }} message (read or flagged).{% pluralize count %}{{ client }} marked {{ count }} messages (read or flagged).{% endtrans %}
+          {%- elif e.tool == "move_messages" %}{% trans client=client, count=n %}{{ client }} moved {{ count }} message.{% pluralize count %}{{ client }} moved {{ count }} messages.{% endtrans %}
+          {%- elif e.tool == "delete_messages" %}{% trans client=client, count=n %}{{ client }} moved {{ count }} message to the trash.{% pluralize count %}{{ client }} moved {{ count }} messages to the trash.{% endtrans %}
+          {%- elif e.tool == "create_folder" %}{% trans client=client %}{{ client }} created a folder.{% endtrans %}
+          {%- elif e.tool == "save_draft" %}{% trans client=client %}{{ client }} saved a draft.{% endtrans %}
+          {%- else %}{% trans client=client %}{{ client }} used a tool.{% endtrans %}{% endif %}
+        {%- elif e.event == "send" %}{% trans client=client %}{{ client }} sent a message for you.{% endtrans %}
+        {%- elif e.event == "send.declined" %}{% trans client=client %}You declined a message that {{ client }} wanted to send.{% endtrans %}
+        {%- elif e.event == "send.draft_kept" %}{% trans client=client %}A message from {{ client }} was kept as a draft instead of being sent.{% endtrans %}
+        {%- elif e.event == "send.approval_requested" %}{% trans client=client %}{{ client }} asked for your approval to send a message.{% endtrans %}
+        {%- elif e.event == "send.failed" %}{% trans client=client %}Sending a message for {{ client }} failed.{% endtrans %}
+        {%- elif e.event == "approval.approved" %}{{ _("You approved a message to be sent.") }}
+        {%- elif e.event == "approval.rejected" %}{{ _("You rejected a message.") }}
+        {%- elif e.event == "approval.refused" %}{{ _("An approval could not be completed (the message changed or was already decided).") }}
+        {%- elif e.event == "viewer.open" %}{{ _("You opened a message in the viewer.") }}
+        {%- elif e.event == "viewer.raw" %}{{ _("You looked at the raw source of a message.") }}
+        {%- elif e.event == "attachment.download" %}{{ _("You downloaded an attachment.") }}
+        {%- else %}{{ _("Other activity.") }}{% endif %}
+        {%- if e.failed %} <strong>{{ _("(did not succeed)") }}</strong>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="note">{{ _("No activity yet.") }}</p>
+{% endif %}
+{% endblock %}

@@ -13,7 +13,7 @@ Every event is a single JSON line with a fixed shape::
   (:data:`FIELDS`) that validates the value. A value that does not fit is replaced by
   ``"invalid"`` (strict mode, used by the tests: an error), a field that is not allowed
   is dropped. So even a call site that passes mail text by mistake cannot leak it:
-  tokens cannot contain ``@``, spaces or more than 48 characters.
+  tokens cannot contain ``@``, spaces, ``/`` or ``:`` and are at most 24-character words.
 * Identifiers are **pseudonyms**: ``user`` is the short form of the (already keyed)
   user id; ``client``, ``account``, ``grant``, ``identity`` and ``approval`` become
   ``<letter>_<12 hex>`` of an HMAC-SHA256 under the pseudonym key (``PSEUDONYM_KEY`` in
@@ -54,7 +54,7 @@ FEED_TIMEOUT = 3.0
 
 INVALID = "invalid"
 
-_TOKEN = re.compile(r"[A-Za-z0-9_.:<>=+/-]{1,48}")
+_TOKEN = re.compile(r"[A-Za-z0-9_<>=+-]{1,24}(\.[A-Za-z0-9_<>=+-]{1,24}){0,2}")
 _USER = re.compile(r"u_[0-9a-f]{8,64}")
 
 
@@ -67,7 +67,8 @@ class AuditSchemaError(ValueError):
 # kind -> how the value is checked / transformed
 #   user   a user id (already a keyed pseudonym); logged as its first 14 characters
 #   ref:X  a raw id (client id, account id ...), logged as X_<hmac>
-#   tok    short token: letters, digits and _.:<>=+/-  (no spaces, no '@')
+#   tok    short token: up to three dot-separated words of letters, digits and _<>=+-
+#          (no spaces, '@', '/', ':'; an IP address or a URL is not a token)
 #   words  up to 12 tokens separated by single spaces (scopes, permissions)
 #   int    non-negative integer
 #   bool   boolean
