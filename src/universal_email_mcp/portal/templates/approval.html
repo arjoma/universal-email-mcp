@@ -53,6 +53,14 @@
   {% if view.text_note %}<p class="error">{{ view.text_note }}</p>{% endif %}
   {% elif view.has_text %}<p class="note">{{ _("(empty)") }}</p>
   {% else %}<p class="note">{{ _("(no plain text)") }}</p>{% endif %}
+  {% if view.preview_note %}<p class="error">{{ view.preview_note }}</p>{% endif %}
+  {% if view.html %}
+  <h2>{{ view.html_heading }}</h2>
+  <pre class="mailtext">{% for line in view.html %}{{ line }}
+{% endfor %}</pre>
+  {% if view.html_note %}<p class="error">{{ view.html_note }}</p>{% endif %}
+  {% endif %}
+  {% if view.images_warning %}<p class="error">{{ view.images_warning }}</p>{% endif %}
   {% if view.quoted %}
   <details>
     <summary>{% trans count=view.quoted|length %}Quoted text: {{ count }} line (not part of what the application wrote; expand to read){% pluralize %}Quoted text: {{ count }} lines (not part of what the application wrote; expand to read){% endtrans %}</summary>

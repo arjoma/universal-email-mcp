@@ -57,7 +57,12 @@ from universal_email_mcp.errors import (
 from universal_email_mcp.mail import smtp
 from universal_email_mcp.mail.imap import ANSWERED_FLAGS, ImapSession
 from universal_email_mcp.mail.mime import sanitize_line, sanitize_text
-from universal_email_mcp.mail.outgoing import Outgoing, parse_outgoing, strip_headers
+from universal_email_mcp.mail.outgoing import (
+    MAX_TEXT_CHARS,
+    Outgoing,
+    parse_outgoing,
+    strip_headers,
+)
 from universal_email_mcp.models import Account, Address, Identity, MessageRef
 from universal_email_mcp.server import render
 from universal_email_mcp.service.drafts import Built, Drafter, drafts_folder
@@ -282,24 +287,67 @@ def confirmation_text(
             out_lines.append(cut_note)
     else:
         out_lines.append("> (no plain text)" if not out.has_text_body else "> (empty)")
+    if out.preview_cut:
+        out_lines.append(preview_cut_note(out))
     if quoted.strip():
         q_lines = len(quoted.strip().split("\n"))
         out_lines.append(f"[quoted original: {q_lines} lines, not shown]")
-    return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + MAX_CONFIRM_CHARS]
+    if out.html_shown:
+        html_lines, html_note = html_excerpt(out)
+        out_lines += ["", html_heading(out)]
+        out_lines += ["> " + ln for ln in html_lines]
+        if html_note:
+            out_lines.append(html_note)
+    if out.remote_images:
+        out_lines += ["", remote_images_warning(out)]
+    return (head + "\n".join(out_lines))[: MAX_HEAD_CHARS + 200 + 2 * MAX_CONFIRM_CHARS]
+
+
+def preview_cut_note(out: Outgoing) -> str:
+    return f"... {out.preview_cut} more characters beyond the first {MAX_TEXT_CHARS} NOT shown"
+
+
+def html_heading(out: Outgoing) -> str:
+    return (
+        "HTML version (differs from the text above - recipients with an HTML mail client "
+        "read this):"
+        if out.has_text_body
+        else "HTML version (the message has no plain text part - recipients read this):"
+    )
+
+
+def html_excerpt(out: Outgoing) -> tuple[list[str], str]:
+    """Lines of the HTML version's text and the notice for what is cut (same rules as the
+    plain text; the 300000-character cut of the extraction is announced too)."""
+    lines, note = text_excerpt(out.html_text)
+    if out.html_cut:
+        extra = f"... {out.html_cut} more characters of the HTML version NOT shown"
+        note = f"{note}\n{extra}" if note else extra
+    return lines, note
+
+
+def remote_images_warning(out: Outgoing) -> str:
+    return (
+        f"! The HTML version loads {out.remote_images} remote image(s): they can tell the "
+        "sender when and where the mail is read (tracking)."
+    )
 
 
 def text_excerpt(text: str) -> tuple[list[str], str]:
     """The part of a message text a confirmation shows, sanitised and defanged: its lines
     and - when something was cut - the notice saying how much (never silent). The rules
     are shared by the elicitation prompt and the portal's approval page."""
-    body = render.defang_body(sanitize_text(text)).strip()
-    if not body:
+    plain = sanitize_text(text).strip()
+    if not plain:
         return [], ""
+    # Defanging is slow on very long unbroken runs: only the part that can be shown goes
+    # through it (twice the limit leaves room for the longer defanged form).
+    body = render.defang_body(plain[: 2 * SHOW_TEXT_CHARS]).strip()
     shown = "\n".join(body[:SHOW_TEXT_CHARS].split("\n")[:SHOW_TEXT_LINES])
-    cut = len(body) - len(shown)
+    cut = len(plain) - len(shown) if len(plain) > 2 * SHOW_TEXT_CHARS else len(body) - len(shown)
     note = ""
     if cut > 0:
-        n_lines = body.count("\n") - shown.count("\n")
+        n_lines = plain.count("\n") - shown.count("\n")
         note = f"... {cut} more characters ({n_lines} lines) of the text NOT shown"
     return shown.split("\n"), note
 

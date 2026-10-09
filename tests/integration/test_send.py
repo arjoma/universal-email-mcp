@@ -690,3 +690,31 @@ async def test_audit_events_have_counts_but_no_addresses_or_content(
     blob = " ".join(r.getMessage() for r in caplog.records if r.name == LOGGER_NAME)
     for secret in ("alice@", "stranger", "Hallo", "Guten Tag", env.work.user):
         assert secret not in blob
+
+
+# ---------------------------------------------------------------- HTML alternatives
+
+
+def _html_draft(subject: str, plain: str, html: str) -> bytes:
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "me@example.org", "alice@example.org", subject
+    m["Message-ID"] = f"<{uuid.uuid4().hex}@example.org>"
+    m.set_content(plain)
+    m.add_alternative(html, subtype="html")
+    return m.as_bytes()
+
+
+async def test_the_confirmation_shows_a_differing_html_part(env: Env):
+    env.append(
+        "Drafts",
+        _html_draft("Mit HTML", "Harmloser Text", "<p>Ueberweisen Sie 5000 EUR</p>"),
+        flags=(b"\\Draft",),
+    )
+    answers = Answers()
+    async with connect(env.config(), answers) as c:
+        draft = await inbox_id(c, "Mit HTML", "Drafts")
+        _md, data = await call(c, "send_message", draft_id=draft)
+    assert data["status"] == "sent"
+    (prompt,) = answers.prompts
+    assert "> Harmloser Text" in prompt and "HTML version (differs" in prompt
+    assert "> Ueberweisen Sie 5000 EUR" in prompt
