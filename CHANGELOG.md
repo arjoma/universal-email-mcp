@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a
+  stable shape (`event`, `message`, `severity`, `ts`, `instance`, `request_id`, ...), written to
+  **stdout** by `serve` (Cloud Logging reads `severity`) and to stderr by the local stdio server. A
+  per-event allow-list drops unknown fields and replaces values that do not look like short
+  tokens, so mail text cannot reach the log by mistake. Ids are keyed pseudonyms (`PSEUDONYM_KEY`,
+  a per-install key in local mode): account names, client ids and grant/approval ids are no longer
+  logged in clear. IP addresses are never logged; with `AUDIT_LOG_CLIENT_IP` sign-in and
+  rate-limit events carry a keyed pseudonym of the network.
+- Firestore backend: creates and unconditional deletes are written as precondition-free batches
+  that retry when Firestore aborts them under contention, and `Store.get_or_create_user`
+  retries; two intermittent failures under load (concurrent sign-in of one user, concurrent
+  redemption of one authorization code) are fixed.
 - Remote mode: signing in (portal and OAuth) now only verifies the password. The mailbox
   password is stored sealed, and the account "Main" plus a sender identity created, only if
   the user ticks the pre-ticked opt-in checkbox "Use this mailbox with AI clients (stores the
@@ -17,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Own-activity feed and the portal page **Activity** (`/portal/activity`): the user's recent
+  events in plain words - sign-in, connecting and disconnecting applications, account and
+  identity changes, what applications did (a `tool.call` audit event per MCP tool call in OAuth
+  mode, with counts for changes; reads merged per hour), sends, approvals, viewer use. Names are
+  resolved from the user's own records when the page renders; 30 days; translatable.
+- Documentation of log-based metrics and alert policies for failed sign-ins, token replay, send
+  failures, rate limits and 5xx (`docs/deploy-gcp.md`).
 - The send confirmation (elicitation prompt and portal approval page) now covers every body the
   recipients get: an HTML version that differs from the plain text, or is the only body, is shown
   as text under its own heading, remote images are warned about, and cuts (also the 300000

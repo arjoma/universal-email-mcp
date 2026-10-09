@@ -304,24 +304,97 @@ Test a restore once into a scratch database before you rely on it.
   Cloud Run ships them to Cloud Logging, where `severity` is interpreted. HTTP request lines
   carry `event=http_request`, `route` (a pattern, never a message id or token), `status`,
   `duration_ms` and `request_id` (the same id is in the `X-Request-Id` response header).
-- **Audit events** (`event`, `ts`, outcome, counts, size buckets, account names; never
-  addresses, subjects, bodies, search terms or secrets) are JSON lines on stderr, which
-  Cloud Run also collects (`jsonPayload.event`). Filter, for example:
-  `resource.type="cloud_run_revision" AND jsonPayload.event=~"^(send|policy|portal.login)"`.
+- **Audit events** are JSON lines on stdout too (the same stream, told apart by the `event`
+  field), with `severity` (`INFO`, `WARNING`, `ERROR`), `event`, `ts`, `instance` (the revision),
+  `request_id`, pseudonyms (`user`, `grant`, `client`, `account`, ...), outcome codes, counts and
+  size/duration buckets - never addresses, subjects, bodies, folder or file names, search terms,
+  tool arguments, IP addresses or secrets. Reference: [audit.md](audit.md). Filter in Logs
+  Explorer, for example: `resource.type="cloud_run_revision" AND jsonPayload.event=~"^send\."`
+  or `jsonPayload.event:* AND jsonPayload.message=jsonPayload.event AND severity>=WARNING`.
   The pseudonymous user id (`u_...`) is personal data for whoever holds the pseudonym key:
   route the service's logs to a dedicated log bucket with a defined retention (for example
   90 days), restrict access to it, and document the purpose (GDPR; in some countries works-council
-  rules apply; not legal advice). The log fields are aligned with Cloud Logging in work package 3h.
+  rules apply; not legal advice). `AUDIT_LOG_CLIENT_IP=true` (default off) adds a keyed
+  pseudonym of the client's network to sign-in and rate-limit events.
 - Never set `UEM_LOG_LEVEL=DEBUG` in production.
 - **Alerting basics** (Monitoring):
   - Uptime check on `https://mail.example.org/ready` (alert if it fails from two regions).
   - Cloud Run `request_count` with `response_code_class=5xx` above a small threshold, and
     request latency p95.
-  - Log-based metrics for `jsonPayload.event="ratelimit.hit"`, `policy.denied`, failed
-    sign-ins, `send.failed`, with an alert on a sudden rise.
+  - Log-based metrics and alerts on audit events: see the examples below.
   - Secret Manager: an alert on `secretmanager.googleapis.com` access of the two secrets
     by anyone but the runtime account (Data Access audit logs).
   - Budget alert on the project.
+
+### Log-based metrics and alert examples
+
+Replace `SERVICE` with the Cloud Run service name. Counter metrics (the audit events carry
+`severity` and `event`, so no log parsing is needed):
+
+```bash
+SVC='resource.type="cloud_run_revision" AND resource.labels.service_name="SERVICE"'
+
+# failed sign-ins (wrong password, unknown domain, login server unavailable)
+gcloud logging metrics create uem_signin_failures \
+  --description="Failed sign-ins" \
+  --log-filter="$SVC AND jsonPayload.event=\"auth.sign_in\" AND jsonPayload.outcome!=\"ok\""
+
+# token / authorization-code replay (a stolen or duplicated credential was presented again)
+gcloud logging metrics create uem_token_replay \
+  --description="Token or code replay" \
+  --log-filter="$SVC AND (jsonPayload.event=\"auth.code_replay\" OR (jsonPayload.event=\"auth.token\" AND jsonPayload.outcome=\"tokenreuse\"))"
+
+# send failures (SMTP rejected, unknown outcome, unexpected error)
+gcloud logging metrics create uem_send_failures \
+  --description="Failed sends" \
+  --log-filter="$SVC AND (jsonPayload.event=\"send.failed\" OR jsonPayload.event=\"approval.send_failed\")"
+
+# rate limits hit (the scope field tells which: signin_ip, signin_address, token_ip, register, ...)
+gcloud logging metrics create uem_ratelimit_hits \
+  --description="Rate limit hits" \
+  --log-filter="$SVC AND jsonPayload.event=\"ratelimit.hit\""
+
+# CSRF failures and refused clients / redirects
+gcloud logging metrics create uem_auth_refusals \
+  --description="CSRF and client/redirect refusals" \
+  --log-filter="$SVC AND jsonPayload.event=~\"^auth\\.(csrf_failed|client_refused|redirect_refused)$\""
+
+# server errors (the request lines have event=http_request)
+gcloud logging metrics create uem_http_5xx \
+  --description="Server errors" \
+  --log-filter="$SVC AND jsonPayload.event=\"http_request\" AND jsonPayload.status>=500"
+```
+
+An alert on a metric (here: more than 20 failed sign-ins within 5 minutes; copy the file for the
+other metrics and adjust name, metric and threshold). Create a notification channel first
+(`gcloud beta monitoring channels list` shows the ids):
+
+```json
+{
+  "displayName": "uem: failed sign-ins spike",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "more than 20 failed sign-ins in 5 minutes",
+    "conditionThreshold": {
+      "filter": "metric.type=\"logging.googleapis.com/user/uem_signin_failures\" AND resource.type=\"cloud_run_revision\"",
+      "aggregations": [{"alignmentPeriod": "300s", "perSeriesAligner": "ALIGN_SUM",
+                        "crossSeriesReducer": "REDUCE_SUM"}],
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 20,
+      "duration": "0s"
+    }
+  }],
+  "notificationChannels": ["projects/PROJECT/notificationChannels/CHANNEL_ID"]
+}
+```
+
+```bash
+gcloud alpha monitoring policies create --policy-from-file=signin-alert.json
+```
+
+Suggested thresholds: failed sign-ins > 20 / 5 min (a guessing run; the per-address and per-IP
+rate limits keep it small), **token replay > 0** (always worth a look), send failures > 3 / 10 min,
+rate-limit hits > 50 / 5 min, 5xx > 5 / 5 min. A metric counts from the moment it is created.
 
 ## 11. Upgrade and rollback
 

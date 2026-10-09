@@ -192,10 +192,22 @@ request, transfer encoding undone incrementally), never buffered whole; the size
 decoded length in advance, so those responses are chunked. POP3 has no server-side parts: there
 the message is read as a whole (up to `UEM_MAX_MESSAGE_BYTES`).
 
-Audit events: `viewer.open` (kind message or thread, whether HTML was shown, attachment count,
+Audit events and activity entries: `viewer.open` (kind message or thread, whether HTML was shown, attachment count,
 size bucket), `viewer.raw` (headers; `.eml` with size bucket) and `attachment.download`
 (size bucket, content-type family, whether the stream completed) - pseudonymous user, no names,
 subjects or content.
+
+## Activity
+
+`/portal/activity` lists the signed-in user's own recent events, newest first, in plain words
+("You connected My Assistant.", "My Assistant searched your mail 14 times.", "My Assistant moved 3
+messages.", "You declined a message that My Assistant wanted to send."): sign-in, connecting and
+disconnecting applications, changes to accounts and identities, what the applications did (tool
+calls with counts, merged per hour for reads), sends and approvals, viewer use. The store keeps
+only ids, labels and counts (30 days, see [stored-data.md](stored-data.md)); application and
+account names are looked up in the user's own records when the page is shown, and what no longer
+exists reads as "an application that is no longer connected". The page only ever reads the
+signed-in user's entries. The text is translatable like every other page. Details: [audit.md](audit.md).
 
 ## Language
 
@@ -224,7 +236,7 @@ appears in the footer (it sets the `uem_lang` cookie). Order: cookie, `Accept-La
 * Passwords are never rendered, logged or put in a URL; forms never repeat them, even after
   an error. Pages show account names, hosts and user names to their owner only (every id is
   checked against the signed-in user; foreign ids answer 404).
-* Audit events (stderr JSON, see [oauth.md](oauth.md)): `portal.account_add`,
+* Audit events (JSON, see [audit.md](audit.md)): `portal.account_add`,
   `portal.account_test`, `portal.account_permissions`, `portal.account_password`,
   `portal.account_remove`, `portal.identity_add`, `portal.identity_edit`,
   `portal.identity_test`, `portal.identity_remove`, `portal.grant_edit`,
