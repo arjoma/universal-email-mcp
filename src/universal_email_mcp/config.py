@@ -84,12 +84,26 @@ class Limits:
 
 
 @dataclass(frozen=True, slots=True)
+class Downloads:
+    """Local mode: the loopback listener behind attachment download links."""
+
+    enabled: bool = True
+    port: int = 0
+    """TCP port on 127.0.0.1; 0 = a random free port per run."""
+    link_ttl: float = 24 * 3600.0
+    """Seconds a download link stays valid (it never outlives the process)."""
+    max_download_bytes: int = 100 * 1024 * 1024
+    """Largest decoded attachment the listener streams."""
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     accounts: tuple[Account, ...] = ()
     identities: tuple[Identity, ...] = ()
     policy: Policy = Policy()
     limits: Limits = Limits()
     settings: Settings = Settings()
+    downloads: Downloads = Downloads()
     path: Path | None = field(default=None, compare=False)
 
     def account(self, name: str) -> Account:
@@ -159,6 +173,7 @@ def load_config(
         policy=cfg.policy,
         limits=cfg.limits,
         settings=cfg.settings,
+        downloads=cfg.downloads,
         path=p,
     )
 
@@ -247,10 +262,15 @@ class _Ctx:
 def parse_config(data: Mapping[str, Any], *, source: str = "config") -> Config:
     """Validate a parsed TOML document and build a :class:`Config`."""
     c = _Ctx(source)
-    c.check_keys(data, ("settings", "policy", "limits", "accounts", "identities"), "top level")
+    c.check_keys(
+        data,
+        ("settings", "policy", "limits", "downloads", "accounts", "identities"),
+        "top level",
+    )
     settings = _parse_settings(c, c.table(data.get("settings", {}), "[settings]"))
     policy = _parse_policy(c, c.table(data.get("policy", {}), "[policy]"))
     limits = _parse_limits(c, c.table(data.get("limits", {}), "[limits]"))
+    downloads = _parse_downloads(c, c.table(data.get("downloads", {}), "[downloads]"))
 
     raw_accounts = data.get("accounts", [])
     if not isinstance(raw_accounts, list):
@@ -280,6 +300,7 @@ def parse_config(data: Mapping[str, Any], *, source: str = "config") -> Config:
         policy=policy,
         limits=limits,
         settings=settings,
+        downloads=downloads,
     )
 
 
@@ -289,6 +310,24 @@ def _parse_settings(c: _Ctx, t: dict[str, Any]) -> Settings:
         allow_private_networks=c.bool_(t, "allow_private_networks", "[settings]", True),
         connect_timeout=c.num(t, "connect_timeout", "[settings]", 15.0),
         read_timeout=c.num(t, "read_timeout", "[settings]", 60.0),
+    )
+
+
+def _parse_downloads(c: _Ctx, t: dict[str, Any]) -> Downloads:
+    w = "[downloads]"
+    c.check_keys(t, ("enabled", "port", "link_ttl", "max_download_bytes"), w)
+    d = Downloads()
+    port = t.get("port", d.port)
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
+        raise c.err(w, "'port' must be 0 (random free port) or a port number up to 65535")
+    ttl = c.num(t, "link_ttl", w, d.link_ttl)
+    return Downloads(
+        enabled=c.bool_(t, "enabled", w, d.enabled),
+        port=port,
+        link_ttl=ttl,
+        max_download_bytes=int(
+            c.num(t, "max_download_bytes", w, d.max_download_bytes, integer=True)
+        ),
     )
 
 

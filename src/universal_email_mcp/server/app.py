@@ -20,7 +20,6 @@ wildcard or fuzzy, see :mod:`universal_email_mcp.service.query`.
 import base64
 import functools
 import logging
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, Literal
 
@@ -41,7 +40,7 @@ from universal_email_mcp.errors import InvalidArgument, MailError
 from universal_email_mcp.mail.bodystructure import sniff_image
 from universal_email_mcp.mail.folders import decode_folder_name
 from universal_email_mcp.mail.imap import SearchCriteria
-from universal_email_mcp.mail.mime import fence_untrusted
+from universal_email_mcp.mail.mime import fence_untrusted, safe_mime_type
 from universal_email_mcp.models import Address
 from universal_email_mcp.server import render
 from universal_email_mcp.server.render import escape_cell, fmt_datetime, markdown_table
@@ -109,7 +108,9 @@ Workflow:
 - get_message reads one message by its id; thread=true shows its conversation.
   It lists the attachments with an id each; get_attachment(id, attachment) returns
   one: small text files as quoted text, other files as an embedded resource (size
-  limit; bigger files only as a download link when the server offers one).
+  limit; bigger files only as a download link when the server offers one). Download
+  links open in the user's browser; locally they only work while this server runs
+  and expire after a while - ask again for a fresh link instead of reusing old ones.
 - list_folders shows the top level first; drill down with parent="…", search all
   levels with query="…" ("müller*" matches folder names, "clients/m*" paths).
 - find_contacts lists recent correspondents; query="…" finds a person.
@@ -297,44 +298,6 @@ def _overview_text(ov: Overview | None) -> str:
     parts = [f"{ov.folders} folders"]
     parts += [f"{x.role} {x.unread} unread / {x.messages}" for x in ov.special]
     return escape_cell(", ".join(parts), 120)
-
-
-_MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}$")
-
-
-_PASSIVE_TYPES = frozenset(
-    {
-        "application/pdf",
-        "application/zip",
-        "application/gzip",
-        "application/x-7z-compressed",
-        "application/vnd.rar",
-        "application/rtf",
-        "application/msword",
-        "application/vnd.ms-excel",
-        "application/vnd.ms-powerpoint",
-        "application/message",
-        "message/rfc822",
-    }
-)
-_PASSIVE_PREFIXES = (
-    "application/vnd.openxmlformats-officedocument.",
-    "application/vnd.oasis.opendocument.",
-    "audio/",
-    "video/",
-)
-
-
-def _safe_mime_type(declared: str) -> str:
-    """Label for a returned file: the sender's type only if it is a well-formed
-    member of an allowlist of passive types; everything else (every text-like,
-    HTML, XML, SVG, script type …) is ``application/octet-stream``, so a client
-    never gets a blob it might render or execute."""
-    d = declared.lower()
-    if _MIME_TYPE.match(d) and (d in _PASSIVE_TYPES or d.startswith(_PASSIVE_PREFIXES)):
-        if not d.endswith(("+xml", "+json")):
-            return d
-    return "application/octet-stream"
 
 
 def _message_table(
@@ -1043,7 +1006,7 @@ def build_server(service: MailService) -> MCPServer:
         res = await service.get_attachment(id, attachment, offset=offset, max_chars=max_chars)
         leaf = res.leaf
         name = leaf.filename
-        ctype = _safe_mime_type(leaf.content_type)
+        ctype = safe_mime_type(leaf.content_type)
         size_txt = ("" if res.size_exact else "about ") + render.fmt_size(res.size)
         fields = [
             ["Attachment", escape_cell(name or "(unnamed)", 100)],

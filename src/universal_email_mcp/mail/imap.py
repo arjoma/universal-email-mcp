@@ -1265,6 +1265,14 @@ class ImapSession:
                 return value
         return b""
 
+    def read_part_chunk(self, ref: MessageRef, section: str, offset: int, length: int) -> bytes:
+        """One self-contained chunk of a streamed download: re-selects the folder
+        (another call may have used the session since the last chunk), re-checks
+        account and UIDVALIDITY, then :meth:`read_part_range`. A message that is gone
+        raises :class:`MessageNotFound`."""
+        self._open_message(ref)
+        return self.read_part_range(ref, section, offset, length)
+
     def fetch_attachment(self, ref: MessageRef, section: str, *, max_bytes: int) -> AttachmentData:
         """Decoded bytes of one part, or only its metadata when it is bigger than
         ``max_bytes`` (nothing is fetched then). Memory is bounded: the encoded

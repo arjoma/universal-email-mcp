@@ -29,6 +29,15 @@ account_timeout = 30                  # seconds per account in a fan-out
 max_headers_scanned = 2000            # headers per account for fuzzy search / contacts
 max_batch_messages = 50               # messages per mark / move / delete call
 
+[downloads]
+# Local mode serves attachment download links from a listener on 127.0.0.1 (never
+# another interface): http://127.0.0.1:<port>/a/<signed token>. The key is random per
+# run, so links stop working when the server stops and after link_ttl.
+enabled = true
+port = 0                              # 0 = a random free port per run
+link_ttl = 86400                      # seconds a link stays valid
+max_download_bytes = 104857600        # largest decoded attachment streamed (100 MiB)
+
 # ---------------------------------------------------------------- accounts
 # kind: "imap" (default) or "pop3". server: a preset name (united-domains) or a
 # host name (then 993/995/465 with implicit TLS). [accounts.imap|pop3|smtp]
