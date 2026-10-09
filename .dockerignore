@@ -1,0 +1,22 @@
+.git
+.github
+.venv
+.claude
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.basedpyright
+tests
+scripts
+docs
+dist
+build
+# local test setup and secrets
+.env
+.env.*
+*.local.toml
+config.local.toml
+sandbox.local.toml
+*.pem
+*.key

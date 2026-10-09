@@ -3,6 +3,9 @@
 # Default location: ~/.config/universal-email-mcp/config.toml (Linux; the platform
 # config directory elsewhere). Override with --config or the UEM_CONFIG variable.
 #
+# `universal-email-mcp serve` (remote mode preview) reads this file too and takes the
+# deployment settings from the environment instead: see docs/operator-env.md.
+#
 # Passwords are NEVER written here. Each account either names an environment
 # variable (password_env) or uses the OS keyring:
 #   keyring set universal-email-mcp <account name or keyring_key>

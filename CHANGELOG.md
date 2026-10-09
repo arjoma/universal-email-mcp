@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `universal-email-mcp serve` (remote mode, work package 3a - a dev/test preview): a
+  Starlette app on uvicorn with `/mcp` (the SDK's Streamable HTTP in stateless mode:
+  protocol 2026-07-28 and the legacy sessionless transport), `/health` (liveness) and
+  `/ready` (readiness hook for the store). Until OAuth exists `/mcp` requires the static
+  bearer token `UEM_DEV_TOKEN` (the server refuses to start without it; `--insecure-local`
+  binds loopback only and leaves `/mcp` open) and serves the accounts of a TOML config.
+  Operator configuration from the environment (`PORT`, `PUBLIC_URL`, `ALLOWED_HOSTS`,
+  `ALLOWED_ORIGINS`, `MAIL_SERVERS`, `LOGIN_DOMAINS`, limits, policy; `docs/operator-env.md`)
+  with startup errors naming the variable. Hardening: Host/Origin validation (DNS
+  rebinding), request body limit, security headers on non-MCP responses, no CORS,
+  generic errors without stack traces, request ids, JSON logs on stdout, graceful
+  shutdown. Multi-stage `Dockerfile` (uv, non-root, `PORT`, healthcheck) and `.dockerignore`.
 - Folder map in the server instructions: in `local` mode the folder lists of all
   accounts are read at startup (in parallel, 3 s overall; a slow or unreachable
   account is shown as "not read at startup" and never blocks the server) and the
