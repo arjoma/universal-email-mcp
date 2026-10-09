@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.dovecot import insecure_ctx
 from tests.smtp_sink import SmtpSink
 from universal_email_mcp.errors import (
     AuthFailed,
@@ -104,9 +105,7 @@ def test_a_trusted_certificate_for_another_host_name_is_refused():
 def _der(sink: SmtpSink) -> bytes:
     import socket
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = insecure_ctx()
     with socket.create_connection(("127.0.0.1", sink.port), timeout=5) as raw:
         raw.recv(100)
         raw.sendall(b"EHLO x\r\n")
