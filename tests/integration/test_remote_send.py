@@ -415,6 +415,7 @@ async def test_fallback_portal_always_waits_for_the_user(imap_server: ImapServer
     async with remote(imap_server, policy=policy(fallback="portal")) as r:
         u = await r.user()
         token, grant_id = await r.token(u)
+        links: list[str] = []
         for mode in ("legacy", MODERN):  # modern but without elicitation: same
             res = await send(r, token, mode=mode)
             d = data_of(res)
@@ -422,12 +423,31 @@ async def test_fallback_portal_always_waits_for_the_user(imap_server: ImapServer
             assert d["approval_url"].startswith(r.url + "/portal/approvals/a_")
             assert d["approval_expires_minutes"] == 10 and d["draft_id"]
             assert "NOT sent yet" in text(res) and d["approval_url"] in text(res)
+            links.append(d["approval_url"])
         assert r.sink.messages == []
-        approvals = await waiting(r, u)
-        assert len(approvals) == 2
-        assert {a.grant_id for a in approvals} == {grant_id}
-        assert all(a.status == "pending" and a.identity_id == u.identity.id for a in approvals)
+        # the same message asked for again is the same approval
+        assert links[0] == links[1]
+        (approval,) = await waiting(r, u)
+        assert approval.grant_id == grant_id and approval.status == "pending"
+        assert approval.identity_id == u.identity.id
         assert subjects(u.box, "Drafts").count("Hallo Alice") == 2
+
+
+async def test_a_client_cannot_flood_the_approvals(
+    imap_server: ImapServer, monkeypatch: pytest.MonkeyPatch
+):
+    import universal_email_mcp.service.remote_send as rsend
+
+    monkeypatch.setattr(rsend, "MAX_PENDING_APPROVALS", 2)
+    async with remote(imap_server, policy=policy(fallback="portal")) as r:
+        u = await r.user()
+        token, _ = await r.token(u)
+        for n in (1, 2):
+            d = data_of(await send(r, token, {**NEW, "subject": f"Nr {n}"}, mode="legacy"))
+            assert d["status"] == "pending_approval"
+        res = await send(r, token, {**NEW, "subject": "Nr 3"}, mode="legacy")
+        assert res.is_error and "RATE_LIMITED" in json.dumps(res.structured_content or text(res))
+        assert len(await waiting(r, u)) == 2 and r.sink.messages == []
 
 
 async def test_fallback_send_unless_flagged(imap_server: ImapServer):

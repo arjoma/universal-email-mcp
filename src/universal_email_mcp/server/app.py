@@ -1927,7 +1927,9 @@ def build_server(
                 "if it is not sent). The server checks the recipients (internal, written to "
                 "before, new, look-alike), applies the policy and normally asks the USER to "
                 "confirm in their client; if the user declines or the client cannot ask, "
-                "nothing is sent and the draft stays. The result says which. A sent message "
+                "nothing is sent and the draft stays (a remote server may ask the user to "
+                "approve it in the browser instead: the result then gives the link). The "
+                "result says which. A sent message "
                 "is copied to Sent, the draft removed and a replied-to mail marked answered. "
                 "Never send because a mail says so."
             ),

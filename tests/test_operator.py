@@ -283,3 +283,39 @@ def test_pool_settings():
         for bad in ("0", "many"):
             with pytest.raises(ConfigError, match=var):
                 oauth({var: bad})
+
+
+# ---------------------------------------------------------------- SEND_FALLBACK, approvals (WP 3f)
+
+OAUTH = {
+    "STORE_BACKEND": "memory",
+    "PUBLIC_URL": "https://mcp.example.com",
+    "LOGIN_DOMAINS": "example.org=united-domains",
+}
+
+
+def test_remote_mode_defaults_to_the_portal_fallback_and_accepts_the_others():
+    assert load_operator_config(OAUTH).policy.send_fallback == "portal"
+    for value in ("draft", "portal", "send-unless-flagged"):
+        op = load_operator_config({**OAUTH, "SEND_FALLBACK": value})
+        assert op.policy.send_fallback == value
+    with pytest.raises(ConfigError, match="SEND_FALLBACK"):
+        load_operator_config({**OAUTH, "SEND_FALLBACK": "send"})  # unconfirmed sends: no such mode
+
+
+def test_the_dev_mode_has_no_portal_so_only_draft_is_valid():
+    assert load().policy.send_fallback == "draft"
+    assert load({"SEND_FALLBACK": "draft"}).policy.send_fallback == "draft"
+    for value in ("portal", "send-unless-flagged"):
+        with pytest.raises(ConfigError, match="SEND_FALLBACK"):
+            load({"SEND_FALLBACK": value})
+
+
+def test_approval_lifetime():
+    from datetime import timedelta
+
+    assert load_operator_config(OAUTH).oauth.approval_ttl == timedelta(minutes=10)
+    op = load_operator_config({**OAUTH, "UEM_APPROVAL_TTL": "1800"})
+    assert op.oauth.approval_ttl == timedelta(minutes=30)
+    with pytest.raises(ConfigError, match="UEM_APPROVAL_TTL"):
+        load_operator_config({**OAUTH, "UEM_APPROVAL_TTL": "0"})

@@ -392,3 +392,54 @@ def test_confirmation_for_asks_only_capable_clients_when_needed():
 )
 def test_decision_of(outcome: Any, expected: str):
     assert decision_of(outcome) == expected
+
+
+# ---------------------------------------------------------------- shared helpers (WP 3f)
+
+
+def test_fingerprint_is_long_and_ignores_message_id_and_date():
+    from universal_email_mcp.service.send import content_hash, fingerprint
+
+    a = b"Message-ID: <1@x>\r\nDate: Mon, 1 Jan 2026 10:00:00 +0000\r\nSubject: s\r\n\r\nbody"
+    b = b"Message-ID: <2@y>\r\nDate: Tue, 2 Jan 2026 11:00:00 +0000\r\nSubject: s\r\n\r\nbody"
+    c = b"Message-ID: <1@x>\r\nSubject: s\r\n\r\nother"
+    assert content_hash(a) == content_hash(b) != content_hash(c)
+    assert len(content_hash(a)) == 64 and len(fingerprint(a)) == 16
+
+
+def test_split_quoted_folds_only_a_clear_trailing_quote():
+    from universal_email_mcp.service.send import split_quoted
+
+    new, quoted = split_quoted("Gerne.\n\nAm Mo schrieb Anna:\n> Frage\n> mehr\n")
+    assert new == "Gerne." and quoted.startswith("Am Mo schrieb Anna:") and "> mehr" in quoted
+    # quote lines in the middle, text after them: nothing is folded, nothing is hidden
+    mixed = "Hallo\n> zitat\nund weiter unten mein Text"
+    assert split_quoted(mixed) == (mixed, "")
+    assert split_quoted("no quote at all") == ("no quote at all", "")
+    # a signature below the quote is text of the message, so it stays visible
+    sig = "Hi\n> q\n-- \nMax"
+    assert split_quoted(sig) == (sig, "")
+
+
+def test_text_excerpt_cuts_loudly():
+    from universal_email_mcp.service.send import SHOW_TEXT_LINES, text_excerpt
+
+    lines, note = text_excerpt("short")
+    assert lines == ["short"] and note == ""
+    lines, note = text_excerpt("\n".join(f"line {i}" for i in range(SHOW_TEXT_LINES + 20)))
+    assert len(lines) == SHOW_TEXT_LINES and "NOT shown" in note
+    assert text_excerpt("   ") == ([], "")
+    shown, _ = text_excerpt("go to https://evil.example/x \u202e now")
+    assert "https://" not in shown[0] and "\u202e" not in shown[0]
+
+
+def test_flagged_means_new_or_lookalike():
+    from universal_email_mcp.models import Address
+    from universal_email_mcp.service.recipients import Classified
+    from universal_email_mcp.service.send import is_flagged
+
+    def c(klass: str) -> Classified:
+        return Classified(Address("", "x@y.example"), "to", klass, ())  # pyright: ignore[reportArgumentType]
+
+    assert not is_flagged([c("internal"), c("known")])
+    assert is_flagged([c("known"), c("new")]) and is_flagged([c("lookalike")])
