@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Cannot continue") }}{% endblock %}
+{% block heading %}{{ _("Cannot continue") }}{% endblock %}
+{% block body %}
+{% if reason == "client" %}
+<p>{{ _("The application that sent you here could not be verified, so nothing was done.") }}</p>
+{% elif reason == "redirect" %}
+<p>{{ _("The application asked to be sent back to an address it has not registered, so nothing was done.") }}</p>
+{% elif reason == "busy" %}
+<p>{{ _("Too many requests. Please try again in a minute.") }}</p>
+{% else %}
+<p>{{ _("This request is not valid, so nothing was done.") }}</p>
+{% endif %}
+<p class="hint">{{ _("You can close this window and start again in the application.") }}</p>
+{% endblock %}

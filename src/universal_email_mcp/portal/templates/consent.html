@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% macro scope_label(scope) -%}
+{% if scope == "mail.read" %}{{ _("Read mail") }}
+{%- elif scope == "mail.organize" %}{{ _("Organize (mark, move, create folders)") }}
+{%- elif scope == "mail.delete" %}{{ _("Delete (move to Trash)") }}
+{%- elif scope == "mail.drafts" %}{{ _("Write drafts") }}
+{%- elif scope == "mail.send" %}{{ _("Send mail") }}
+{%- endif %}
+{%- endmacro %}
+{% block title %}{{ _("Allow access") }}{% endblock %}
+{% block heading %}{{ _("Allow access to your mail?") }}{% endblock %}
+{% block body %}
+{% include "_client.html" %}
+<p class="signed-in">{% trans address=address %}Signed in as {{ address }}.{% endtrans %}</p>
+{% if error == "csrf" %}
+<p class="error" role="alert">{{ _("The form has expired. Please try again.") }}</p>
+{% endif %}
+<form method="post" action="/authorize">
+  {% for name, value in hidden.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <h2>{{ _("What this application may do") }}</h2>
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">{{ _("Mail account") }}</th>
+        {% for scope in account_scopes %}
+        <th scope="col">{{ scope_label(scope) }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <th scope="row">{{ row.name }}</th>
+        {% for scope in account_scopes %}
+        <td>
+          {% if scope in row.available %}
+          <input type="checkbox" name="grant" value="{{ row.id }}:{{ scope }}" aria-label="{{ scope_label(scope) }}: {{ row.name }}"{% if scope in row.checked %} checked{% endif %}>
+          {% else %}
+          <span aria-hidden="true">-</span><span class="sr-only">{{ _("not available") }}</span>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">{{ _("Reading is always included when anything else is allowed. You can change or withdraw this at any time.") }}</p>
+  {% else %}
+  <p class="note">{{ _("You have not connected a mail account yet, so this application gets access to nothing for now. Accounts you add later are not shared with it automatically.") }}</p>
+  {% endif %}
+
+  {% if identities %}
+  <h3>{{ scope_label("mail.send") }}</h3>
+  <ul class="plain">
+    {% for ident in identities %}
+    <li><label><input type="checkbox" name="identity" value="{{ ident.id }}"{% if ident.checked %} checked{% endif %}> {{ ident.label }}</label></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="buttons">
+    <button type="submit" name="action" value="approve" class="primary">{{ _("Allow") }}</button>
+    <button type="submit" name="action" value="deny">{{ _("Deny") }}</button>
+  </div>
+</form>
+<form method="post" action="/authorize" class="inline">
+  {% for name, value in hidden.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="signout">
+  <button type="submit" class="link">{{ _("Not you? Sign out") }}</button>
+</form>
+{% endblock %}

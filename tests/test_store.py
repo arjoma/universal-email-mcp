@@ -18,6 +18,7 @@ from universal_email_mcp.store import (
     AlreadyExists,
     AuthCode,
     Backend,
+    CodeReplay,
     CryptoError,
     Grant,
     Identity,
@@ -334,15 +335,55 @@ async def test_auth_code_single_use_and_expiry(store: Store, clock: Clock) -> No
     assert raw not in repr(await store.backend.get("auth_codes", hash_token(raw)))
     code = await store.redeem_auth_code(raw)
     assert code and code.code_challenge == "ch"
-    assert await store.redeem_auth_code(raw) is None
+    with pytest.raises(CodeReplay):
+        await store.redeem_auth_code(raw)
 
     raw = await store.issue_auth_code(**args)
     clock.advance(minutes=2)
     assert await store.redeem_auth_code(raw) is None
 
     raw = await store.issue_auth_code(**args)
-    results = await asyncio.gather(*(store.redeem_auth_code(raw) for _ in range(4)))
-    assert sum(r is not None for r in results) == 1
+    results = await asyncio.gather(
+        *(store.redeem_auth_code(raw) for _ in range(4)), return_exceptions=True
+    )
+    assert sum(isinstance(r, AuthCode) for r in results) <= 1
+    assert all(r is None or isinstance(r, AuthCode | CodeReplay) for r in results)
+
+
+async def test_auth_code_replay_revokes_the_tokens_issued_from_it(
+    store: Store, clock: Clock
+) -> None:
+    grant = await store.create_grant(user_id="u_1", client_id="c")
+    raw = await store.issue_auth_code(
+        user_id="u_1", client_id="c", grant_id=grant.id, redirect_uri="https://c/cb",
+        code_challenge="ch",
+    )  # fmt: skip
+    assert await store.redeem_auth_code(raw)
+    issued = await store.issue_tokens(grant)
+    assert await store.authenticate_access_token(issued.access_token)
+    with pytest.raises(CodeReplay):
+        await store.redeem_auth_code(raw)
+    assert await store.authenticate_access_token(issued.access_token) is None
+    assert await store.get(Grant, grant.id) is None
+    clock.advance(minutes=11)  # the consumed marker is gone: plain unknown code
+    assert await store.redeem_auth_code(raw) is None
+
+
+async def test_portal_session_idle_and_absolute_timeout(store: Store, clock: Clock) -> None:
+    idle = timedelta(minutes=30)
+    raw, _ = await store.create_portal_session("u_1", ttl=timedelta(hours=2))
+    clock.advance(minutes=20)
+    first = await store.authenticate_portal_session(raw, idle_timeout=idle)
+    assert first and first.last_seen == clock.t  # touched
+    clock.advance(minutes=20)  # 20 min idle only: the touch restarted the clock
+    assert await store.authenticate_portal_session(raw, idle_timeout=idle)
+    clock.advance(minutes=31)
+    assert await store.authenticate_portal_session(raw, idle_timeout=idle) is None
+    raw2, _ = await store.create_portal_session("u_1", ttl=timedelta(hours=1))
+    for _ in range(3):
+        clock.advance(minutes=25)
+        got = await store.authenticate_portal_session(raw2, idle_timeout=idle)
+    assert got is None  # absolute limit (1 h) reached although never idle
 
 
 # --- grants and tokens ------------------------------------------------------------------

@@ -157,6 +157,9 @@ class AuthCode(Record):
     code_challenge: str
     resource: str = ""
     scope: str = ""
+    consumed: bool = False
+    """Set when the code is redeemed; the record stays a few minutes so that a second
+    redeem is recognised as replay (and the tokens issued from the code are revoked)."""
     expires_at: datetime
 
 
@@ -175,8 +178,14 @@ class Grant(Record):
     client_id: str
     client_name: str = ""
     account_ids: tuple[str, ...] = ()
+    account_scopes: dict[str, str] = field(default_factory=dict[str, str])
+    """Permissions per granted account (``account id -> "read organize ..."``); the keys
+    are ``account_ids``. The effective right is the intersection with the account's own
+    permissions and the operator policy, checked on every call (WP 3e)."""
     identity_ids: tuple[str, ...] = ()
     scope: str = ""
+    """Everything the user approved for this client (union over the accounts); also the
+    scope of the issued tokens."""
     created_at: datetime
     last_used: datetime | None = None
     absolute_expires_at: datetime | None = None
