@@ -73,3 +73,18 @@
   {% else %}{{ error_box("test_" ~ r.outcome.status) }}{% endif %}
 </li>
 {%- endmacro %}
+
+{% macro people(items) -%}
+{% for a in items %}{% if a.name %}{{ a.name }} {{ "<" }}{{ a.email }}{{ ">" }}{% else %}{{ a.email }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+{%- endmacro %}
+
+{% macro header_block(msg) -%}
+<dl class="mailhead">
+  {% if msg.sender %}<dt>{{ _("From") }}</dt><dd>{{ people(msg.sender) }}</dd>{% endif %}
+  {% if msg.to %}<dt>{{ _("To") }}</dt><dd>{{ people(msg.to) }}</dd>{% endif %}
+  {% if msg.cc %}<dt>{{ _("Cc") }}</dt><dd>{{ people(msg.cc) }}</dd>{% endif %}
+  {% if msg.reply_to %}<dt>{{ _("Reply to") }}</dt><dd>{{ people(msg.reply_to) }}</dd>{% endif %}
+  {% if msg.date %}<dt>{{ _("Date") }}</dt><dd>{{ msg.date }}</dd>{% endif %}
+  <dt>{{ _("Mail account") }}</dt><dd>{{ msg.account }}</dd>
+</dl>
+{%- endmacro %}

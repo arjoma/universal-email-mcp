@@ -9,6 +9,7 @@ from universal_email_mcp.models import ServerProfile
 from universal_email_mcp.oauth.service import OAuthService
 from universal_email_mcp.portal.connect import ConnectionTester
 from universal_email_mcp.presets import PRESETS
+from universal_email_mcp.service.userpool import UserPool
 
 CUSTOM_PORTS = frozenset({993, 995, 465, 587})
 """Ports a server the *user* named may use (design section 5); servers the operator listed
@@ -25,6 +26,13 @@ class PortalService:
     tester: ConnectionTester
     net: NetPolicy
     """Policy for operator-listed servers (private addresses only if the operator allows)."""
+    pool: UserPool | None = None
+    """Reads mail for the message viewer (``None``: no viewer routes answer)."""
+    max_download_bytes: int = 100 * 1024 * 1024
+    content_origin: str | None = None
+    """Separate origin that serves the sandboxed HTML of mail (``CONTENT_ORIGIN``), if any."""
+    content_key: bytes = b""
+    """Signs the short-lived addresses of the HTML view on the content origin."""
 
     @property
     def custom_allowed(self) -> bool:

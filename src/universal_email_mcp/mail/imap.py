@@ -1234,7 +1234,8 @@ class ImapSession:
             source_truncated=truncated,
             body_notes=(*parsed.notes, *att_notes),
             has_html=any(
-                leaf.content_type == "text/html" and leaf.is_body_text for leaf in server_leaves or ()
+                leaf.content_type == "text/html" and leaf.is_body_text
+                for leaf in server_leaves or ()
             ),
         )
 

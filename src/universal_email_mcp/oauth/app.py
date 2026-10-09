@@ -31,6 +31,7 @@ from universal_email_mcp.operator import OperatorConfig
 from universal_email_mcp.portal.connect import ConnectionTester, LiveTester
 from universal_email_mcp.portal.pages import portal_group
 from universal_email_mcp.portal.service import CONNECT_TIMEOUT, READ_TIMEOUT, PortalService
+from universal_email_mcp.portal.viewer import viewer_group
 from universal_email_mcp.portal.web import Portal
 from universal_email_mcp.server.app import build_server
 from universal_email_mcp.server.http import RouteGroup, create_app
@@ -147,6 +148,10 @@ async def build_oauth_app(
             connect_timeout=CONNECT_TIMEOUT,
             read_timeout=READ_TIMEOUT,
         ),
+        pool=pool,
+        max_download_bytes=op.max_download_bytes,
+        content_origin=op.content_origin,
+        content_key=op.pseudonym_key,
     )
 
     @asynccontextmanager
@@ -180,7 +185,13 @@ async def build_oauth_app(
     )
     app = create_app(
         settings,
-        [oauth_group(svc), portal_group(portal), mcp, RouteGroup([], lifespan)],
+        [
+            oauth_group(svc),
+            portal_group(portal),
+            viewer_group(portal),
+            mcp,
+            RouteGroup([], lifespan),
+        ],
         token_check=StoreTokenVerifier(store, cfg),
     )
     app.state.oauth_service = svc  # for tests

@@ -71,12 +71,15 @@ LANG_COOKIE_AGE = 365 * 24 * 3600
 
 
 def safe_next(value: object, default: str = "/portal/accounts") -> str:
-    """A same-origin portal path from a form field, else ``default`` (no open redirect)."""
+    """A same-origin portal or message-viewer path from a form field, else ``default``
+    (no open redirect)."""
     if (
         isinstance(value, str)
-        and value.startswith("/portal")
+        and (
+            (value.startswith("/portal") and len(value) <= 200)
+            or (value.startswith("/m/") and len(value) <= 2000)
+        )
         and not value.startswith("//")
-        and len(value) <= 200
         and all(32 < ord(c) < 127 for c in value)
         and "\\" not in value
     ):

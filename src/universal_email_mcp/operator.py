@@ -557,8 +557,6 @@ def load_operator_config(
         pseudonym_key=pseudonym_key,
         oauth=_oauth(env),
         pool=_pool(env),
-        max_download_bytes=_number(
-            env, "UEM_MAX_DOWNLOAD_BYTES", DEFAULT_MAX_DOWNLOAD_BYTES, int
-        ),
+        max_download_bytes=_number(env, "UEM_MAX_DOWNLOAD_BYTES", DEFAULT_MAX_DOWNLOAD_BYTES, int),
         content_origin=content_origin,
     )
