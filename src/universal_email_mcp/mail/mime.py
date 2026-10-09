@@ -19,7 +19,7 @@ import quopri
 import re
 import secrets
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email import policy
@@ -27,7 +27,13 @@ from email.message import Message
 from email.parser import BytesHeaderParser, BytesParser
 from typing import Literal
 
-from universal_email_mcp.models import Address, Attachment, TextSlice
+from universal_email_mcp.models import (
+    Address,
+    Attachment,
+    MessageRef,
+    MessageSummary,
+    TextSlice,
+)
 
 # --------------------------------------------------------------------------- text hygiene
 
@@ -46,11 +52,19 @@ _INVISIBLE = re.compile(
 _LINE_SEP = re.compile(r"[\u2028\u2029\x85]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _CONTROL_ALL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+"""Lone UTF-16 surrogates cannot be encoded as UTF-8: one in a value that reaches
+the JSON serialiser kills the stdio server, so no sanitised text may contain one."""
+
+
+def strip_surrogates(text: str) -> str:
+    """Replace lone surrogates with U+FFFD (cheap no-op for normal text)."""
+    return _SURROGATE.sub("\ufffd", text)
 
 
 def sanitize_text(text: str) -> str:
     """Normalise newlines and drop invisible/bidi/control characters (keeps \\t, \\n)."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = strip_surrogates(text).replace("\r\n", "\n").replace("\r", "\n")
     text = _LINE_SEP.sub("\n", text)
     text = _INVISIBLE.sub("", text)
     return _CONTROL.sub("", text)
@@ -58,7 +72,7 @@ def sanitize_text(text: str) -> str:
 
 def sanitize_line(text: str) -> str:
     """Like :func:`sanitize_text` for single-line values (headers): no line breaks."""
-    text = _LINE_SEP.sub(" ", text)
+    text = _LINE_SEP.sub(" ", strip_surrogates(text))
     text = _INVISIBLE.sub("", text)
     text = _CONTROL_ALL.sub(" ", text)
     return re.sub(r" {2,}", " ", text).strip()
@@ -102,26 +116,37 @@ def slice_text(text: str, max_chars: int, offset: int = 0) -> TextSlice:
 # --------------------------------------------------------------------------- headers
 
 
+def _usable_codec(name: str) -> bool:
+    """A real text codec: no bytes-to-bytes transforms (``rot13``, ``hex`` …), no
+    NUL or other garbage in the name."""
+    try:
+        info = codecs.lookup(name)
+    except (LookupError, ValueError, UnicodeError):
+        return False
+    return bool(getattr(info, "_is_text_encoding", True))
+
+
 def _decode_bytes(data: bytes, charset: str | None) -> str:
-    """Decode with the declared charset, falling back to UTF-8, then Windows-1252."""
+    """Decode with the declared charset, falling back to UTF-8, then Windows-1252.
+
+    Never raises and never returns a lone surrogate: a decode only counts if the
+    result encodes as UTF-8 (``utf-7`` can produce lone surrogates)."""
     candidates: list[str] = []
     if charset:
         cs = charset.strip().strip('"').lower()
         if cs in ("unknown-8bit", "x-unknown", "us-ascii", "ascii"):
             cs = ""
-        if cs:
-            try:
-                codecs.lookup(cs)
-                candidates.append(cs)
-            except LookupError:
-                pass
+        if cs and _usable_codec(cs):
+            candidates.append(cs)
     candidates += ["utf-8", "cp1252"]
     for cs in candidates:
         try:
-            return data.decode(cs)
-        except (UnicodeDecodeError, LookupError):
+            text = data.decode(cs)
+            text.encode("utf-8")
+        except (UnicodeError, ValueError, LookupError):
             continue
-    return data.decode("latin-1", errors="replace")  # pragma: no cover - latin-1 never fails
+        return text
+    return data.decode("latin-1")
 
 
 def decode_text(data: bytes, charset: str | None = None) -> str:
@@ -148,23 +173,36 @@ def _fix_surrogates(s: str) -> str:
     """Raw 8-bit header bytes arrive as surrogate escapes; decode them properly."""
     if not any("\udc80" <= c <= "\udcff" for c in s):
         return s
-    return _decode_bytes(s.encode("ascii", "surrogateescape"), None)
+    try:
+        return _decode_bytes(s.encode("ascii", "surrogateescape"), None)
+    except UnicodeEncodeError:  # real non-ASCII text next to escaped bytes
+        return strip_surrogates(s)
 
 
 def _unfold(value: str) -> str:
     return re.sub(r"\r?\n(?=[ \t])", "", value)
 
 
-def decode_header(value: str | bytes | None) -> str:
-    """Decode an RFC 2047 header value robustly; always returns a clean single line."""
+MAX_HEADER_CHARS = 16_384
+"""Longest header value that is RFC 2047 decoded (the rest is dropped): decoding
+many encoded words is quadratic in the standard library."""
+MAX_ID_HEADER_CHARS = 65_536
+"""Same for ``References`` / ``In-Reply-To`` / ``Message-ID`` (many short ids)."""
+MAX_ADDRESS_HEADER_CHARS = 262_144
+"""Same for address lists (``To`` / ``Cc`` …)."""
+
+
+def decode_header(value: str | bytes | None, *, max_chars: int = MAX_HEADER_CHARS) -> str:
+    """Decode an RFC 2047 header value robustly; always returns a clean single line.
+    Never raises; the result holds no lone surrogates."""
     if value is None:
         return ""
     if isinstance(value, bytes):
         value = _decode_bytes(value, None)
-    value = _unfold(_fix_surrogates(str(value)))
+    value = _unfold(_fix_surrogates(str(value)[:max_chars]))
     try:
         chunks = email.header.decode_header(value)
-    except (email.errors.HeaderParseError, ValueError, LookupError):
+    except Exception:  # noqa: BLE001 - stdlib raises HeaderParseError, ValueError, ...
         return sanitize_line(value)
     out: list[str] = []
     for chunk, charset in chunks:
@@ -180,11 +218,14 @@ _EMAIL_RE = re.compile(r"[^\s<>\"',;:()\[\]]+@[^\s<>\"',;:()\[\]]+")
 
 def parse_addresses(*values: str | None) -> tuple[Address, ...]:
     """Parse one or more address-list header values into :class:`Address` items."""
-    raw = [_unfold(_fix_surrogates(v)) for v in values if v]
+    raw = [_unfold(_fix_surrogates(v[:MAX_ADDRESS_HEADER_CHARS])) for v in values if v]
     if not raw:
         return ()
     result: list[Address] = []
-    pairs = email.utils.getaddresses(raw)
+    try:
+        pairs = email.utils.getaddresses(raw)
+    except Exception:  # noqa: BLE001 - the stdlib parser must not take the listing down
+        pairs = []
     for name, addr in pairs:
         addr = sanitize_line(addr)
         if not addr:
@@ -204,11 +245,9 @@ def parse_msgid_list(value: str | None) -> tuple[str, ...]:
     """Message-IDs (with angle brackets) in order of appearance, deduplicated."""
     if not value:
         return ()
-    ids: list[str] = []
-    for m in _MSGID_RE.findall(_unfold(_fix_surrogates(value))):
-        m = sanitize_line(m)
-        if m not in ids:
-            ids.append(m)
+    ids: dict[str, None] = {}
+    for m in _MSGID_RE.findall(_unfold(_fix_surrogates(value[:MAX_ID_HEADER_CHARS]))):
+        ids.setdefault(sanitize_line(m))
     return tuple(ids)
 
 
@@ -216,7 +255,7 @@ def parse_msgid(value: str | None) -> str | None:
     ids = parse_msgid_list(value)
     if ids:
         return ids[0]
-    cleaned = sanitize_line(_unfold(value or ""))
+    cleaned = sanitize_line(_unfold(_fix_surrogates((value or "")[:MAX_ID_HEADER_CHARS])))
     return cleaned or None
 
 
@@ -225,7 +264,7 @@ def parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        dt = email.utils.parsedate_to_datetime(sanitize_line(_unfold(value)))
+        dt = email.utils.parsedate_to_datetime(sanitize_line(_unfold(value[:1000])))
     except (TypeError, ValueError, IndexError, OverflowError):
         return None
     if dt.tzinfo is None:
@@ -273,24 +312,67 @@ def _first(msg: Message, name: str) -> str | None:
     return values[0] if values else None
 
 
+def _guard[T](fn: Callable[[], T], default: T) -> T:
+    """One broken header field must not take the whole message (or listing) down."""
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001 - hostile input; any stdlib parser quirk
+        return default
+
+
 def header_fields_from_message(msg: Message) -> HeaderFields:
-    """Extract :class:`HeaderFields` from a message parsed with ``policy.compat32``."""
+    """Extract :class:`HeaderFields` from a message parsed with ``policy.compat32``.
+    Never raises: a field that cannot be decoded comes out empty."""
     return HeaderFields(
-        from_=parse_addresses(*_all(msg, "From")),
-        to=parse_addresses(*_all(msg, "To")),
-        cc=parse_addresses(*_all(msg, "Cc")),
-        reply_to=parse_addresses(*_all(msg, "Reply-To")),
-        subject=decode_header(_first(msg, "Subject")),
-        date=parse_date(_first(msg, "Date")),
-        message_id=parse_msgid(_first(msg, "Message-ID")),
-        in_reply_to=parse_msgid(_first(msg, "In-Reply-To")),
-        references=parse_msgid_list(" ".join(_all(msg, "References"))),
+        from_=_guard(lambda: parse_addresses(*_all(msg, "From")), ()),
+        to=_guard(lambda: parse_addresses(*_all(msg, "To")), ()),
+        cc=_guard(lambda: parse_addresses(*_all(msg, "Cc")), ()),
+        reply_to=_guard(lambda: parse_addresses(*_all(msg, "Reply-To")), ()),
+        subject=_guard(lambda: decode_header(_first(msg, "Subject")), ""),
+        date=_guard(lambda: parse_date(_first(msg, "Date")), None),
+        message_id=_guard(lambda: parse_msgid(_first(msg, "Message-ID")), None),
+        in_reply_to=_guard(lambda: parse_msgid(_first(msg, "In-Reply-To")), None),
+        references=_guard(lambda: parse_msgid_list(" ".join(_all(msg, "References"))), ()),
+    )
+
+
+UNREADABLE_SUBJECT = "[unreadable message: its headers could not be decoded]"
+
+
+def unreadable_summary(
+    ref: MessageRef,
+    *,
+    flags: tuple[str, ...] = (),
+    size: int | None = None,
+    received: datetime | None = None,
+) -> MessageSummary:
+    """Marked placeholder for a message whose summary could not be built. It keeps
+    the id, so the user can still move or delete the message, and a listing never
+    loses an account (or the other messages) because of one broken mail."""
+    return MessageSummary(
+        ref=ref,
+        date=received,
+        received=received,
+        from_=(),
+        to=(),
+        cc=(),
+        reply_to=(),
+        subject=UNREADABLE_SUBJECT,
+        flags=flags,
+        size=size,
+        has_attachments=False,
+        message_id=None,
+        in_reply_to=None,
+        references=(),
     )
 
 
 def parse_header_block(raw: bytes) -> HeaderFields:
     """Parse a raw header block (e.g. ``BODY[HEADER.FIELDS (...)]``)."""
-    msg = BytesHeaderParser(policy=policy.compat32).parsebytes(raw)
+    try:
+        msg = BytesHeaderParser(policy=policy.compat32).parsebytes(raw)
+    except Exception:  # noqa: BLE001 - never let a header block raise
+        return HeaderFields()
     return header_fields_from_message(msg)
 
 
@@ -353,9 +435,34 @@ def _is_hidden(el: object) -> bool:
     return False
 
 
-def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
+MAX_HTML_DEPTH = 200
+"""libxml2 silently drops everything below ~255 nested elements. A tree this deep
+may have lost text, so it is converted without the parser instead (see
+:func:`html_to_text`)."""
+
+
+def _tree_depth(tree: object) -> int:
+    import lxml.etree as etree
+
+    depth = deepest = 0
+    for event, _el in etree.iterwalk(tree, events=("start", "end")):  # pyright: ignore[reportArgumentType]
+        if event == "start":
+            depth += 1
+            deepest = max(deepest, depth)
+        else:
+            depth -= 1
+    return deepest
+
+
+def html_to_text(
+    html: str, *, max_input_chars: int = 2_000_000, notes: list[str] | None = None
+) -> str:
     """Convert HTML mail to readable text: visible content only, links as
-    ``text (url)`` (plain text, not Markdown links)."""
+    ``text (url)`` (plain text, not Markdown links).
+
+    When the markup is nested so deeply that the parser drops content, the text comes
+    from a plain tag stripper instead — hidden-content filtering is lost, but nothing
+    is hidden from the reader — and ``notes`` (if given) gets a line saying so."""
     from inscriptis import Inscriptis
     from inscriptis.model.config import ParserConfig
     from lxml import html as lxml_html
@@ -372,6 +479,14 @@ def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
             tree = lxml_html.fromstring(html.encode("utf-8", "replace"))
         except (ParserError, ValueError):
             return _strip_tags(html)
+
+    if _tree_depth(tree) >= MAX_HTML_DEPTH:
+        if notes is not None:
+            notes.append(
+                "HTML nested too deeply to convert normally: shown with all tags removed "
+                "(hidden content is not filtered)"
+            )
+        return _strip_tags(html)
 
     doomed: list[lxml_html.HtmlElement] = []
     for el in tree.iter():
@@ -418,7 +533,7 @@ def html_to_text(html: str, *, max_input_chars: int = 2_000_000) -> str:
 def _strip_tags(html: str) -> str:
     text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>", " ", html)
     text = re.sub(r"(?s)<[^>]*>", " ", text)
-    return _tidy(html_mod.unescape(text))
+    return _tidy(re.sub(r"[ \t]{2,}", " ", html_mod.unescape(text)))
 
 
 def _tidy(text: str) -> str:
@@ -461,6 +576,42 @@ class ParsedMessage:
     compare with the server's BODYSTRUCTURE (see :mod:`mail.bodystructure`)."""
 
 
+def _ctype(part: Message) -> str:
+    """Content type; a malformed Content-Type (the stdlib raises ``IndexError`` on
+    ``name*0*`` and the like) makes the part opaque instead of unreadable."""
+    try:
+        return part.get_content_type()
+    except Exception:  # noqa: BLE001
+        pass
+    # Salvage the bare type from the raw value ("text/plain; filename*0*").
+    try:
+        token = str(part.get("Content-Type", "")).partition(";")[0].strip().lower()
+    except Exception:  # noqa: BLE001
+        token = ""
+    return token if _BARE_TYPE.match(token) else "application/octet-stream"
+
+
+_BARE_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}$")
+
+
+def _maintype(part: Message) -> str:
+    return _ctype(part).partition("/")[0]
+
+
+def _boundary(part: Message) -> str | None:
+    try:
+        return part.get_boundary()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _charset(part: Message) -> str | None:
+    try:
+        return part.get_content_charset()
+    except Exception:  # noqa: BLE001 - malformed parameters
+        return None
+
+
 def _part_bytes(part: Message) -> bytes:
     try:
         payload = part.get_payload(decode=True)
@@ -474,17 +625,14 @@ def _part_bytes(part: Message) -> bytes:
 
 def part_text(part: Message) -> str:
     """Decoded text of a leaf part with charset fallback."""
-    try:
-        charset = part.get_content_charset()
-    except Exception:  # noqa: BLE001 - malformed parameters
-        charset = None
+    charset = _charset(part)
     return _decode_bytes(_part_bytes(part), charset)
 
 
 def _is_container(part: Message) -> bool:
     """A multipart whose children are IMAP body parts. ``message/*`` parts are
     leaves for IMAP (Python parses some of them into sub-messages)."""
-    return part.is_multipart() and part.get_content_maintype() != "message"
+    return part.is_multipart() and _maintype(part) != "message"
 
 
 def iter_parts(msg: Message, prefix: str = "") -> Iterator[tuple[str, Message]]:
@@ -553,7 +701,7 @@ def _disposition(part: Message) -> str | None:
 
 
 def _part_size(part: Message) -> int:
-    if part.get_content_maintype() == "message":
+    if _maintype(part) == "message":
         inner = part.get_payload()
         if isinstance(inner, list):
             try:
@@ -571,7 +719,7 @@ def _text_kind(part: Message) -> _Kind | None:
     ``text/plain`` / ``text/html`` without a file name, and report parts."""
     if _disposition(part) == "attachment":
         return None
-    ctype = part.get_content_type()
+    ctype = _ctype(part)
     if ctype in REPORT_TYPES:
         return "report"
     if _filename(part):
@@ -603,7 +751,7 @@ def _body_parts(
             out.append((section, part, kind))
         return
     children = _children(part, section)
-    if part.get_content_type() != "multipart/alternative":
+    if _ctype(part) != "multipart/alternative":
         for sec, sub in children:
             _body_parts(sub, sec, out, cache)
         return
@@ -653,7 +801,7 @@ def _raw_part_body(raw: bytes, msg: Message, section: str) -> bytes | None:
     data, node = raw, msg
     if _is_container(msg):
         for index in section.split("."):
-            boundary = node.get_boundary()
+            boundary = _boundary(node)
             children = node.get_payload()
             if not boundary or not isinstance(children, list) or not index.isdigit():
                 return None
@@ -667,7 +815,7 @@ def _raw_part_body(raw: bytes, msg: Message, section: str) -> bytes | None:
             if not isinstance(node, Message):
                 return None
     head = BytesHeaderParser(policy=policy.compat32).parsebytes(data)
-    if head.get_content_type() != node.get_content_type():
+    if _ctype(head) != _ctype(node):
         return None
     return _after_headers(data)
 
@@ -685,10 +833,7 @@ def _report_text(part: Message, raw_body: bytes | None) -> str:
         body = binascii.a2b_base64(chars + b"=" * (-len(chars) % 4))
     elif cte == "quoted-printable":
         body = quopri.decodestring(body)
-    try:
-        charset = part.get_content_charset()
-    except Exception:  # noqa: BLE001 - malformed parameters
-        charset = None
+    charset = _charset(part)
     # Line by line: one stray 8-bit byte must not turn the rest into mojibake.
     lines_raw = body.replace(b"\r\n", b"\n").split(b"\n")
     text = _unfold("\n".join(_decode_bytes(ln, charset or "utf-8") for ln in lines_raw))
@@ -738,6 +883,50 @@ _LABELS: dict[_Kind, str] = {
 }
 
 
+class _TooComplex(Exception):
+    """The raw message has more MIME delimiter lines than the parser may be given."""
+
+
+MAX_DELIMITER_LINES = 10_000
+"""The same delimiter line (``--boundary``) more than this often: a MIME bomb. The
+stdlib parser needs seconds and hundreds of MB for a few MB of empty parts, and the
+part limits only apply after parsing, so the raw bytes are checked first."""
+MAX_DELIMITER_LINES_TOTAL = 50_000
+_DELIMITER_LINE = re.compile(rb"^--[^\r\n]{0,200}", re.MULTILINE)
+
+
+def _check_complexity(raw: bytes) -> None:
+    if raw.count(b"--") <= MAX_DELIMITER_LINES:
+        return
+    counts: dict[bytes, int] = {}
+    total = 0
+    for m in _DELIMITER_LINE.finditer(raw):
+        total += 1
+        line = m.group().rstrip(b" \t")
+        n = counts[line] = counts.get(line, 0) + 1
+        if n > MAX_DELIMITER_LINES or total > MAX_DELIMITER_LINES_TOTAL:
+            raise _TooComplex
+
+
+def _header_part_bytes(raw: bytes) -> bytes:
+    m = re.search(rb"\r?\n\r?\n", raw)
+    return raw[: m.end()] if m else raw
+
+
+def _with_tree[T](raw: bytes, work: Callable[[Message], T]) -> T:
+    """Run ``work`` on the parsed message. The stdlib's header parsing of
+    ``policy.default`` raises on some malformed headers (``name*0*``); then the
+    plain ``compat32`` tree is used, which treats headers as strings. Raises
+    :class:`_TooComplex` for MIME bombs, ``RecursionError`` for absurd nesting."""
+    _check_complexity(raw)
+    try:
+        return work(BytesParser(policy=policy.default).parsebytes(raw))
+    except RecursionError:
+        raise
+    except Exception:  # noqa: BLE001 - hostile headers
+        return work(BytesParser(policy=policy.compat32).parsebytes(raw))
+
+
 def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessage:
     """Parse a full RFC 5322 message: headers, body text, attachments.
 
@@ -752,15 +941,24 @@ def parse_message(raw: bytes, *, max_html_chars: int = 2_000_000) -> ParsedMessa
     of nested multiparts) degrades to headers only with ``text_source="unparseable"``
     instead of failing the call or the session.
     """
-    headers = header_fields_from_message(BytesHeaderParser(policy=policy.compat32).parsebytes(raw))
+    headers = parse_header_block(_header_part_bytes(raw))
+    note = "the message structure is too complex to display; only the headers are shown"
     try:
-        return _parse_body(raw, headers, max_html_chars)
+        return _with_tree(raw, lambda msg: _parse_body(msg, raw, headers, max_html_chars))
+    except _TooComplex:
+        pass
     except RecursionError:
-        return ParsedMessage(headers=headers, text="", text_source="unparseable", attachments=())
+        pass
+    except Exception:  # noqa: BLE001 - one malformed message must stay readable (headers)
+        note = "the message could not be parsed; only the headers are shown"
+    return ParsedMessage(
+        headers=headers, text="", text_source="unparseable", attachments=(), notes=(note,)
+    )
 
 
-def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> ParsedMessage:
-    msg = BytesParser(policy=policy.default).parsebytes(raw)
+def _parse_body(
+    msg: Message, raw: bytes, headers: HeaderFields, max_html_chars: int
+) -> ParsedMessage:
     notes: list[str] = []
 
     candidates: list[tuple[str, Message, _Kind]] = []
@@ -787,7 +985,7 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
                 continue
             if len(html) > html_budget:
                 notes.append(f"HTML part {section} is too long; only its beginning is shown")
-            text = html_to_text(html, max_input_chars=html_budget)
+            text = html_to_text(html, max_input_chars=html_budget, notes=notes)
             html_budget -= len(html)
         elif kind == "report":
             text = _report_text(part, _raw_part_body(raw, msg, section))
@@ -835,7 +1033,7 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
             Attachment(
                 part_id=section,
                 filename=_filename(part),
-                content_type=part.get_content_type(),
+                content_type=_ctype(part),
                 size=_part_size(part),
                 inline=kind is not None or disp == "inline" or (disp is None and cid is not None),
                 content_id=parse_msgid(str(cid)) if cid else None,
@@ -849,7 +1047,7 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
         text_source=source,
         attachments=tuple(attachments),
         notes=tuple(notes),
-        leaves=tuple((sec, p.get_content_type()) for sec, p in iter_parts(msg)),
+        leaves=tuple((sec, _ctype(p)) for sec, p in iter_parts(msg)),
     )
 
 
@@ -871,12 +1069,12 @@ def extract_part(raw: bytes, section: str) -> RawPart | None:
     """The leaf at ``section`` (numbered like :func:`iter_parts`, which is also how
     :func:`parse_message` numbers attachments), or ``None``. For backends without a
     server-side structure (POP3): the parser's numbering is the authority there."""
-    try:
-        msg = BytesParser(policy=policy.default).parsebytes(raw)
+
+    def find(msg: Message) -> RawPart | None:
         for sec, part in iter_parts(msg):
             if sec != section:
                 continue
-            if part.get_content_maintype() == "message":
+            if _maintype(part) == "message":
                 # Cut from the original bytes: re-serialising would change line ends.
                 body = _raw_part_body(raw, msg, sec)
                 if body is not None:
@@ -885,26 +1083,22 @@ def extract_part(raw: bytes, section: str) -> RawPart | None:
                     data = _serialized_body(part)
             else:
                 data = _part_bytes(part)
-            try:
-                charset = part.get_content_charset()
-            except Exception:  # noqa: BLE001 - malformed parameters
-                charset = None
             cid = part.get("Content-ID")
             return RawPart(
                 section=sec,
-                content_type=part.get_content_type(),
-                charset=charset,
+                content_type=_ctype(part),
+                charset=_charset(part),
                 filename=_filename(part),
                 disposition=_disposition(part),
                 content_id=parse_msgid(str(cid)) if cid else None,
                 data=data,
             )
-    except RecursionError:
         return None
-    return None
 
-
-_MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}$")
+    try:
+        return _with_tree(raw, find)
+    except Exception:  # noqa: BLE001 - RecursionError, _TooComplex, stdlib quirks
+        return None
 
 
 _PASSIVE_TYPES = frozenset(
@@ -936,7 +1130,7 @@ def safe_mime_type(declared: str) -> str:
     HTML, XML, SVG, script type …) is ``application/octet-stream``, so a client
     never gets a blob it might render or execute."""
     d = declared.lower()
-    if _MIME_TYPE.match(d) and (d in _PASSIVE_TYPES or d.startswith(_PASSIVE_PREFIXES)):
+    if _BARE_TYPE.match(d) and (d in _PASSIVE_TYPES or d.startswith(_PASSIVE_PREFIXES)):
         if not d.endswith(("+xml", "+json")):
             return d
     return "application/octet-stream"
@@ -975,10 +1169,14 @@ def html_view_parts(
     html: list[str] = []
     images: dict[str, tuple[str, bytes]] = {}
     budget, total = max_html_chars, 0
-    try:
-        msg = BytesParser(policy=policy.default).parsebytes(raw)
+
+    def collect(msg: Message) -> None:
+        nonlocal budget, total
+        html.clear()
+        images.clear()
+        budget, total = max_html_chars, 0
         for _section, part in iter_parts(msg):
-            ctype = part.get_content_type()
+            ctype = _ctype(part)
             if _text_kind(part) == "html":
                 if budget > 0:
                     text = part_text(part)
@@ -994,6 +1192,9 @@ def html_view_parts(
                 if len(data) <= max_image_bytes and total + len(data) <= max_total_bytes:
                     images[key] = (ctype, data)
                     total += len(data)
-    except RecursionError:
+
+    try:
+        _with_tree(raw, collect)
+    except Exception:  # noqa: BLE001 - RecursionError, _TooComplex, stdlib quirks
         return HtmlViewParts((), {})
     return HtmlViewParts(tuple(html), images)

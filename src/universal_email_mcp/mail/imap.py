@@ -77,6 +77,7 @@ from universal_email_mcp.mail.mime import (
     parse_message,
     sanitize_line,
     slice_text,
+    unreadable_summary,
 )
 from universal_email_mcp.mail.net import NetPolicy, Resolver, open_connection, tls_context, wrap_tls
 from universal_email_mcp.models import (
@@ -1220,7 +1221,7 @@ class ImapSession:
         fetched = self._fetch_raw(list(uids), ["UID", _RECIPIENT_FIELDS])
         out: dict[int, tuple[str, ...]] = {}
         for uid, fields in fetched.items():
-            h = parse_header_block(_header_bytes(fields))
+            h = parse_header_block(_header_bytes(fields))  # never raises
             out[uid] = tuple(e for a in (*h.to, *h.cc) if "@" in (e := a.email.strip().lower()))
         return out
 
@@ -1248,8 +1249,11 @@ class ImapSession:
             if fields is None:
                 continue
             ref = MessageRef(self.account_name or "-", wire, uidvalidity, uid)
-            headers = parse_header_block(_header_bytes(fields))
-            out.append(_summary(ref, fields, headers))
+            try:
+                headers = parse_header_block(_header_bytes(fields))
+                out.append(_summary(ref, fields, headers))
+            except Exception:  # noqa: BLE001 - one broken message must not drop the listing
+                out.append(_placeholder(ref, fields))
         return out
 
     def fetch_summaries_since_uid(
@@ -1751,6 +1755,17 @@ def _header_matches(h: HeaderFields, key: str, value: str) -> bool:
         "TEXT": " ".join([addrs(h.from_), addrs(h.to), addrs(h.cc), h.subject]),
     }
     return needle in haystacks.get(key, "").casefold()
+
+
+def _placeholder(ref: MessageRef, fields: Mapping[bytes, Any]) -> MessageSummary:
+    received = fields.get(b"INTERNALDATE")
+    size = fields.get(b"RFC822.SIZE")
+    return unreadable_summary(
+        ref,
+        flags=tuple(_s(f) for f in fields.get(b"FLAGS", ())),
+        size=size if isinstance(size, int) else None,
+        received=received if isinstance(received, datetime) else None,
+    )
 
 
 def _summary(

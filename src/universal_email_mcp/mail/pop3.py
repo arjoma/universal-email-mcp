@@ -91,6 +91,7 @@ from universal_email_mcp.mail.mime import (
     parse_message,
     sanitize_line,
     slice_text,
+    unreadable_summary,
 )
 from universal_email_mcp.mail.net import NetPolicy, Resolver, open_connection, tls_context, wrap_tls
 from universal_email_mcp.models import (
@@ -413,7 +414,17 @@ def summary_from_headers(
     ref: MessageRef, raw: bytes, size: int | None, *, now: datetime | None = None
 ) -> MessageSummary:
     """Summary from a raw header block (``TOP n 0``). ``has_attachments`` is a guess
-    from the top-level Content-Type; flags are unknown (empty)."""
+    from the top-level Content-Type; flags are unknown (empty). A header block that
+    cannot be handled yields a marked placeholder (the id stays usable)."""
+    try:
+        return _summary_from_headers(ref, raw, size, now=now)
+    except Exception:  # noqa: BLE001 - one broken message must not drop the listing
+        return unreadable_summary(ref, size=size)
+
+
+def _summary_from_headers(
+    ref: MessageRef, raw: bytes, size: int | None, *, now: datetime | None
+) -> MessageSummary:
     head = BytesHeaderParser(policy=policy.compat32).parsebytes(_header_part(raw))
     h: HeaderFields = header_fields_from_message(head)
     received = _received_at(head, now or datetime.now(UTC))
