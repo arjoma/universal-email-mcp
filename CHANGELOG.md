@@ -83,6 +83,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (results marked approximate); listings show current flags; conversations are
   in arrival order; shared folders do not get special roles; deeply nested MIME
   is reported as unparseable.
+- `get_message(thread=true)`: a message that copies another's Message-ID no longer
+  displaces it from the conversation. Messages sharing a Message-ID are all shown
+  (identical copies of one mail are merged; at most five per id, earliest
+  arrival first), marked `⚠ same Message-ID` / `shared_message_id` with a note,
+  and a later claimant's In-Reply-To/References are not followed.
+- `get_message` shows every inline text part in order (Apple Mail text–image–text,
+  hidden extra parts), each after a `──── part N (…) ────` line, HTML parts
+  converted, bounce reports (`message/delivery-status`) as text; body source
+  `mixed` when plain and HTML parts are combined. Text parts beyond the limits
+  (100 parts, the HTML size budget) are listed as attachments, the attachment list
+  is capped at 100, and notes say what was left out.
 
 ## [0.0.1] - 2026-09-30
 

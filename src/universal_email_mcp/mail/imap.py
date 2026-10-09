@@ -1092,6 +1092,7 @@ class ImapSession:
             body_source=parsed.text_source,
             attachments=parsed.attachments,
             source_truncated=truncated,
+            body_notes=parsed.notes,
         )
 
 

@@ -61,6 +61,9 @@ DEFAULT_PAGE = 20
 MAX_THREAD_MESSAGES = 50
 MAX_THREAD_FOLDERS = 25
 THREAD_ROUNDS = 3
+MAX_SAME_MESSAGE_ID = 5
+"""Messages a conversation shows per Message-ID (the earliest arrivals; more are
+copies or forgeries and would only crowd out the real conversation)."""
 DEFAULT_CONTACT_DAYS = 180
 """How far back a contact search (with a query) looks by default."""
 MAX_CONTACT_DAYS = 730
@@ -92,6 +95,8 @@ class Hit:
     summary: MessageSummary
     score: float | None = None
     """Fuzzy score (0–100); ``None`` for exact results."""
+    shared_message_id: bool = False
+    """Conversations: another message shown claims the same Message-ID."""
 
     @property
     def account(self) -> str:
@@ -783,6 +788,12 @@ class MailService:
                 )
                 scan = scan[:MAX_THREAD_FOLDERS]
             found = {(root.ref.folder, root.ref.uid): root}
+            # Who a Message-ID belongs to: the root, then the first message found
+            # with it (search order, within a folder by arrival). A later message
+            # that claims a known id with different content is shown, but its
+            # In-Reply-To/References are not followed — a forged copy of a real
+            # Message-ID must not pull other conversations in.
+            claims = {root.message_id: _copy_key(root)} if root.message_id else {}
             for _ in range(THREAD_ROUNDS):
                 new_ids = False
                 for f in scan:
@@ -791,14 +802,18 @@ class MailService:
                     if not fresh:
                         continue
                     room = cap * 2 - len(found)
-                    for s in self.index.summaries(
+                    batch = self.index.summaries(
                         session,
                         res.folder,
                         res.uidvalidity,
                         fresh[: max(0, room)],
                         refresh_flags=True,
-                    ):
+                    )
+                    for s in sorted(batch, key=_sort_key):
                         found[(s.ref.folder, s.ref.uid)] = s
+                        key = _copy_key(s)
+                        if s.message_id and claims.setdefault(s.message_id, key) != key:
+                            continue
                         for i in _thread_ids(s):
                             if i not in ids:
                                 ids.append(i)
@@ -839,17 +854,8 @@ class MailService:
                 messages += extra
             problems += fan.problems
             problems += [p for p in sel_problems if p.code != "NOT_SUPPORTED_YET"]
-        # Duplicates (same Message-ID) are merged only within one account and folder:
-        # a forged copy elsewhere must not hide, say, the user's own Sent message.
-        unique: dict[tuple[str, str, str], MessageSummary] = {}
-        for m in messages:
-            unique.setdefault((m.ref.account, m.ref.folder, m.message_id or m.ref.encode()), m)
-        # Arrival order (INTERNALDATE, set by the server) — the Date header is forgeable.
-        ordered = sorted(unique.values(), key=_sort_key)
-        if len(ordered) > cap:
-            notes.append(f"conversation has {len(ordered)} messages; showing the last {cap}")
-            ordered = ordered[-cap:]
-        return ThreadResult(root, [Hit(m) for m in ordered], notes, problems)
+        hits, more = _conversation(root, messages, cap)
+        return ThreadResult(root, hits, notes + more, problems)
 
     # ------------------------------------------------------------ contacts
 
@@ -1199,6 +1205,75 @@ def thread_folder_order(
         return (5, 0.0, name)
 
     return [folders[i] for i in sorted(range(len(folders)), key=rank)]
+
+
+def _copy_key(s: MessageSummary) -> tuple[object, ...]:
+    """Identity of one mail stored in several places of an account (a label folder
+    and All Mail, a copy in an archive): same Message-ID, size, sender, subject and
+    Date. Messages that share a Message-ID but differ here are different mails —
+    copies changed in transit, or a forgery."""
+    if s.message_id is None:
+        return (s.ref.account, s.ref.folder, s.ref.uid)
+    sender = tuple(a.email.lower() for a in s.from_)
+    return (s.ref.account, s.message_id, s.size, sender, s.subject, s.date)
+
+
+def _conversation(
+    root: MessageSummary, messages: Iterable[MessageSummary], cap: int
+) -> tuple[list[Hit], list[str]]:
+    """The messages of a conversation, oldest first, and notes about them.
+
+    A Message-ID is a claim by the sender, so a collision never drops a message
+    silently: only the same mail seen twice (same place, or an identical copy in
+    the same account) is merged, keeping the root, then the earliest arrival. All
+    other messages that share a Message-ID are kept (at most
+    ``MAX_SAME_MESSAGE_ID`` each, earliest arrivals first), marked and named in a
+    note. Order is arrival (INTERNALDATE, set by the server) — the Date header is
+    forgeable.
+    """
+    places: set[tuple[str, str, int]] = set()
+    copies: set[tuple[object, ...]] = set()
+    by_id: dict[str, int] = {}
+    kept: list[MessageSummary] = []
+    left_out = 0
+    for s in sorted(messages, key=lambda m: (m.ref != root.ref, _sort_key(m))):
+        place = (s.ref.account, s.ref.folder, s.ref.uid)
+        key = _copy_key(s)
+        if place in places or key in copies:
+            continue
+        places.add(place)
+        copies.add(key)
+        if s.message_id is not None:
+            by_id[s.message_id] = by_id.get(s.message_id, 0) + 1
+            if by_id[s.message_id] > MAX_SAME_MESSAGE_ID:
+                left_out += 1
+                continue
+        kept.append(s)
+    notes: list[str] = []
+    ordered = sorted(kept, key=_sort_key)
+    if len(ordered) > cap:
+        notes.append(f"conversation has {len(ordered)} messages; showing the last {cap}")
+        ordered = ordered[-cap:]
+    groups: dict[str, list[int]] = {}
+    for n, s in enumerate(ordered, 1):
+        if s.message_id is not None:
+            groups.setdefault(s.message_id, []).append(n)
+    shared = {n for g in groups.values() if len(g) > 1 for n in g}
+    for g in groups.values():
+        if len(g) > 1:
+            notes.append(
+                f"{len(g)} messages claim the same Message-ID ("
+                + ", ".join(f"#{n}" for n in g)
+                + "): copies of one mail (e.g. sent and received) or a forgery — "
+                "compare sender and arrival time"
+            )
+    if left_out:
+        notes.append(
+            f"{left_out} more message{'s' if left_out != 1 else ''} claiming an already "
+            f"shown Message-ID (more than {MAX_SAME_MESSAGE_ID} per id) left out"
+        )
+    hits = [Hit(s, shared_message_id=n in shared) for n, s in enumerate(ordered, 1)]
+    return hits, notes
 
 
 def _thread_ids(s: MessageSummary) -> list[str]:
