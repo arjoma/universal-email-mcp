@@ -562,6 +562,30 @@ async def test_activity_feed(store: Store, clock: Clock) -> None:
     assert await store.list_activity("u_1") == []
 
 
+async def test_coalesced_activity_merges_per_hour(store: Store, clock: Clock) -> None:
+    kw: dict[str, Any] = dict(client="g_1", tool="find_messages", outcome="ok", coalesce=True)
+    await store.record_activity("u_1", "tool.call", counts={"messages": 2}, **kw)
+    clock.advance(minutes=5)
+    await store.record_activity("u_1", "tool.call", counts={"messages": 3}, **kw)
+    await store.record_activity("u_1", "tool.call", **{**kw, "outcome": "error"})  # other key
+    await store.record_activity("u_2", "tool.call", **kw)  # other user
+    feed = await store.list_activity("u_1")
+    assert len(feed) == 2
+    merged = next(e for e in feed if e.outcome == "ok")
+    assert merged.counts == {"messages": 5, "calls": 2}
+    clock.advance(hours=1)
+    await store.record_activity("u_1", "tool.call", **kw)
+    assert len(await store.list_activity("u_1")) == 3  # a new hour, a new entry
+
+
+async def test_coalesced_activity_survives_parallel_calls(store: Store) -> None:
+    await asyncio.gather(
+        *(store.record_activity("u_1", "tool.call", tool="t", coalesce=True) for _ in range(4))
+    )
+    (entry,) = await store.list_activity("u_1")
+    assert entry.counts["calls"] == 4
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
