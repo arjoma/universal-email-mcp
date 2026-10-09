@@ -113,6 +113,17 @@ def account_id_of(page: str) -> str:
     return values[0].split(":")[0] if values else ""
 
 
+def location_of(r: httpx2.Response) -> str:
+    """Where an Allow/Deny answer sends the browser: the continue page's link (the answer is
+    a 200 page with a meta refresh, not a redirect) or, for other answers, ``Location``."""
+    if r.status_code in (301, 302, 303, 307, 308):
+        return r.headers["location"]
+    assert r.status_code == 200, r.text
+    m = re.search(r'<a class="button" id="continue" href="([^"]*)"', r.text)
+    assert m, r.text
+    return html.unescape(m.group(1))
+
+
 def query_of(location: str) -> dict[str, str]:
     return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
 
@@ -193,8 +204,7 @@ class Authz:
 
     def code(self, **kw: Any) -> str:
         r = self.decide(**kw)
-        assert r.status_code == 303, r.text
-        q = query_of(r.headers["location"])
+        q = query_of(location_of(r))
         assert q["state"] == self.state and q["iss"] == ISSUER
         return q["code"]
 

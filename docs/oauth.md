@@ -167,7 +167,11 @@ interface. The SDK's *client* is what the end-to-end tests drive.
    [portal](portal.md): an account offers only the permissions the user gave it, and only
    identities with "sending allowed" are offered for `send`.
 4. Allow: a grant and a **single-use code** (60 s) bound to client, redirect URI, PKCE
-   challenge, resource and user; redirect `?code&state&iss`. Deny: `error=access_denied`.
+   challenge, resource and user; the client gets `?code&state&iss`. Deny: `error=access_denied`.
+   Allow and Deny are answered with a **200 page** that continues to the (validated, registered)
+   redirect URI by `<meta http-equiv="refresh">` and a visible link, not with a 303: Chromium
+   applies the page's `form-action` to every redirect hop after a form post, so a callback
+   that redirects on would be blocked, and loosening `form-action` is not needed this way.
 5. `/token` redeems the code. Client, `redirect_uri` and PKCE verifier must match; any
    mismatch burns the code and the pending grant. A code used a second time revokes the
    grant and the tokens issued from it. The answer carries `access_token` (opaque, 1 h),
@@ -198,8 +202,8 @@ expires on its own).
 * Tokens, codes and browser-session cookies are 256-bit random values; the store keeps only
   SHA-256 digests (compared in constant time by lookup). Tokens never appear in logs or URLs
   (the access log records the first path segment only).
-* Pages: `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'
-  [+ the redirect target on the consent page]; frame-ancestors 'none'`, no scripts, no
+* Pages: `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self';
+  frame-ancestors 'none'`, no scripts, no
   inline styles, `X-Frame-Options: DENY`, `Cache-Control: no-store`,
   `Referrer-Policy: same-origin` (not `no-referrer`: browsers then send `Origin: null` on
   form posts). Cookies are `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax`, session

@@ -93,19 +93,6 @@ def display_host(uri: str) -> str:
     return parts.scheme + ":"
 
 
-def csp_form_target(uri: str) -> str:
-    """CSP ``form-action`` source that lets the browser follow the final redirect."""
-    parts = urlsplit(uri)
-    scheme = parts.scheme.lower()
-    if is_loopback(uri):
-        host = _host(parts.netloc)
-        # CSP host-sources have no IPv6 literal syntax; fall back to the scheme source.
-        return "http:" if host.startswith("[") else f"http://{host}:*"
-    if scheme == "https":
-        return f"https://{parts.netloc.rpartition('@')[2]}"
-    return f"{scheme}:"
-
-
 def host_allowed(uri: str, allowed_hosts: tuple[str, ...]) -> bool:
     """Operator allowlist for dynamically registered clients (loopback always passes)."""
     if not allowed_hosts or is_loopback(uri):

@@ -15,6 +15,7 @@ from tests.oauth_util import (
     bearer,
     hidden_fields,
     identity_ids_of,
+    location_of,
     make_app,
     operator,
     query_of,
@@ -115,7 +116,7 @@ async def test_a_permission_beyond_the_account_cannot_be_ticked(alice, store):
     page = a.consent_page().text
     main = account_id_of(page)
     _, r = approve(alice, a, [f"{main}:mail.read", f"{main}:mail.delete"])
-    code = query_of(r.headers["location"])["code"]
+    code = query_of(location_of(r))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read"
 
 
@@ -172,8 +173,7 @@ async def test_granting_send_asks_for_the_password_when_it_is_stale(alice, store
     clock.advance(minutes=10)
     page, r = approve(alice, a, [f"{main}:mail.read"], [ident])
     assert r.status_code == 200 and 'type="password"' in r.text  # asked, nothing granted yet
-    # the answer redirects to the client: CSP form-action must allow that hop on this page too
-    assert "form-action 'self' http://127.0.0.1:*" in r.headers["content-security-policy"]
+    assert "form-action 'self';" in r.headers["content-security-policy"]  # nothing opened up
     assert "send mail as you" in r.text
     assert "location" not in r.headers
     assert await store.list_for_user(Grant, ALICE) == []
@@ -189,8 +189,8 @@ async def test_granting_send_asks_for_the_password_when_it_is_stale(alice, store
     assert wrong.status_code == 401 and "not correct" in wrong.text
     assert await store.list_for_user(Grant, ALICE) == []
     ok = post(PASSWORD)
-    assert ok.status_code == 303
-    code = query_of(ok.headers["location"])["code"]
+    assert ok.status_code == 200 and 'id="continue"' in ok.text
+    code = query_of(location_of(ok))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read mail.send"
 
 
@@ -211,10 +211,10 @@ async def test_the_reauth_window_covers_a_second_send_grant_and_then_expires(ali
             "password": PASSWORD,
         },
     )
-    assert r2.status_code == 303
+    assert r2.status_code == 200 and 'id="continue"' in r2.text
     clock.advance(minutes=3)  # inside the window: no new question
     _, r3 = approve(alice, a, [f"{main}:mail.read"], [ident])
-    assert r3.status_code == 303
+    assert r3.status_code == 200 and 'id="continue"' in r3.text
     clock.advance(minutes=3)  # now six minutes after the password entry
     third = authz(alice, "mail.read mail.send", name="Third")
     _, r4 = approve(alice, third, [f"{main}:mail.read"], [ident])
@@ -237,8 +237,8 @@ async def test_an_unknown_identity_is_dropped_and_asks_for_no_password(alice, st
     main = account_id_of(a.consent_page().text)
     clock.advance(minutes=10)
     _, r = approve(alice, a, [f"{main}:mail.read"], ["i_0000000000000000"])
-    assert r.status_code == 303  # no valid identity: a plain read grant, no password prompt
-    code = query_of(r.headers["location"])["code"]
+    assert 'id="continue"' in r.text  # no valid identity: a plain read grant, no password prompt
+    code = query_of(location_of(r))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read"
 
 
@@ -253,7 +253,7 @@ async def connect(
     main = account_id_of(page)
     chosen = grants or [f"{main}:mail.read", f"{main}:mail.organize"]
     _, r = approve(b, a, chosen)
-    code = query_of(r.headers["location"])["code"]
+    code = query_of(location_of(r))["code"]
     tokens = a.exchange(code).json()
     return a, tokens, main
 
@@ -402,7 +402,7 @@ async def test_lowering_what_the_user_allows_reduces_existing_grants(alice, stor
     a = authz(alice, "mail.read mail.organize mail.send")
     main = account_id_of(a.consent_page().text)
     _, r = approve(alice, a, [f"{main}:mail.read", f"{main}:mail.organize"], [ident])
-    a.exchange(query_of(r.headers["location"])["code"])
+    a.exchange(query_of(location_of(r))["code"])
     (grant,) = await store.list_for_user(Grant, ALICE)
     assert grant.scope == "mail.read mail.organize mail.send"
     alice.post(f"/portal/accounts/{main}/permissions", {"perm": ["read"]})

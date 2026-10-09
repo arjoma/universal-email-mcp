@@ -10,7 +10,15 @@ from typing import Any
 
 import pytest
 
-from tests.oauth_util import Authz, account_id_of, hidden_fields, make_app, query_of, register
+from tests.oauth_util import (
+    Authz,
+    account_id_of,
+    hidden_fields,
+    location_of,
+    make_app,
+    query_of,
+    register,
+)
 from tests.portal_util import Browser, FakeTester, text_of
 from universal_email_mcp import audit
 from universal_email_mcp.portal.i18n import Catalog
@@ -49,7 +57,7 @@ def connect_client(b: Browser, name: str = "Test App") -> str:
         "action": "approve",
         "grant": [f"{account_id_of(page.text)}:mail.read"],
     }
-    query_of(b.client.post("/authorize", data=form).headers["location"])
+    query_of(location_of(b.client.post("/authorize", data=form)))
     return b.page("/portal/clients").split("/portal/clients/")[1].split('"')[0].split("/")[0]
 
 

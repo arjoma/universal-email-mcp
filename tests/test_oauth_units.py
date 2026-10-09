@@ -10,7 +10,6 @@ from universal_email_mcp.oauth.identity import AddressError, Pseudonyms, parse_a
 from universal_email_mcp.oauth.ratelimit import RateLimiter
 from universal_email_mcp.oauth.redirects import (
     RedirectError,
-    csp_form_target,
     display_host,
     host_allowed,
     redirect_matches,
@@ -102,12 +101,9 @@ def test_redirect_matching():
     assert not redirect_matches(["https://app.example.com/cb"], "http://127.0.0.1:1/cb")
 
 
-def test_display_and_csp_helpers():
+def test_display_and_host_helpers():
     assert display_host("https://user@app.example.com:8443/cb") == "app.example.com:8443"
     assert display_host("com.example.app:/cb") == "com.example.app:"
-    assert csp_form_target("http://127.0.0.1:5/cb") == "http://127.0.0.1:*"
-    assert csp_form_target("https://app.example.com/cb") == "https://app.example.com"
-    assert csp_form_target("com.example.app:/cb") == "com.example.app:"
     assert host_allowed("https://a.example/cb", ())
     assert host_allowed("https://A.example/cb", ("a.example",))
     assert not host_allowed("https://b.example/cb", ("a.example",))
