@@ -28,7 +28,7 @@ German — that stays in the chat and never ends up in the repository.
   browser) is built **translatable from the start** (no hard-coded strings in
   templates). English and German ship (`portal/locales/de.json`, formal "Sie"); the
   operator sets the deployment's default language, each user can switch. Every UI change
-  must keep `tests/test_portal_i18n_de.py` green (it lists missing German ids). Tool output
+  must keep `tests/test_portal_i18n_de.py` green (it lists missing German ids from templates and `portal/dynamic.py`; new service-generated sentences need a pattern there). Tool output
   for the AI client stays English.
 
 ## Security principle: no e-mail is trusted

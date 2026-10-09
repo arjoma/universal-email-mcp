@@ -232,7 +232,7 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 - [ ] German leftovers (4d): file sizes still show a decimal point (`1.5 KB`, `fmt_size` is shared
       with the tool output); service-generated notes that no pattern in `portal/dynamic.py`
-      covers stay English (thread search budget notes, lookalike "you have written to ... and to"
+      covers stay English (reviewer list: lookalike "you have written to this address and to", compose.py malformed-address and Reply-To warnings, "not attached (<error>)", oversized-message and MIME-mismatch body notes, thread/conversation notes incl. STOPPED_RETRYING, POP3 notes; thread search budget notes, lookalike "you have written to ... and to"
       sentence, `body_notes` variants, folder/quota notes); the plain-text `Not found.` /
       `Too many requests.` answers of the content origin are not translated (no UI).
 

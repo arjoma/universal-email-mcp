@@ -107,11 +107,15 @@ def _pattern(message: str) -> re.Pattern[str]:
 _PATTERNS = tuple((m, _pattern(m)) for m in DYNAMIC_MESSAGES)
 
 
+MAX_LINE = 1000
+"""Longer lines are left alone (bounds the matching time on hostile input)."""
+
+
 def translate_dynamic(translate: Callable[[str], str], text: str) -> str:
     """``text`` (one or several lines) with every line that fits a known pattern translated."""
     lines: list[str] = []
     for line in text.split("\n"):
-        for message, pattern in _PATTERNS:
+        for message, pattern in () if len(line) > MAX_LINE else _PATTERNS:
             m = pattern.fullmatch(line)
             if m is None:
                 continue

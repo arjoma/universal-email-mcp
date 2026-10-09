@@ -508,4 +508,6 @@ async def test_hostile_account_name_is_escaped_in_german_pages():
             },
         )
         page = b.page("/portal/accounts")
-        assert "<b>x</b>" not in page and "E-Mail-Konten" in page, r.status_code
+        assert (
+            "&lt;b&gt;x&lt;/b&gt;" in page and "<b>x</b>" not in page and "E-Mail-Konten" in page
+        ), r.status_code
