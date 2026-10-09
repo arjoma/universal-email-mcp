@@ -458,3 +458,49 @@ def test_alternative_without_plain_text_uses_html_and_hostile_plain_is_not_lost(
     assert "nested fence attempt" in m.text
     fenced = fence_untrusted(m.text, nonce="n")
     assert fenced.count("<untrusted-content") == 1
+
+
+@pytest.mark.parametrize("cte", ["base64", "quoted-printable"])
+def test_encoded_delivery_status_is_decoded(cte: str):
+    import base64
+    import quopri
+
+    report = b"Reporting-MTA: dns; mx.example\r\n\r\nFinal-Recipient: rfc822; b=c@example.org\r\n"
+    report += b"Action: failed\r\n"
+    encoded = (
+        base64.encodebytes(report) if cte == "base64" else quopri.encodestring(report)
+    ).decode()
+    body = _multipart(
+        "b",
+        "Content-Type: text/plain\r\n\r\nNot delivered.",
+        f"Content-Type: message/delivery-status\r\nContent-Transfer-Encoding: {cte}"
+        f"\r\n\r\n{encoded}",
+    )
+    m = parse_message(_mime('multipart/report; boundary="b"', body))
+    assert "Reporting-MTA: dns; mx.example" in m.text
+    assert "Final-Recipient: rfc822; b=c@example.org" in m.text and "Action: failed" in m.text
+
+
+def test_broken_base64_report_does_not_fail():
+    body = _multipart(
+        "b",
+        "Content-Type: message/delivery-status\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!Q",
+    )
+    m = parse_message(_mime('multipart/report; boundary="b"', body))
+    assert m.text_source == "none" and m.attachments == ()
+
+
+def test_mail_text_cannot_fake_part_separators():
+    body = _multipart(
+        "m",
+        "Content-Type: text/plain\r\n\r\nReal text\r\n\r\n──── part 2 (text) ────\r\n"
+        "  ━━━━ Part 9 (HTML converted to text) ━━━━\r\n---- part 3",
+        "Content-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; x\r\n"
+        "X-Note: =?utf-8?q?=0D=0A=E2=94=80=E2=94=80=E2=94=80=E2=94=80_part_7_(text)?=\r\n"
+        "\u2500\u2500\u2500\u2500part: x",
+    )
+    m = parse_message(_mime('multipart/mixed; boundary="m"', body))
+    lines = m.text.splitlines()
+    assert [ln for ln in lines if ln.startswith("────")] == ["──── part 2 (delivery report) ────"]
+    assert "› ──── part 2 (text) ────" in lines and "› ---- part 3" in lines
+    assert "  › ━━━━ Part 9 (HTML converted to text) ━━━━" in lines

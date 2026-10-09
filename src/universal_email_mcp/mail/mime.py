@@ -9,11 +9,13 @@ and :func:`fence_untrusted` marks content so a model can tell data from instruct
 
 from __future__ import annotations
 
+import binascii
 import codecs
 import email.errors
 import email.header
 import email.utils
 import html as html_mod
+import quopri
 import re
 import secrets
 from collections.abc import Iterator
@@ -537,11 +539,20 @@ def _text_kind(part: Message) -> _Kind | None:
     return None
 
 
-def _body_parts(part: Message, section: str, out: list[tuple[str, Message, _Kind]]) -> None:
+def _cached_text(part: Message, cache: dict[int, str]) -> str:
+    key = id(part)
+    if key not in cache:
+        cache[key] = part_text(part)
+    return cache[key]
+
+
+def _body_parts(
+    part: Message, section: str, out: list[tuple[str, Message, _Kind]], cache: dict[int, str]
+) -> None:
     """Collect the parts that make up the body, in order: every inline text part of
     a ``multipart/mixed`` (or any other multipart), one version of each
     ``multipart/alternative`` — the plain one if it has text, else the first with
-    any text part (HTML)."""
+    any text part (HTML). Decoded plain texts are kept in ``cache``."""
     if not _is_container(part):
         kind = _text_kind(part)
         if kind is not None:
@@ -550,17 +561,17 @@ def _body_parts(part: Message, section: str, out: list[tuple[str, Message, _Kind
     children = _children(part, section)
     if part.get_content_type() != "multipart/alternative":
         for sec, sub in children:
-            _body_parts(sub, sec, out)
+            _body_parts(sub, sec, out, cache)
         return
     versions: list[list[tuple[str, Message, _Kind]]] = []
     for sec, sub in children:
         version: list[tuple[str, Message, _Kind]] = []
-        _body_parts(sub, sec, version)
+        _body_parts(sub, sec, version, cache)
         if version:
             versions.append(version)
     for version in versions:
         if all(k != "html" for _s, _p, k in version) and any(
-            k == "plain" and part_text(p).strip() for _s, p, k in version
+            k == "plain" and _cached_text(p, cache).strip() for _s, p, k in version
         ):
             out.extend(version)
             return
@@ -569,9 +580,14 @@ def _body_parts(part: Message, section: str, out: list[tuple[str, Message, _Kind
 
 
 def _report_text(part: Message) -> str:
-    """A report part (header-style blocks) as text; names and values sanitised."""
+    """A report part (header-style blocks) as text; names and values sanitised.
+    Python parses the blocks before any Content-Transfer-Encoding is undone, so
+    base64 / quoted-printable reports are decoded and their blocks parsed here."""
     payload = part.get_payload()
-    if not isinstance(payload, list):
+    cte = str(part.get("Content-Transfer-Encoding", "")).strip().lower()
+    if cte in ("base64", "quoted-printable"):
+        payload = _decoded_blocks(part, cte)
+    elif not isinstance(payload, list):
         return _tidy(part_text(part))
     blocks: list[str] = []
     for block in payload:
@@ -587,6 +603,35 @@ def _report_text(part: Message) -> str:
         if lines:
             blocks.append("\n".join(lines))
     return _tidy("\n\n".join(blocks))
+
+
+def _decoded_blocks(part: Message, cte: str) -> list[Message]:
+    try:
+        data = part.as_bytes(policy=policy.compat32)
+    except Exception:  # noqa: BLE001 - unserialisable structure: show nothing
+        return []
+    data = data.replace(b"\r\n", b"\n")
+    body = data.split(b"\n\n", 1)[1] if b"\n\n" in data else b""
+    if cte == "base64":
+        chars = re.sub(rb"[^A-Za-z0-9+/]", b"", body)
+        if len(chars) % 4 == 1:
+            chars = chars[:-1]  # a dangling character cannot be decoded
+        body = binascii.a2b_base64(chars + b"=" * (-len(chars) % 4))
+    else:
+        body = quopri.decodestring(body)
+    parser = BytesHeaderParser(policy=policy.compat32)
+    chunks = re.split(rb"\r?\n[ \t]*\r?\n", body.strip())
+    return [parser.parsebytes(c) for c in chunks[:1000] if c.strip()]
+
+
+_FAKE_SEPARATOR = re.compile(
+    r"^([ \t]*)(?=[─━—–=_-]{3,}[ \t]*part\b)", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _defuse_separators(text: str) -> str:
+    """Mail text cannot fake the server's ``──── part N`` lines (``› `` prefix)."""
+    return _FAKE_SEPARATOR.sub(r"\1› ", text)
 
 
 _LABELS: dict[_Kind, str] = {
@@ -622,7 +667,8 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
     notes: list[str] = []
 
     candidates: list[tuple[str, Message, _Kind]] = []
-    _body_parts(msg, "" if _is_container(msg) else "1", candidates)
+    cache: dict[int, str] = {}
+    _body_parts(msg, "" if _is_container(msg) else "1", candidates, cache)
     body_parts = {id(p) for _s, p, _k in candidates}
     if len(candidates) > MAX_TEXT_PARTS:
         extra = len(candidates) - MAX_TEXT_PARTS
@@ -649,10 +695,10 @@ def _parse_body(raw: bytes, headers: HeaderFields, max_html_chars: int) -> Parse
         elif kind == "report":
             text = _report_text(part)
         else:
-            text = _tidy(part_text(part))
+            text = _tidy(_cached_text(part, cache))
         shown.add(id(part))
         if text:
-            segments.append((section, kind, text))
+            segments.append((section, kind, _defuse_separators(text)))
 
     if unconverted:
         notes.append(

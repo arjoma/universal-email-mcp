@@ -196,12 +196,18 @@ def _names(addrs: Sequence[Address] | Sequence[AddressOut], n: int = 2) -> str:
 
 
 def _message_table(
-    items: Sequence[MessageItem], *, numbered_from: int = 0, show_score: bool = False
+    items: Sequence[MessageItem],
+    *,
+    numbered_from: int = 0,
+    show_score: bool = False,
+    arrival: bool = False,
 ) -> str:
+    """Messages as a Markdown table. ``arrival``: the time column shows when the
+    message arrived (INTERNALDATE) instead of its forgeable Date header."""
     multi_account = len({i.account for i in items}) > 1
     multi_folder = len({i.folder for i in items}) > 1
     has_links = any(i.viewer_url for i in items)
-    headers = ["#", "Date"]
+    headers = ["#", "Arrived" if arrival else "Date"]
     if multi_account:
         headers.append("Account")
     if multi_folder:
@@ -214,7 +220,7 @@ def _message_table(
     headers.append("ID")
     rows: list[list[str]] = []
     for n, i in enumerate(items, start=numbered_from + 1):
-        row = [str(n), fmt_datetime(i.date)]
+        row = [str(n), fmt_datetime((i.received or i.date) if arrival else i.date)]
         if multi_account:
             row.append(escape_cell(i.account, 30))
         if multi_folder:
@@ -842,12 +848,14 @@ def build_server(service: MailService) -> MCPServer:
             problems=_problems(res.problems),
         )
         foot = [
-            f"{len(msgs)} message{'s' if len(msgs) != 1 else ''}, oldest first",
+            f"{len(msgs)} message{'s' if len(msgs) != 1 else ''}, oldest first (by arrival)",
             "read one: get_message(id)",
             *[escape_cell(n, 200) for n in res.notes],
             *_problem_notes(res.problems),
         ]
-        text = "Conversation\n\n" + _message_table(msgs) + "\n\n" + render.footer(foot)
+        text = (
+            "Conversation\n\n" + _message_table(msgs, arrival=True) + "\n\n" + render.footer(foot)
+        )
         return _result(text, data)
 
     # ------------------------------------------------------------ find_contacts
