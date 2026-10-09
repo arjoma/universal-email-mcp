@@ -236,10 +236,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       atomic against concurrent writes (tombstone); transactions read one by one
       (`get_all`); portal session touch/reauth methods. A pseudonym-key change needs a
       user-id migration.
-- [ ] 3c: authorization-code replay (a second redeem) should revoke the tokens issued
-      from it (consumed marker). Refresh reuse is strict (any concurrent double use
-      revokes the grant); a short configurable reuse interval may be needed once real
-      clients are observed.
 
 ## Later (not v1)
 
