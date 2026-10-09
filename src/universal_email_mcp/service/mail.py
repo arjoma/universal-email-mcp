@@ -947,6 +947,11 @@ class MailService:
         ensure_ref_matches(ref, acc)
         return ref, acc
 
+    def resolve(self, message_id: str) -> tuple[MessageRef, Account]:
+        """Decode a message id; the account it names must be one of this service's
+        (readable) accounts, else :class:`InvalidRef` / :class:`NotPermitted`."""
+        return self._ref(message_id)
+
     async def get_message(self, message_id: str, *, offset: int, max_chars: int | None) -> Message:
         ref, acc = self._ref(message_id)
         if offset < 0:

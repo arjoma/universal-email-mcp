@@ -406,6 +406,8 @@ class Message:
     attachments: tuple[Attachment, ...]
     source_truncated: bool = False
     body_notes: tuple[str, ...] = ()
+    has_html: bool = False
+    """The message has an HTML body version (the portal viewer can render it in a sandbox)."""
 
     @property
     def id(self) -> str:
