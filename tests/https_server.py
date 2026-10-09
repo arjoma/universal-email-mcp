@@ -87,7 +87,7 @@ def doc_server(tmp: Path) -> Iterator[DocServer]:
     hits: list[str] = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *_: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
 
         def do_GET(self) -> None:  # noqa: N802
@@ -115,7 +115,7 @@ def doc_server(tmp: Path) -> Iterator[DocServer]:
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ctx.load_cert_chain(cert_file, key_file)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
     thread.start()
     try:
         yield DocServer(server.server_address[1], str(cert_file), routes, hits)

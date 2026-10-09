@@ -215,12 +215,28 @@ can tell mail from instructions.
 
 ## Remote mode (preview)
 
-`universal-email-mcp serve` runs the same tools over HTTP (Streamable HTTP, stateless:
-protocol 2026-07-28 and the legacy transport) with `/health` and `/ready`. **This is
-a dev/test preview**: OAuth and the portal come in the next work packages, so for
-now `/mcp` takes one static bearer token and serves the accounts of a local config
-file (for a real deployment, see [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md)
-for all variables and the container image):
+`universal-email-mcp serve` runs the server over HTTP (Streamable HTTP, stateless:
+protocol 2026-07-28 and the legacy transport) with `/health` and `/ready`.
+
+**OAuth mode** (the default): the server is its own OAuth 2.1 authorization server
+(authorization code + PKCE S256, refresh-token rotation, revocation, Client ID Metadata
+Documents with Dynamic Client Registration as fallback). Users sign in with their mailbox
+login, see a consent page and grant the connecting AI client what it may do; `/mcp` needs
+the resulting access token. **Preview:** the per-user mail tools come with a later work
+package, so for now `/mcp` offers only `account_info` (who is connected, what was
+granted). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);
+all variables: [`docs/operator-env.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/operator-env.md).
+
+```bash
+export PUBLIC_URL=http://127.0.0.1:8080 STORE_BACKEND=memory   # development store
+export LOGIN_DOMAINS=company.example=mail.company.example      # who may sign in, and where
+uv run universal-email-mcp serve --host 127.0.0.1
+claude mcp add --transport http email http://127.0.0.1:8080/mcp
+```
+
+**Dev mode** (temporary, with the mail tools): with `UEM_DEV_TOKEN` (or `--insecure-local`,
+loopback only, no token) `/mcp` takes one static bearer token and serves the accounts of a
+local config file:
 
 ```bash
 export UEM_DEV_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -228,9 +244,6 @@ export ALLOWED_HOSTS=localhost,127.0.0.1
 uv run universal-email-mcp serve --config config.local.toml --host 127.0.0.1 --port 8080
 claude mcp add --transport http email http://localhost:8080/mcp --header "Authorization: Bearer $UEM_DEV_TOKEN"
 ```
-
-Without a token the server refuses to start; `--insecure-local` (loopback only, no
-token) is for experiments on your own machine.
 
 ## Remote mode: stored data
 

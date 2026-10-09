@@ -88,11 +88,12 @@ class _Connection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         sock = open_connection(self.host, self.port, self._policy.net, self._policy.resolver)
-        # Closing the socket is the only way to interrupt a blocked read in this thread.
-        self.watchdog = threading.Timer(self._policy.total_timeout, _close_quietly, [sock])
+        self.sock = wrap_tls(sock, self._tls, self.host)
+        # The watchdog must hold the *wrapped* socket (wrapping detaches the plain one).
+        # Closing it is the only way to interrupt a blocked read in this thread.
+        self.watchdog = threading.Timer(self._policy.total_timeout, _close_quietly, [self.sock])
         self.watchdog.daemon = True
         self.watchdog.start()
-        self.sock = wrap_tls(sock, self._tls, self.host)
 
 
 def _close_quietly(sock: socket.socket) -> None:

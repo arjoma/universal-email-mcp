@@ -22,13 +22,10 @@ from tests.oauth_util import (
     register,
 )
 from universal_email_mcp.store import (
-    AuthCode,
-    Grant,
     KeyRing,
     MemoryBackend,
     SessionPolicy,
     Store,
-    Token,
     hash_token,
 )
 
@@ -81,7 +78,10 @@ def test_metadata_documents(client):
     assert meta["client_id_metadata_document_supported"] is True
     assert meta["registration_endpoint"] == ISSUER + "/register"
     assert meta["token_endpoint_auth_methods_supported"] == ["none"]
-    for path in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"):
+    for path in (
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+    ):
         prm = client.get(path).json()
         assert prm["resource"] == RESOURCE and prm["authorization_servers"] == [ISSUER]
 
@@ -103,8 +103,13 @@ async def test_dcr_can_be_disabled():
     op = operator()
     op = replace(op, oauth=replace(op.oauth, dcr_enabled=False))
     with new_client(await make_app(op)) as c:
-        assert "registration_endpoint" not in c.get("/.well-known/oauth-authorization-server").json()
-        assert c.post("/register", json={"redirect_uris": ["http://127.0.0.1/cb"]}).status_code in (404, 405)
+        assert (
+            "registration_endpoint" not in c.get("/.well-known/oauth-authorization-server").json()
+        )
+        assert c.post("/register", json={"redirect_uris": ["http://127.0.0.1/cb"]}).status_code in (
+            404,
+            405,
+        )
 
 
 # ---------------------------------------------------------------- happy path
@@ -254,7 +259,8 @@ def test_confidential_clients_are_refused(client):
     code = a.code()
     assert a.exchange(code, client_secret="x").status_code == 401
     r = client.post(
-        "/token", data={"grant_type": "x", "client_id": a.client_id},
+        "/token",
+        data={"grant_type": "x", "client_id": a.client_id},
         headers={"authorization": "Basic eDp5"},
     )
     assert r.status_code == 401
@@ -347,6 +353,7 @@ async def test_lifetimes(client, clock):
     assert client.post("/mcp", json={}, headers=bearer(second["access_token"])).status_code != 401
     # sliding refresh: 29 days later still fine, each use extends it ...
     token = second
+    r = None
     for _ in range(4):
         clock.advance(days=25)
         r = refresh(client, a.client_id, token["refresh_token"])
@@ -354,7 +361,7 @@ async def test_lifetimes(client, clock):
             break
         token = r.json()
     # ... but the absolute limit of 90 days ends the session
-    assert r.status_code == 400
+    assert r is not None and r.status_code == 400
     assert refresh(client, a.client_id, token["refresh_token"]).status_code == 400
 
 
@@ -410,7 +417,10 @@ def test_revoke_ignores_unknown_and_foreign_tokens(client):
     a, tok = connect(client)
     other = register(client)
     assert client.post("/revoke", data={"token": "nonsense" * 5}).status_code == 200
-    assert client.post("/revoke", data={"token": tok["refresh_token"], "client_id": other}).status_code == 200
+    assert (
+        client.post("/revoke", data={"token": tok["refresh_token"], "client_id": other}).status_code
+        == 200
+    )
     assert refresh(client, a.client_id, tok["refresh_token"]).status_code == 200
     assert client.post("/revoke", data={}).status_code == 400
 
@@ -447,6 +457,7 @@ async def test_portal_session_idle_timeout(client, clock):
 async def test_portal_session_absolute_timeout(client, clock):
     a = Authz(client, register(client))
     a.consent_page()
+    page = ""
     for _ in range(26):
         clock.advance(minutes=29)
         page = a.open().text
@@ -518,7 +529,10 @@ def test_cross_site_post_is_refused_even_with_valid_token(client):
     form = {**hidden_fields(page.text), "address": "alice@example.org", "password": PASSWORD}
     r = client.post("/authorize", data=form, headers={"sec-fetch-site": "cross-site"})
     assert r.status_code == 403
-    assert client.post("/authorize", data=form, headers={"sec-fetch-site": "same-origin"}).status_code == 303
+    assert (
+        client.post("/authorize", data=form, headers={"sec-fetch-site": "same-origin"}).status_code
+        == 303
+    )
 
 
 def test_consent_post_needs_csrf_too(client):
@@ -554,7 +568,9 @@ def test_pages_carry_a_strict_csp_and_no_inline_script(client):
     assert "script-src" not in csp and "unsafe-inline" not in csp
     assert page.headers["x-frame-options"] == "DENY"
     assert page.headers["cache-control"] == "no-store"
-    assert page.headers["referrer-policy"] == "no-referrer"
+    assert (
+        page.headers["referrer-policy"] == "same-origin"
+    )  # "no-referrer" would make browsers send Origin: null
     assert "<script" not in page.text.lower() and " style=" not in page.text.lower()
     assert "onclick" not in page.text.lower()
     css = client.get("/portal/assets/portal.css")
@@ -567,7 +583,10 @@ def test_consent_page_allows_the_redirect_target_in_form_action(client):
     assert "form-action 'self' http://127.0.0.1:*" in csp
     cid = register(client, "https://app.example.com/cb")
     b = Authz(client, cid, redirect_uri="https://app.example.com/cb")
-    assert "form-action 'self' https://app.example.com" in b.consent_page().headers["content-security-policy"]
+    assert (
+        "form-action 'self' https://app.example.com"
+        in b.consent_page().headers["content-security-policy"]
+    )
 
 
 def test_hostile_client_name_is_escaped_and_cleaned(client):
@@ -601,7 +620,10 @@ def test_dcr_validates_and_limits(client):
         {"redirect_uris": ["http://evil.example/cb"]},
         {"redirect_uris": ["https://ok.example/cb#frag"]},
         {"redirect_uris": []},
-        {"redirect_uris": ["https://ok.example/cb"], "token_endpoint_auth_method": "client_secret_basic"},
+        {
+            "redirect_uris": ["https://ok.example/cb"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        },
         {"redirect_uris": ["https://ok.example/cb"], "grant_types": ["implicit"]},
         {"client_name": "no redirects"},
     ]
@@ -613,7 +635,11 @@ def test_dcr_validates_and_limits(client):
     assert client.post("/register", content=b"{" + b" " * 9000 + b"}").status_code == 413
     ok = client.post(
         "/register",
-        json={"redirect_uris": ["https://ok.example/cb"], "client_name": "  My\x00 App  ", "extra": 1},
+        json={
+            "redirect_uris": ["https://ok.example/cb"],
+            "client_name": "  My\x00 App  ",
+            "extra": 1,
+        },
     )
     meta = ok.json()
     assert ok.status_code == 201 and meta["token_endpoint_auth_method"] == "none"
@@ -638,8 +664,13 @@ async def test_dcr_redirect_host_allowlist():
     with new_client(await make_app(op)) as c:
         body = {"redirect_uris": ["https://evil.example/cb"]}
         assert c.post("/register", json=body).status_code == 400
-        assert c.post("/register", json={"redirect_uris": ["https://claude.example/cb"]}).status_code == 201
-        assert c.post("/register", json={"redirect_uris": ["http://127.0.0.1/cb"]}).status_code == 201
+        assert (
+            c.post("/register", json={"redirect_uris": ["https://claude.example/cb"]}).status_code
+            == 201
+        )
+        assert (
+            c.post("/register", json={"redirect_uris": ["http://127.0.0.1/cb"]}).status_code == 201
+        )
 
 
 # ---------------------------------------------------------------- readiness, host checks
@@ -653,3 +684,14 @@ def test_ready_checks_the_store(client):
 def test_host_header_is_enforced_on_oauth_endpoints(client):
     r = client.get("/.well-known/oauth-authorization-server", headers={"host": "evil.example"})
     assert r.status_code == 421
+
+
+def test_origin_header_of_browser_posts(client):
+    a = Authz(client, register(client))
+    form = {**hidden_fields(a.open().text), "address": "alice@example.org", "password": PASSWORD}
+    assert client.post("/authorize", data=form, headers={"origin": "null"}).status_code == 403
+    assert (
+        client.post("/authorize", data=form, headers={"origin": "https://evil.example"}).status_code
+        == 403
+    )
+    assert client.post("/authorize", data=form, headers={"origin": ISSUER}).status_code == 303

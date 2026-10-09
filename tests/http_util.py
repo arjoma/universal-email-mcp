@@ -27,10 +27,12 @@ def operator_for_tests(**kw: Any) -> OperatorConfig:
 
 
 @asynccontextmanager
-async def running(app: Any) -> AsyncIterator[str]:
-    """Serve ``app`` (lifespan included) and yield its base URL."""
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
+async def running(app: Any, sock: socket.socket | None = None) -> AsyncIterator[str]:
+    """Serve ``app`` (lifespan included) and yield its base URL. ``sock`` is a pre-bound
+    listening socket (when the app must know its own port beforehand)."""
+    if sock is None:
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
     server = uvicorn.Server(
         uvicorn.Config(app, log_config=None, access_log=False, lifespan="on", ws="none")
     )
@@ -49,7 +51,9 @@ async def running(app: Any) -> AsyncIterator[str]:
         sock.close()
 
 
-def mcp_client(url: str, token: str | None, *, mode: str = "auto") -> Client:
+def mcp_client(url: str, token: str | None, *, mode: str = "auto", auth: Any = None) -> Client:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    transport = streamable_http_client(url, http_client=create_mcp_http_client(headers=headers))
+    transport = streamable_http_client(
+        url, http_client=create_mcp_http_client(headers=headers, auth=auth)
+    )
     return Client(transport, mode=mode)  # pyright: ignore[reportArgumentType]

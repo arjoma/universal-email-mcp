@@ -7,19 +7,22 @@ the service. Invalid values stop the server at startup with a message naming the
 variable. Secrets are read from the environment (a secret manager mounts them as
 variables) and never logged.
 
-> **Status: preview (work package 3a).** Until OAuth (3c) and the per-user service
-> (3e) exist, `serve` is a dev/test mode: it serves the accounts of a local TOML
-> config (`--config` / `UEM_CONFIG`) and guards `/mcp` with one static bearer token.
-> Do not expose it to users. The variables marked *(later)* are parsed and
-> validated now but only take effect with the later work packages.
+> **Status: preview.** `serve` has two modes. **OAuth mode** (work package 3c) is the
+> default: set `STORE_BACKEND`, `PUBLIC_URL` and `LOGIN_DOMAINS`; users sign in, clients
+> are authorized, and `/mcp` needs an access token (see [oauth.md](oauth.md)). Until the
+> per-user service (3e) `/mcp` offers only `account_info`; the mail tools, the limits and
+> the policy below apply per user from 3e on. The temporary **dev mode** (`UEM_DEV_TOKEN`
+> or `--insecure-local`) serves the accounts of a local TOML config (`--config` /
+> `UEM_CONFIG`) behind one static bearer token; do not expose it to users. The two modes
+> are exclusive (setting both is an error).
 
 ## Listening and security
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8080` | TCP port (Cloud Run sets it). `--port` wins. |
-| `UEM_DEV_TOKEN` | - | Static bearer token for `/mcp`, at least 32 characters. **Required** unless `--insecure-local`. Temporary (replaced by OAuth in 3c). |
-| `PUBLIC_URL` | - | Externally visible origin, e.g. `https://mcp.example.com` (no path; `http` only for localhost). Its host is allowed as `Host`, its origin as `Origin`; HSTS is sent when it is `https`. *(OAuth issuer and metadata URLs later.)* |
+| `UEM_DEV_TOKEN` | - | Dev mode only: static bearer token for `/mcp`, at least 32 characters. Without it (and without `--insecure-local`) the server runs in OAuth mode and needs `STORE_BACKEND`. |
+| `PUBLIC_URL` | - | Externally visible origin, e.g. `https://mcp.example.com` (no path; `http` only for localhost). Its host is allowed as `Host`, its origin as `Origin`; HSTS is sent when it is `https`. **Required in OAuth mode:** it is the OAuth issuer (`iss`) and the base of the metadata URLs and of the resource (`PUBLIC_URL/mcp`). |
 | `ALLOWED_HOSTS` | - | More host names (comma separated, no ports) the server answers to, e.g. the platform's default URL host. Any other `Host` gets 421. `/health` and `/ready` are exempt (probes). **At least one of `PUBLIC_URL` / `ALLOWED_HOSTS` is required.** |
 | `ALLOWED_ORIGINS` | - | More origins accepted in an `Origin` header (a request without `Origin` is fine). Any other gets 403. |
 | `UEM_MAX_REQUEST_BYTES` | `4194304` | Largest request body; more gets 413. |
@@ -30,13 +33,41 @@ The default bind address is `0.0.0.0` (container); `--insecure-local` binds
 `127.0.0.1` only, needs no token and leaves `/mcp` **open** - for trying things
 out on your own machine, and nothing else.
 
-## Mail servers and login domains *(portal: later)*
+## Mail servers and login domains
 
 | Variable | Meaning |
 |---|---|
 | `MAIL_SERVERS` | Servers users may add: preset names or host names, comma separated (`united-domains,mail.example.com`). Empty = free entry with SSRF guards. |
-| `LOGIN_DOMAINS` | `domain=server,...` - e-mail domains that may sign in to the portal and the server each uses. A bare `domain` uses the single `MAIL_SERVERS` entry. |
+| `LOGIN_DOMAINS` | `domain=server,...` - e-mail domains that may sign in (OAuth mode: **required**) and the server each uses for the login check. A bare `domain` uses the single `MAIL_SERVERS` entry. |
 | `UEM_ALLOW_PRIVATE_NETWORKS` | `false` by default in remote mode (mail servers on private/loopback addresses are refused). In dev mode the TOML `[settings]` value is the default. |
+
+## Store and keys (OAuth mode)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STORE_BACKEND` | - | `memory` (development; state and generated keys are lost on restart) or `firestore` (`pip install universal-email-mcp[gcp]`). **Required** in OAuth mode. |
+| `STORE_KEYS` / `STORE_KEYS_FILE` | - | Key ring `k1=<base64 32 bytes>[,k2=...]` (or a mounted file). Required with `firestore`; `memory` generates one when unset. See [stored-data.md](stored-data.md). |
+| `STORE_ACTIVE_KEY` | highest | Key for new blobs. |
+| `PSEUDONYM_KEY` / `PSEUDONYM_KEY_FILE` | - | Base64, at least 32 bytes: the secret that turns a mail address into the pseudonymous user id (`u_...`) used in the store and logs. Required with `firestore`. **Never change it** (users are keyed by it). |
+| `FIRESTORE_PROJECT`, `FIRESTORE_DATABASE`, `FIRESTORE_PREFIX` | ADC project, default DB, - | Firestore location; the prefix lets several instances share a project. |
+
+`/ready` reports a `store` check (one read round trip).
+
+## OAuth and sign-in (OAuth mode)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `UEM_ACCESS_TOKEN_TTL` | `3600` | Access token lifetime in seconds. |
+| `UEM_REFRESH_TOKEN_TTL` | `2592000` (30 days) | Refresh token, sliding (each refresh extends it). `0` = never expires on its own - weaker, a leaked token then lives until revoked. |
+| `UEM_SESSION_MAX_AGE` | `7776000` (90 days) | Absolute lifetime of a connected client, however often it refreshes. `0` = unlimited. |
+| `UEM_PORTAL_IDLE_TIMEOUT` / `UEM_PORTAL_SESSION_MAX` | `1800` / `43200` | Browser sign-in session: idle timeout and absolute maximum, seconds. |
+| `UEM_DCR` | `true` | Offer `/register` (Dynamic Client Registration) as fallback to Client ID Metadata Documents. |
+| `UEM_DCR_REDIRECT_HOSTS` | any | Comma separated hosts a dynamically registered `https` redirect URI may use (loopback is always allowed). |
+| `UEM_TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front (Cloud Run: `1`). Decides which `X-Forwarded-For` entry is the client address for rate limits; `0` uses the socket peer. Set it wrong and rate limits count the proxy, or can be dodged by a forged header. |
+| `UEM_DEFAULT_LANGUAGE` | `en` | Default language of the sign-in and consent pages (needs a catalog; falls back to English). |
+
+The scopes clients can obtain follow the policy: with `UEM_READ_ONLY=true` only
+`mail.read`, `mail.send` is not offered when `UEM_SEND_POLICY=off`.
 
 ## Limits and policy
 
@@ -56,9 +87,10 @@ overrides the TOML value.
 
 | Path | Purpose |
 |---|---|
-| `/mcp` | MCP over Streamable HTTP, **stateless**: clients of protocol 2026-07-28 get the sessionless transport, older clients (<= 2025-11-25) the legacy transport without sessions (no back-channel, so no in-chat confirmation for them). Needs `Authorization: Bearer <UEM_DEV_TOKEN>`; otherwise 401 with `WWW-Authenticate: Bearer`. |
+| `/mcp` | MCP over Streamable HTTP, **stateless**: clients of protocol 2026-07-28 get the sessionless transport, older clients (<= 2025-11-25) the legacy transport without sessions (no back-channel, so no in-chat confirmation for them). OAuth mode: needs an access token issued for this resource; otherwise 401 with `WWW-Authenticate: Bearer resource_metadata="..."`. Dev mode: `Authorization: Bearer <UEM_DEV_TOKEN>`. |
+| `/.well-known/oauth-*`, `/authorize`, `/token`, `/revoke`, `/register`, `/portal/assets/*` | OAuth mode: the authorization server, see [oauth.md](oauth.md). |
 | `/health` | Liveness: `200 {"status":"ok"}`, no dependencies. |
-| `/ready` | Readiness: `200` when all checks pass, else `503`; the body lists check names and booleans only. Today only the loaded config; the store joins in 3b. |
+| `/ready` | Readiness: `200` when all checks pass, else `503`; the body lists check names and booleans only. The loaded config and, in OAuth mode, the store. |
 
 Every response carries `X-Request-Id`; the same id is on the JSON log lines of
 that request. Non-MCP responses get `nosniff`, `X-Frame-Options: DENY`,
