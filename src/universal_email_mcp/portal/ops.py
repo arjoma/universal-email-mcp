@@ -21,6 +21,7 @@ from universal_email_mcp.oauth.config import (
     ACCOUNT_SCOPES,
     SCOPE_READ,
     SCOPE_SEND,
+    SCOPES,
     permission_of,
 )
 from universal_email_mcp.oauth.identity import Address
@@ -175,6 +176,28 @@ async def reduce_grant(
     return await update_retry(store, Grant, grant_id, mutate)
 
 
+async def clamp_grants(
+    store: Store, user_id: str, offered: Iterable[str], only: Iterable[str] | None = None
+) -> None:
+    """Bring every grant of the user back within what the user allows *now*: an account's
+    permissions and the identities with ``send``. Called after anything that lowers them, so
+    a connected client never keeps more than the portal shows. A grant with nothing left is
+    revoked."""
+    offered_t = tuple(offered)
+    allowed: dict[str, set[str]] = {
+        a.id: {f"mail.{p}" for p in a.permissions}
+        for a in await store.list_for_user(MailAccount, user_id)
+    }
+    senders = [i.id for i in await store.list_for_user(Identity, user_id) if i.send]
+    chosen = None if only is None else set(only)
+    for grant in await store.list_for_user(Grant, user_id):
+        if chosen is not None and grant.id not in chosen:
+            continue
+        new = await reduce_grant(store, grant.id, offered_t, allowed, senders)
+        if new is not None and not new.account_ids and not new.identity_ids:
+            await store.revoke_grant(grant.id)
+
+
 # ---------------------------------------------------------------- accounts
 
 
@@ -184,7 +207,9 @@ class Removal:
     identities_removed: int
 
 
-async def remove_account(store: Store, user_id: str, account_id: str) -> Removal | None:
+async def remove_account(
+    store: Store, user_id: str, account_id: str, offered: Iterable[str] = SCOPES
+) -> Removal | None:
     """Delete an account and what hangs off it: identities that took their SMTP login from
     it are removed, others lose the link; every connected client that could use the account
     (or a removed identity) is revoked. ``None`` if there is no such account of the user."""
@@ -209,6 +234,7 @@ async def remove_account(store: Store, user_id: str, account_id: str) -> Removal
             await store.revoke_grant(grant.id)
             revoked += 1
     await store.delete(MailAccount, account_id)
+    await clamp_grants(store, user_id, offered)
     await _fix_default_identity(store, user_id)
     await update_retry(
         store,
@@ -332,12 +358,9 @@ async def ensure_primary(
     """
     primary_id = str(user.settings.get("primary_account", ""))
     if primary_id:
-        await update_retry(
-            store,
-            MailAccount,
-            primary_id,
-            lambda a: replace(a, password=password) if a.password != password else None,
-        )
+        acc = await store.get(MailAccount, primary_id)
+        if acc is not None and acc.password != password:
+            await set_password(store, user.id, primary_id, password)
         return user
     if user.settings.get("primary_done") or profile.imap is None:
         return user
@@ -399,6 +422,10 @@ async def ensure_primary(
         return again or user
     for g in grants:
         await update_retry(store, Grant, g.id, lambda x: _migrate_grant(x, account.id, identity))
+    if grants:
+        await clamp_grants(
+            store, user.id, SCOPES, [g.id for g in grants]
+        )  # the new identity may not send yet
     log_event(
         log, logging.INFO, "sign-in mailbox became an account",
         event="portal.primary_account", grants=len(grants),

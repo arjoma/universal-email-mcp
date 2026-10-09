@@ -117,12 +117,16 @@ async def check_login(
     return LoginCheck(OK, address, user_id, profile)
 
 
-async def complete_sign_in(svc: OAuthService, check: LoginCheck, password: str) -> str:
+async def complete_sign_in(
+    svc: OAuthService, check: LoginCheck, password: str, old_cookie: str | None = None
+) -> str:
     """Create/refresh the user and the sign-in mailbox account, open a portal session
     (counts as a fresh password entry). Returns the cookie value."""
     assert check.ok and check.address is not None and check.profile is not None
     user = await svc.store.get_or_create_user(check.user_id, check.address.normal)
     await ensure_primary(svc.store, user, check.address, password, check.profile)
+    if old_cookie and len(old_cookie) <= 200:
+        await svc.store.delete_portal_session(old_cookie)  # no session survives a sign-in
     raw, _ = await svc.store.create_portal_session(
         check.user_id, svc.cfg.portal_max, fresh_login=True
     )

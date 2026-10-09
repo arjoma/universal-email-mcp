@@ -416,7 +416,9 @@ class OAuthEndpoints:
                 request, req, error=check.error, status=check.status, address=typed
             )
         assert isinstance(password, str)
-        raw = await signin.complete_sign_in(svc, check, password)
+        raw = await signin.complete_sign_in(
+            svc, check, password, svc.portal.session_cookie(request)
+        )
         response = self._back_to_authorize(request, req)
         svc.portal.set_session(response, raw)
         svc.portal.rotate_csrf(response)
