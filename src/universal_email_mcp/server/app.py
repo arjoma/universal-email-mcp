@@ -1147,7 +1147,8 @@ def build_server(
             for a, url in zip(msg.attachments, links, strict=True):
                 row = [
                     escape_cell(a.part_id, 40),
-                    escape_cell(a.filename or "(unnamed)", 60) + (" (inline)" if a.inline else ""),
+                    escape_cell(a.filename or "(unnamed)", 60, keep_end=16)
+                    + (" (inline)" if a.inline else ""),
                     escape_cell(a.content_type, 40),
                     ("~" if a.size_estimated else "") + render.fmt_size(a.size),
                 ]
@@ -1209,7 +1210,7 @@ def build_server(
         ctype = safe_mime_type(leaf.content_type)
         size_txt = ("" if res.size_exact else "about ") + render.fmt_size(res.size)
         fields = [
-            ["Attachment", escape_cell(name or "(unnamed)", 100)],
+            ["Attachment", escape_cell(name or "(unnamed)", 100, keep_end=16)],
             ["Id", escape_cell(leaf.section, 40)],
             ["Type", escape_cell(leaf.content_type, 60)],
             ["Size", size_txt],

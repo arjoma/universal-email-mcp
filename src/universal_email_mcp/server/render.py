@@ -11,6 +11,7 @@ generates itself go through :func:`server_link`.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from datetime import datetime
 
@@ -30,6 +31,12 @@ _URL = re.compile(
     r"|www\.[^\s|<>]*"
     r"|(?<![a-z0-9-])(?<![a-z0-9-]\.)(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?/[^\s|<>]*"
 )
+# Characters that NFKC turns into URL syntax (fullwidth/halfwidth forms, small form
+# variants, one- and two-dot leaders). Not the whole text: NFKC would also turn the
+# truncation mark ``…`` into three dots.
+_COMPAT_FORMS = re.compile(r"[\uff00-\uffef\ufe50-\ufe6f\u2024\u2025]")
+# ``//host/path`` without a scheme (protocol-relative): linkified by markdown-it.
+_PROTOCOL_RELATIVE = re.compile(r"(?<![\w\]])//")
 # ``mailto:x``, ``xmpp:x``, ``javascript:x`` … (a word glued to a colon and more text)
 _WWW = re.compile(r"(?i)www\.")
 # Bare domains (``evil.com``, no scheme/``www.``/path): GFM leaves them alone, but
@@ -113,8 +120,13 @@ def defang(text: str, *, keep_address_domains: bool = False) -> str:
     ``keep_address_domains``: the domain right after an ``@`` keeps its dots (the
     ``＠`` already blocks the e-mail autolink) so addresses stay copyable.
     """
+    # Compatibility forms first: fullwidth ``ｈｔｔｐｓ://``, the two-dot leader in
+    # ``https‥//``, ``＠`` / ``﹫`` would otherwise slip past the ASCII patterns below
+    # and be linked by renderers that normalise.
+    text = _COMPAT_FORMS.sub(lambda m: unicodedata.normalize("NFKC", m.group()), text)
     text = _URL.sub(_defang_match, text)
     text = text.replace("://", "[:]//")
+    text = _PROTOCOL_RELATIVE.sub("/[/]", text)
     text = _WWW.sub(lambda m: m.group(0)[:3] + "[.]", text)
     text = _BARE_DOMAIN.sub(
         lambda m: (
@@ -134,7 +146,11 @@ def _dots(rest: str) -> str:
 
 
 def escape_cell(
-    value: object, max_chars: int = DEFAULT_CELL_CHARS, *, address: bool = False
+    value: object,
+    max_chars: int = DEFAULT_CELL_CHARS,
+    *,
+    address: bool = False,
+    keep_end: int = 0,
 ) -> str:
     """Make untrusted text safe and compact for one Markdown table cell.
 
@@ -143,10 +159,17 @@ def escape_cell(
     backticks, link/image brackets, HTML ``<>``, emphasis and entity characters,
     and caps the length (``…``). The result renders as the literal text in any
     CommonMark/GFM renderer.
+
+    ``keep_end``: when shortening, cut in the middle and keep this many characters
+    at the end (file names: the extension must stay visible).
     """
     text = sanitize_line("" if value is None else str(value))
     if max_chars > 0 and len(text) > max_chars:
-        text = text[: max_chars - 1].rstrip() + "…"
+        tail = min(keep_end, max_chars // 2)
+        if tail:
+            text = text[: max_chars - tail - 1].rstrip() + "…" + text[-tail:].lstrip()
+        else:
+            text = text[: max_chars - 1].rstrip() + "…"
     return defang(text, keep_address_domains=address).translate(_MD_SPECIAL)
 
 

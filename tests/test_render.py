@@ -199,3 +199,50 @@ def test_defang_body_bare_domains_and_fences():
     assert "evil[.]com" in out and "http[.]attacker[.]org" in out
     assert "report.pdf" in out
     assert "```" not in out and "~~~" not in out
+
+
+# security review L4: protocol-relative and compatibility-form links ----------------
+
+LINK_FORMS = [
+    "//evil.example",
+    "x //attacker.dyn?d=SECRET",
+    "ｈｔｔｐｓ://attacker.dyn?d=1",
+    "https‥//x.dyn",
+    "Ｗｗｗ.evil.dyn",
+    "ｅｖｉｌ.com",
+    "x＠y.dyn",
+    "x﹫y.dyn",
+]
+
+
+@pytest.mark.parametrize("payload", LINK_FORMS)
+def test_protocol_relative_and_compat_form_links_do_not_render(payload):
+    cell = markdown_table(["a"], [[escape_cell(payload, 200)]])
+    body = "> " + defang_body(payload).replace("\n", "\n> ")
+    md = MarkdownIt("gfm-like", {"linkify": True})
+    for text in (cell, body):
+        for html in (cmarkgfm.github_flavored_markdown_to_html(text), md.render(text)):
+            assert not re.search(r"<a |<img", html), (payload, html)
+
+
+# security review L6: the end of a file name stays visible -------------------------
+
+
+def test_blank_runs_cannot_hide_a_file_extension():
+    name = "Rechnung_2026-117.pdf" + "\u2800" * 45 + ".exe"
+    raw = (
+        "From: a@b.c\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=X\r\n\r\n"
+        "--X\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n--X\r\n"
+        "Content-Type: application/octet-stream\r\nContent-Disposition: attachment; "
+        "filename*=utf-8''"
+        + "".join(f"%{b:02X}" for b in name.encode())
+        + "\r\n\r\nMZ\r\n--X--\r\n"
+    ).encode()
+    filename = parse_message(raw).attachments[0].filename
+    assert filename is not None and "\u2800" not in filename and filename.endswith(".exe")
+    assert escape_cell(filename, 60, keep_end=16).endswith(".exe")
+
+
+def test_long_names_are_cut_in_the_middle():
+    cell = escape_cell("x" * 300 + ".exe", 60, keep_end=16)
+    assert cell.endswith(".exe") and "…" in cell and len(cell) <= 60
