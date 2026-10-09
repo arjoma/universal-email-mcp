@@ -46,8 +46,12 @@ connects to the checked address, TLS is verified for the host name, only the por
 465 / 587 are allowed, and IP literals and bare names are refused. Servers listed by the
 operator are trusted (any port; private addresses only with `UEM_ALLOW_PRIVATE_NETWORKS`).
 
-Connection tests open outbound connections and try logins, so they are rate limited (10 per
-user and 10 minutes, 30 per IP, 5 per target mailbox and 15 minutes). Nothing the server says
+Connection tests open outbound connections and try logins, so they are rate limited (by default 10 per
+user and 10 minutes, 30 per IP, 5 per target mailbox and 15 minutes). Every portal POST is
+also limited per user and per network, message pages per user, and raw/attachment downloads
+per user; a refused request gets a translated 429 page with `Retry-After`. Re-authentication
+is a password check: wrong entries count against the same per-address and per-IP limits as
+sign-in. All values: [operator-env.md](operator-env.md#rate-limits). Nothing the server says
 is shown - only a fixed reason: rejected login, not reachable, certificate/TLS problem,
 address not allowed, features missing, timeout, unexpected answer.
 

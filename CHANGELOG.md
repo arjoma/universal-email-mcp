@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rate limits (`docs/operator-env.md#rate-limits`): every in-memory limit is now one `RateLimits`
+  inventory with `UEM_RATE_*` variables (`COUNT/WINDOW`, validated). New: MCP tool calls per user
+  and per grant (burst and sustained windows, tighter for tools that change something; the
+  error is `RATE_LIMITED` with `retry_after`, and the call never reaches a mail server), portal
+  POSTs per user and network, viewer pages and downloads per user (translated 429 page),
+  `/authorize` POSTs per network. IPv6 clients are limited per /64, `Retry-After` is sent with
+  every 429, limiter memory is bounded, `ratelimit.hit` carries `grant` and the new scopes.
 - Own-activity feed and the portal page **Activity** (`/portal/activity`): the user's recent
   events in plain words - sign-in, connecting and disconnecting applications, account and
   identity changes, what applications did (a `tool.call` audit event per MCP tool call in OAuth

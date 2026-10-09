@@ -173,8 +173,6 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       original is folded, never hidden, because a hostile draft could imitate a quote.
 - [ ] An approval stores the draft as `account name / folder / UID` (opaque id); renaming the
       account or a changed UIDVALIDITY makes it "gone" (the page says so, nothing is sent).
-- [ ] No per-user/IP rate limit on the approvals page and its re-authentication beyond the
-      password checks of sign-in (M4 rate limits).
 - [ ] `send_message` in remote mode always saves the composed text as a draft before the
       question; a rejected, expired or unanswered approval leaves it in Drafts (by design,
       nothing is lost) - consider a cleanup hint in the result for drafts older than the TTL.
@@ -208,8 +206,8 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Connection pool is per grant: two clients of one user hold separate connections to the same
       mailbox (bounded by `UEM_MAX_CONNECTIONS_PER_USER`). Sharing routers per (user, account
       version) would halve that but needs per-grant permission checks outside the router.
-- [ ] Caps are per process, in memory; several instances multiply them. Tool-call rate limits
-      per user/token (M4) are not there; `BUSY` is returned, never queued.
+- [ ] Caps are per process, in memory; several instances multiply them. `BUSY` is returned,
+      never queued.
 - [ ] A saved account's host is not re-checked against `MAIL_SERVERS` at connect time (the
       portal checks on entry; the SSRF guards of `mail/net.py` always apply). Removing a server
       from `MAIL_SERVERS` does not disable existing accounts.
@@ -276,6 +274,13 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       (concurrent POSTs can exceed them); `identity_save`/`remove_*` repeat store reads that a
       small helper could share; no test for `identity_test` rate limiting.
 
+- [ ] Rate limits (M4 4b) leftovers: tool-call limits count calls, not cost (a `find_messages`
+      over a huge folder costs more than `account_info`); the `ratelimit.hit` audit line of a
+      refused tool call is emitted for every refused request, so a client that ignores
+      `retry_after` can fill the log (it is one line per request, like the HTTP limits);
+      the `/token` refresh grant is limited per network only, not per client or grant; the
+      viewer HTML frame and its page count as two viewer requests.
+
 ### Remote HTTP and store (3a-3c follow-ups)
 - [ ] Refresh-token reuse is strict: any second use of a rotated token (also two truly
       concurrent refreshes, e.g. a client retrying after a lost response) revokes the whole
@@ -283,8 +288,11 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       seconds) may be needed once real clients are observed.
 - [ ] Rate limiters (sign-in per address and IP, token, registration, client-document
       fetch) are in memory per instance: N instances allow N times the limit, a restart
-      resets them. A shared counter in the store would fix it. The per-address limit also
-      lets an attacker lock a known address out of sign-in for 15 minutes.
+      resets them (all `UEM_RATE_*` limits, tool calls included; only the send limit is in
+      the store). A shared counter in the store would fix it - most worth it for the sign-in
+      and re-authentication limits (brute force spread over N instances gets N x 5 guesses per
+      15 minutes). The per-address limit also lets an attacker lock a known address out of
+      sign-in for 15 minutes.
 - [ ] Consent is per request: every authorization creates a new grant, so a client that
       reconnects shows up twice in "Connected applications" (the user disconnects the old
       one). Replacing the older grant of the same client and user was left out on purpose:
@@ -305,8 +313,7 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Review leftovers of 3c: (a) CIMD fetch: the deadline starts after connect/TLS and every
       resolved address is tried (N x 5 s); fetches and IMAP logins share the default thread
       pool and the login semaphore is released on timeout while the thread runs on - give
-      them their own bounded executor and an overall deadline; (b) rate limits key IPv6 by
-      full address (use /64) and failed sign-ins have no global cap per login domain (the
+      them their own bounded executor and an overall deadline; (b) failed sign-ins have no global cap per login domain (the
       mail server may ban the egress IP; document whitelisting); (c) and (d) are done in 3d (CORS for the cookie-less
       endpoints; `send` needs a fresh password); (e) the
       consent redirect after Allow crosses CSP `form-action` per hop (a callback that
@@ -323,8 +330,8 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       service; drop it once the portal and the sandbox can stand in).
       `OperatorConfig.mail_servers` is parsed but unused until 3d.
 - [ ] Consider reporting not-ready after SIGTERM.
-- [ ] No per-IP/per-token rate limiting on `/mcp` (M4 rate limits); 3e caps parallel calls and
-      connections per user, not calls per minute.
+- [ ] `/mcp` requests with a bad or missing token are not rate limited per network (the
+      tool-call limits apply to valid tokens only; the token check is a store lookup).
 - [ ] uvicorn re-raises SIGTERM after the graceful stop, so the process exits with status 143
       instead of 0 (harmless on Cloud Run). No CI image build yet (3i `cloudbuild.yaml`).
 - [ ] `Host` matching is exact on names (no wildcards such as `*.run.app`); list each name.
@@ -376,8 +383,7 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] Message viewer follow-ups (3g shipped the core): "all attachments as ZIP" (needs a
       streaming zip writer over `iter_part`); `Content-Length` for base64/QP downloads
       (responses are chunked); message text beyond `limits.max_body_chars` (the page says to
-      take the `.eml`); a per-user rate limit for viewer requests (only the parallel-call cap
-      applies); a decoded (RFC 2047) toggle for the raw header view.
+      take the `.eml`); a decoded (RFC 2047) toggle for the raw header view.
 - [ ] Viewer review leftovers (minor): `?images=1` is a plain GET toggle (a mail link to
       it would pre-click for a user who knows the id: use a nonce); the message page
       sanitises the HTML once for the counts and the iframe route again (cache briefly);

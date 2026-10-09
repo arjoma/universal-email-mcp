@@ -128,7 +128,62 @@ derived from `STORE_KEYS` (so every instance agrees and the state follows key ro
 
 A deployment with several instances multiplies the connection caps; size
 `--max-instances` and these values so that `instances x UEM_MAX_CONNECTIONS` stays within what
-the mail servers accept. The caps are per process; tool-call rate limits come with M4.
+the mail servers accept. The caps are per process; see "Rate limits" below for the call limits.
+
+## Rate limits
+
+OAuth mode limits attempts and calls so a stolen session, a looping client or a password
+guesser cannot do unbounded work. Every limit is `COUNT/WINDOW` - `20/15m` is 20 per 15
+minutes; units `s`, `m`, `h`, `d` (a bare number is seconds); count 1 to 100000, window 1
+second to 7 days. An invalid value, or an unknown `UEM_RATE_*` name, stops the server at
+startup. There is deliberately no way to switch a limit off; raise it instead.
+
+| Variable | Default | Counted per | What it limits |
+|---|---|---|---|
+| `UEM_RATE_SIGNIN_ADDRESS` | `5/15m` | user / mailbox address | Wrong passwords at sign-in **and** portal re-authentication (they check the same password, so they share the counter). Counts failures only; a success resets it. |
+| `UEM_RATE_SIGNIN_IP` | `20/15m` | network | Sign-in and re-authentication attempts, every one counted. |
+| `UEM_RATE_AUTHORIZE_IP` | `120/10m` | network | POSTs to `/authorize` (sign-in, consent, deny, sign-out). |
+| `UEM_RATE_REGISTER_IP` | `10/1h` | network | Dynamic Client Registration. |
+| `UEM_RATE_REGISTER_GLOBAL` | `200/1h` | whole instance | Dynamic Client Registration, all callers together. |
+| `UEM_RATE_TOKEN_IP` | `300/1m` | network | `/token` and `/revoke`. |
+| `UEM_RATE_CLIENT_FETCH_IP` | `30/1m` | network | Downloads of Client ID Metadata Documents (outbound fetches triggered by `/authorize`). |
+| `UEM_RATE_PORTAL_USER` | `60/10m` | user | State-changing portal requests (every POST: accounts, identities, clients, re-authentication). |
+| `UEM_RATE_PORTAL_IP` | `120/10m` | network | The same, per network. |
+| `UEM_RATE_TEST_USER` | `10/10m` | user | Connection tests and tested logins when adding an account/identity (they open outbound connections). |
+| `UEM_RATE_TEST_IP` | `30/10m` | network | The same, per network. |
+| `UEM_RATE_TEST_TARGET` | `5/15m` | mailbox (host, port, user name) | The same, per target mailbox - stops password guessing through the portal. |
+| `UEM_RATE_VIEWER_USER` | `120/1m` | user | Message viewer pages and HTML frames (`/m/...`, `/c/...`). |
+| `UEM_RATE_DOWNLOAD_USER` | `60/10m` | user | Raw `.eml` and attachment downloads. |
+| `UEM_RATE_TOOL_USER_BURST` | `30/10s` | user | MCP tool calls of one user, all connected clients together - short burst window. |
+| `UEM_RATE_TOOL_USER` | `600/10m` | user | The same, sustained window. |
+| `UEM_RATE_TOOL_GRANT_BURST` | `20/10s` | grant (one connected client) | MCP tool calls of one grant - burst. |
+| `UEM_RATE_TOOL_GRANT` | `300/10m` | grant | The same, sustained. |
+| `UEM_RATE_TOOL_WRITE_BURST` | `10/10s` | user | Extra limit on tools that change something (`mark_messages`, `move_messages`, `create_folder`, `delete_messages`, `save_draft`, `send_message`) - burst. |
+| `UEM_RATE_TOOL_WRITE` | `60/10m` | user | The same, sustained. |
+
+How they behave:
+
+* **Per instance.** These counters live in the memory of one process. With `n` instances
+  (Cloud Run scales out) a caller can use up to `n` times the limit, and a restart forgets
+  the counts. The send limit (`UEM_MAX_SENDS_PER_HOUR` / `_DAY`) is the one shared limit: it
+  is counted in the store. A shared counter for the sign-in limits is a TODO; until then keep
+  `--max-instances` small or put a rate limiter in front (load balancer / Cloud Armor).
+* **Network** = the client address, IPv4 as is and IPv6 grouped per /64 (one subscriber
+  owns a /64, so single addresses cannot be rotated to dodge a limit). The address is the
+  socket peer, or - with `UEM_TRUSTED_PROXY_HOPS` set - the `X-Forwarded-For` entry that
+  many places from the right (the one the first trusted proxy saw; entries to its left are
+  client claims and ignored). Anything that is not an IP address shares one bucket. Set the
+  hop count to what you really have: too low counts your proxy as the client, too high lets
+  callers forge their address.
+* **Sliding windows.** A refused request is not counted, so waiting as told is enough.
+  Refusals say how long: `429` with `Retry-After` (HTTP, portal pages translated), and for
+  tool calls the error `RATE_LIMITED` with `retry_after` seconds in the structured error and
+  an English hint for the AI client. A refused tool call never takes a connection or reaches
+  a mail server.
+* **Bounded memory.** Each limiter tracks at most 20000 keys and each key at most `COUNT`
+  timestamps; when full, expired keys go first, then the oldest. Keys (addresses, user ids)
+  exist only in memory and are never logged.
+* **Audit.** Every refusal is a `ratelimit.hit` event with a `scope` (see [audit.md](audit.md)).
 
 ## Endpoints
 
