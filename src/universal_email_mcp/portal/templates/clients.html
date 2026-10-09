@@ -11,9 +11,9 @@
   <dl>
     <dt>{{ _("Identified by") }}</dt>
     <dd>{% if g.host %}<code>{{ g.host }}</code>{% elif g.registered %}{{ _("Self-registered application (name not verified)") }}{% else %}{{ _("unknown") }}{% endif %}</dd>
-    <dt>{{ _("Connected") }}</dt><dd>{{ g.created }}</dd>
-    <dt>{{ _("Last used") }}</dt><dd>{% if g.last_used %}{{ g.last_used }}{% else %}{{ _("never") }}{% endif %}</dd>
-    <dt>{{ _("Access ends (unless used again)") }}</dt><dd>{% if g.expires %}{{ g.expires }}{% else %}{{ _("never") }}{% endif %}</dd>
+    <dt>{{ _("Connected") }}</dt><dd>{{ g.created|when }}</dd>
+    <dt>{{ _("Last used") }}</dt><dd>{% if g.last_used %}{{ g.last_used|when }}{% else %}{{ _("never") }}{% endif %}</dd>
+    <dt>{{ _("Access ends (unless used again)") }}</dt><dd>{% if g.expires %}{{ g.expires|when }}{% else %}{{ _("never") }}{% endif %}</dd>
     <dt>{{ _("May use") }}</dt>
     <dd>
       <ul class="plain">

@@ -58,6 +58,7 @@ from universal_email_mcp.errors import (
 )
 from universal_email_mcp.mail.htmlview import TooComplex, csp
 from universal_email_mcp.models import Message
+from universal_email_mcp.portal.i18n import TIME_FORMAT
 from universal_email_mcp.portal.pages import Auth, PortalEndpoints
 from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.server import render
@@ -138,7 +139,7 @@ class ContentTokens:
 
 
 def _when(dt: datetime | None) -> str:
-    return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC") if dt else ""
+    return dt.astimezone(UTC).strftime(TIME_FORMAT) if dt else ""
 
 
 def _family(content_type: str) -> str:

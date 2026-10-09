@@ -18,9 +18,9 @@
     {% for a in approvals %}
     <tr>
       <td>{% if a.client %}{{ a.client }}{% else %}<em>{{ _("(unnamed application)") }}</em>{% endif %}</td>
-      <td>{{ a.created }}</td>
+      <td>{{ a.created|when }}</td>
       <td>
-        {% if a.state == "pending" %}<strong>{{ _("Waiting for you") }}</strong> <span class="hint">({{ _("until") }} {{ a.expires }})</span>
+        {% if a.state == "pending" %}<strong>{{ _("Waiting for you") }}</strong> <span class="hint">({{ _("until") }} {{ a.expires|when }})</span>
         {% elif a.state == "expired" %}{{ _("Expired") }}
         {% elif a.state == "rejected" %}{{ _("Rejected") }}
         {% elif a.state == "approved" %}{{ _("Approved") }}

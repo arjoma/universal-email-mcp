@@ -3,8 +3,7 @@
 Templates never contain visible text of their own: every string goes through ``_()``
 (or ``{% trans %}``). The *message id is the English text* (gettext style), so English needs
 no catalog at all; a language is a JSON file ``locales/<code>.json`` that maps English text
-to its translation (``{"Sign in": "Anmelden"}``). German is the planned second language
-(M4); until then only English ships.
+to its translation (``{"Sign in": "Anmelden"}``). English and German ship.
 
 Which language a request gets: the user's choice (cookie ``uem_lang``) first, then the
 browser's ``Accept-Language``, then the operator's default language, then English.
@@ -18,12 +17,15 @@ import gettext
 import io
 import json
 import re
+from datetime import datetime
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import jinja2
 from jinja2.ext import babel_extract
+
+from universal_email_mcp.portal.dynamic import DYNAMIC_MESSAGES, translate_dynamic
 
 PORTAL_DIR = Path(__file__).parent
 TEMPLATE_DIR = PORTAL_DIR / "templates"
@@ -40,6 +42,9 @@ LANGUAGE_NAMES = {
     "pt": "Português",
 }
 """Names of languages in themselves (never translated); unknown codes show as the code."""
+TIME_FORMAT = "%Y-%m-%d %H:%M UTC"
+"""How the Python layer writes times (``strftime``); it is also a message id, so a language
+can show them in its own order (German: ``%d.%m.%Y %H:%M UTC``)."""
 _LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z0-9]{2,8})?$")
 
 
@@ -153,6 +158,8 @@ class Translator:
             env.install_gettext_callables(  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
                 catalog.gettext, catalog.ngettext, newstyle=True
             )
+            env.filters["tr"] = lambda text: translate_dynamic(catalog.gettext, str(text))
+            env.filters["when"] = lambda text: _localize_time(catalog, str(text))
             self._envs[lang] = env
         return env
 
@@ -160,8 +167,20 @@ class Translator:
         return self.env(lang).get_template(template).render(lang=lang, **context)
 
 
+def _localize_time(catalog: Catalog, text: str) -> str:
+    """A time written with :data:`TIME_FORMAT` in the language's own format (else unchanged)."""
+    fmt = catalog.gettext(TIME_FORMAT)
+    if fmt == TIME_FORMAT:
+        return text
+    try:
+        return datetime.strptime(text, TIME_FORMAT).strftime(fmt)
+    except ValueError:
+        return text
+
+
 def extract_messages(template_dir: Path = TEMPLATE_DIR) -> list[str]:
-    """Every message id used in the templates (sorted, unique) - the translator's worklist."""
+    """Every message id the pages use (templates, dynamic sentences, the time format; sorted,
+    unique) - the translator's worklist."""
     env = jinja2.Environment(extensions=["jinja2.ext.i18n"])
     found: set[str] = set()
     for path in sorted(template_dir.glob("*.html")):
@@ -173,4 +192,6 @@ def extract_messages(template_dir: Path = TEMPLATE_DIR) -> list[str]:
             items = message if isinstance(message, tuple) else (message,)
             found.update(m for m in items if isinstance(m, str))  # pyright: ignore[reportUnknownVariableType]
     del env
+    found.update(DYNAMIC_MESSAGES)
+    found.add(TIME_FORMAT)
     return sorted(found)

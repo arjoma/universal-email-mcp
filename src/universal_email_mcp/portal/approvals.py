@@ -54,6 +54,7 @@ from universal_email_mcp.service.send import (
     split_quoted,
     text_excerpt,
 )
+from universal_email_mcp.portal.i18n import TIME_FORMAT
 from universal_email_mcp.store import Grant, PendingApproval
 from universal_email_mcp.store.backend import StoreConflict
 
@@ -83,7 +84,7 @@ def view_of(p: Prepared) -> dict[str, Any]:
     out = p.out
     recipients = [
         {
-            "label": {"to": "To", "cc": "Cc", "bcc": "Bcc"}[c.field],
+            "field": c.field,
             "address": address_text(c.address),
             "tag": class_tag(c),
             "flagged": c.klass in ("new", "lookalike"),
@@ -362,7 +363,7 @@ def _problem_code(e: MailError) -> str:
 
 
 def _fmt(dt: Any) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else ""
+    return dt.strftime(TIME_FORMAT) if dt else ""
 
 
 __all__ = ["ApprovalPages", "Loaded", "view_of"]

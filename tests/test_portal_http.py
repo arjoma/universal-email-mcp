@@ -234,7 +234,8 @@ async def test_the_language_switch_sets_the_cookie_and_changes_the_pages():
         assert "Mail accounts" in b.page("/portal/accounts")
 
 
-def test_the_switch_is_hidden_while_only_one_language_ships(app):
+def test_the_switch_is_hidden_while_only_one_language_is_available(app):
+    app.state.oauth_service.portal.translator.catalogs = {"en": Catalog()}
     with Browser(app) as b:
         assert 'name="lang"' not in b.page("/portal/signin")
 
