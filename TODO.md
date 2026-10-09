@@ -135,13 +135,10 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
 - [ ] An identity without a store account cannot send (the draft is the safety net and the
       Sent copy needs a place); the design allows "send without copies, noted in the
       confirmation". Needs a decision on the fallback when confirmation is impossible.
-- [ ] Remote mode (3f): the elicitation state rides the SDK's `request_state` unsealed
-      locally; sealing/binding to user and content hash (`RequestStateSecurity`) and the
-      `SEND_FALLBACK` portal modes belong to 3f. The question carries a content
-      fingerprint so an answer cannot be reused for changed text.
-- [ ] Rate limits and the sent-Message-ID guard are in memory (lost on restart); the
-      remote store (3b) should hold them. A send whose draft could not be removed (no
-      UIDPLUS) can be sent again after a restart.
+- [x] Remote mode (3f): sealing, binding and the `SEND_FALLBACK` modes are done (see WP 3f).
+- [ ] The in-memory rate limit and sent-Message-ID guard stay in local mode (lost on restart);
+      remote mode counts in the store (WP 3f). A send whose draft could not be removed (no
+      UIDPLUS) can be sent again after a restart in local mode.
 - [ ] Look-alike detection compares with the Sent history of the store account only (up to
       3000 newest Sent headers read per check, 2 years): contacts only seen in INBOX are
       not "known" and not compared. The confusables table is small (Cyrillic, Greek, a few
@@ -159,6 +156,30 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       call `save_draft` again to keep the text. A failure after the draft was stored names its id
       in the error hint.
 - [ ] `SendOut.attachments` reports no content types (file names and sizes only).
+
+### WP 3f (send in remote mode)
+- [ ] Sends per hour/day are counted from the user's activity entries (`event == "send"`,
+      read as a whole list per check): fine for a feed of hundreds, but a counter record per
+      user and window (or a Firestore count query) is needed before heavy use; two instances
+      can overshoot by one. WP 3h (activity feed) must not write a second `send` entry.
+- [ ] The replay guard (`Store.claim_send`) keeps `user + content hash` for 10 minutes, so the
+      same text to the same recipients cannot be sent twice within that time on purpose.
+      A replayed confirmation of a *new* message still leaves one extra copy of the draft in
+      Drafts (the draft is stored before the claim fails).
+- [ ] `SendOut.account` names the identity's generated outgoing account (`smtp:i_...`), which
+      means nothing to a user; show the identity address instead.
+- [ ] The approvals list shows application and time only (the mail data needs an IMAP read
+      per entry); a short summary (subject, first recipient) could be cached in the sealed
+      part of the record if users find the list too bare.
+- [ ] `split_quoted` for the portal page is heuristic (a trailing `>` block); the quoted
+      original is folded, never hidden, because a hostile draft could imitate a quote.
+- [ ] An approval stores the draft as `account name / folder / UID` (opaque id); renaming the
+      account or a changed UIDVALIDITY makes it "gone" (the page says so, nothing is sent).
+- [ ] No per-user/IP rate limit on the approvals page and its re-authentication beyond the
+      password checks of sign-in (M4 rate limits).
+- [ ] `send_message` in remote mode always saves the composed text as a draft before the
+      question; a rejected, expired or unanswered approval leaves it in Drafts (by design,
+      nothing is lost) - consider a cleanup hint in the result for drafts older than the TTL.
 
 ### POP3
 - [ ] No download links for POP3 attachments in the *local* loopback listener (it reads

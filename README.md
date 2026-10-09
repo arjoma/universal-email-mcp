@@ -94,7 +94,8 @@ section 8):
   every recipient is internal; `on` asks only for look-alikes; `draft` never
   sends; `off` removes the tool. A look-alike recipient is **always** put to the
   user. A client that cannot elicit (or a user who declines) means: nothing is
-  sent, the mail stays a draft and must be sent from the mail client.
+  sent, the mail stays a draft and must be sent from the mail client. (Remote mode
+  can instead park it for approval in the portal, see below.)
 - Recipient classes: `internal` = your own identity addresses and
   `[policy] internal_domains`; `known` = you wrote to it (Sent, To/Cc, 2 years);
   `new`; `lookalike` = a typo or confusable (digits for letters, Cyrillic or
@@ -227,8 +228,12 @@ their mail accounts (IMAP or POP3, connection tested before it is saved), set pe
 manage sender identities, see the connected AI clients and disconnect or reduce them
 ([`docs/portal.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/portal.md)).
 `/mcp` serves each user's own accounts from the store with exactly the tools the client's
-grant allows (read, organize, delete, drafts); sending from remote mode follows with a later
-work package. Messages in tool results link to a **message viewer** in the portal
+grant allows (read, organize, delete, drafts, and `send_message` when the grant, the
+sender identity and the operator's policy all allow it). A send asks the user through MCP
+elicitation (the continuation state is sealed, bound to user and grant, and cannot be forged
+or replayed); a client that cannot ask gets the operator's `SEND_FALLBACK`: keep a draft, or
+park the message under **Pending approvals** in the portal, where the user reads exactly what
+would go out and approves it with a password check. Messages in tool results link to a **message viewer** in the portal
 (`PUBLIC_URL/m/<id>`: text, HTML in a sandbox with no remote content unless clicked, conversation,
 raw headers, `.eml`, attachment downloads streamed from the mail server; the portal session
 authorises, no tokens in the links). How it works and how to run it: [`docs/oauth.md`](https://github.com/arjoma/universal-email-mcp/blob/main/docs/oauth.md);

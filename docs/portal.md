@@ -73,13 +73,39 @@ or **reduced**: permissions and identities can be taken away, never added (to gi
 disconnect and connect again). A client that reconnects creates a second entry; the older one
 can be disconnected.
 
+## Pending approvals
+
+`/portal/approvals` lists the sends that an application wanted to make but could not ask the
+user about (the client has no elicitation, or the operator's `SEND_FALLBACK` always asks in the
+portal; see [oauth.md](oauth.md)). Each entry stays for `UEM_APPROVAL_TTL` (10 minutes by
+default) and then shows as **expired**. The page of one entry re-reads the draft from the
+mailbox, through the same per-user service the application uses, and shows what would be sent:
+
+* the sender (and which identity), **every recipient with its class** (internal, written to
+  before, **NEW**, **LOOK-ALIKE**) and the recipient check's warnings, Bcc marked as hidden;
+* the subject, the attachments (names and sizes; a count of the ones not listed),
+* the whole **new text** under the same truncation rules as the elicitation prompt (3000
+  characters / 80 lines, the rest announced with numbers, never silently); links are defanged,
+  control and bidi characters removed, everything is HTML-escaped. The quoted original of a
+  reply is folded into a `<details>` block (collapsed, but never dropped).
+
+**Send this message** needs the CSRF token and a password entry within `UEM_REAUTH_WINDOW`
+(otherwise the user is taken to `/portal/reauth` and back to the page). It sends **exactly the
+stored draft**: the page compares the draft's content hash with the one stored in the
+approval, and a draft that was replaced or edited in the meantime (or removed) is refused
+("ask the application to create it again"). The approval is decided once and consumed
+(`take`), so a double click or a second tab cannot send twice; afterwards the Sent copy, the
+thread-folder copy (`file_replies`), the draft removal and `\Answered` happen as in local mode.
+**Reject** leaves the draft in Drafts and needs no password. An approval of another user is a
+404 for everyone else; approvals whose application was disconnected are void.
+
 ## Re-authentication
 
 Typing the password again (checked live against the login server) opens a window of
 `UEM_REAUTH_WINDOW` seconds (default 300). Signing in counts. Needed for: opening or
 submitting the add-account form, removing an account, changing an account's password, raising
-an account's permissions, allowing an identity to send, and **granting `send` to a client at
-the consent page**. When the window is over the user is sent to `/portal/reauth` and back;
+an account's permissions, allowing an identity to send, **approving a pending send**, and **granting `send` to a client
+at the consent page**. When the window is over the user is sent to `/portal/reauth` and back;
 nothing secret is carried along (a half-filled form is lost, never a password).
 Wrong passwords count against the same limits as sign-in (5 failures per address and 15
 minutes).
@@ -192,5 +218,7 @@ appears in the footer (it sets the `uem_lang` cookie). Order: cookie, `Accept-La
   `portal.account_test`, `portal.account_permissions`, `portal.account_password`,
   `portal.account_remove`, `portal.identity_add`, `portal.identity_edit`,
   `portal.identity_test`, `portal.identity_remove`, `portal.grant_edit`,
-  `portal.grant_revoke`, `portal.reauth`. They carry pseudonyms (`u_...`) and random ids
+  `portal.grant_revoke`, `portal.reauth`, and for approvals `approval.approved`,
+  `approval.rejected`, `approval.refused`, `approval.send_failed` (next to the `send.*` events of
+  the send itself). They carry pseudonyms (`u_...`) and random ids
   only - no addresses, host names, account names or passwords.

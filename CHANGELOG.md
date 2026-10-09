@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sending in remote mode (work package 3f; `docs/oauth.md`, `docs/portal.md`,
+  `docs/operator-env.md`): `send_message` is offered when the grant (`mail.send` for an
+  identity), the identity ("sending allowed", complete outgoing login, copies to an account
+  with `drafts`) and the operator policy all allow it - rebuilt from the store on every
+  request and enforced again per call. The confirmation question of protocol 2026-07-28
+  rides a **sealed `requestState`** (SDK `RequestStateSecurity`, keys derived from
+  `STORE_KEYS`, bound to tool, arguments, user and grant, 10 minutes): forged, edited,
+  replayed, expired or foreign state is refused, and a replay guard in the store (user +
+  content hash) makes a confirmed message go out once. **`SEND_FALLBACK`** for clients that
+  cannot ask: `portal` (default; the draft is kept and the result links to the approval
+  page), `send-unless-flagged` (new addresses and look-alikes go to the portal; a look-alike
+  never goes out without a human) or `draft`. New portal page **Pending approvals**
+  (`/portal/approvals`): shows sender, recipients with class and warnings, subject,
+  attachments and the new text (same truncation as the prompt, quoted original folded),
+  approve (password within the re-auth window, CSRF) sends exactly the stored draft whose
+  content hash matches, reject keeps the draft, old ones show as expired, other users' are
+  404. Sends per hour/day are counted per user in the store. Audit events `send.*`,
+  `approval.*` without addresses or subjects. `UEM_APPROVAL_TTL`.
 - Deployment on Google Cloud (work package 3i; `docs/deploy-gcp.md`): `deploy/gcp/` with an
   idempotent `bootstrap.sh` (APIs, least-privilege service accounts, Artifact Registry,
   Firestore with PITR, delete protection and TTL policies, generated secrets that are never
