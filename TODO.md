@@ -13,6 +13,9 @@ for the order). Compact this file from time to time (AGENTS.md, "Regular cleanup
       the search widened by a day plus a client-side filter on `received` in both
       `list_messages` (which pages by server position) and `query_search`; do it once a
       real mailbox shows the effect (step 2h).
+- [ ] Fuzzy results: `unread`/`flagged` filters apply to the cached flags, while the
+      flags shown are read fresh, so a shown hit can contradict the filter; the
+      bare-domain defanging uses a TLD allow-list (`render._TLDS`), a rare TLD slips through.
 - [ ] Cursor resume when the last returned message was expunged falls back to UID
       order, which is only approximate for SORT (REVERSE ARRIVAL) listings.
 - [ ] Threads: `search_related` uses the first 30 ids only (most relevant first);

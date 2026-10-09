@@ -700,7 +700,7 @@ async def test_listing_flags_look_alike_senders():
     for uid, (name, addr) in {
         1: ("Anna Huber", "anna@huber-bau.at"),
         2: ("Anna Hubеr", "anna@huber-bau.at"),  # Cyrillic е in the name  # noqa: RUF001
-        3: ("Anna", "anna@раура.com"),  # Cyrillic domain that reads like "paypa"  # noqa: RUF001
+        3: ("Anna", "anna@paураl.com"),  # Cyrillic letters inside a Latin domain  # noqa: RUF001
     }.items():
         a.folders["INBOX"][uid] = replace(summary("A", "INBOX", uid), from_=(Address(name, addr),))
     svc, _ = _service(A=a)
@@ -709,7 +709,7 @@ async def test_listing_flags_look_alike_senders():
         text = r.content[0].text  # pyright: ignore[reportAttributeAccessIssue]
     rows = [ln for ln in text.splitlines() if ln.startswith("| ") and "look-alike" in ln]
     assert len(rows) == 2
-    assert any("mixed scripts" in r for r in rows) and any("look-alike letters" in r for r in rows)
+    assert all("mixed scripts" in r for r in rows)
     assert text.count("look-alike sender") == 2
 
 
@@ -719,4 +719,5 @@ def test_sender_warning_unit():
     assert sender_warning("Jürgen Müller", "j.mueller@example.de") is None
     assert sender_warning("Иван Петров", "ivan@почта.рф") is None  # honest Cyrillic  # noqa: RUF001
     assert sender_warning("田中 太郎", "tanaka@example.jp") is None
+    assert sender_warning("Хор Море", "post@море.рф") is None  # real words, no Latin
     assert sender_warning("Anna", "anna@exаmple.com") == "mixed scripts"  # noqa: RUF001

@@ -105,21 +105,18 @@ _LOOK_SCRIPTS = frozenset({"CYRILLIC", "GREEK"})
 
 
 def _word_risk(word: str) -> str | None:
-    """A word that mixes scripts (``Hubеr`` with a Cyrillic ``е``) or is written
-    entirely in letters that pass for Latin ones (Cyrillic ``раураl``)."""
+    """A word that mixes Latin with Cyrillic/Greek letters (``Hubеr`` with a Cyrillic
+    ``е``). Whole-script look-alikes (honest Russian words are made of such letters)
+    are left to the counterpart comparison of :func:`classify`."""
     letters = [c for c in word if c.isalpha()]
     scripts = {s for c in letters if (s := _script(c))}
     if len(scripts) > 1 and scripts & _LOOK_SCRIPTS:
         return "mixed scripts"  # (Han + Kana in one word is normal Japanese)
-    non_latin = [c for c in letters if _script(c) in _LOOK_SCRIPTS]
-    if non_latin and all(c in _CONFUSABLES or c.isascii() for c in letters):
-        return "look-alike letters"
     return None
 
 
 def sender_warning(name: str, email_addr: str) -> str | None:
-    """Why a sender's display name or address looks forged (mixed scripts, Latin
-    look-alike letters from another alphabet, in the name, local part or domain),
+    """Why a sender's display name or address looks forged (mixed scripts, in the name, local part or domain),
     or ``None``. No counterpart is needed (unlike :func:`classify`): meant for
     listings of received mail. Normal non-Latin names (all letters one script, not
     mimicking Latin) are not flagged."""

@@ -34,7 +34,7 @@ _TLDS = (
     "com|org|net|edu|gov|int|info|biz|io|co|me|ly|app|dev|xyz|top|online|site|shop|store|tech|"
     "cloud|club|live|link|click|work|support|email|eu|de|at|ch|li|uk|fr|it|es|nl|be|lu|dk|se|no|"
     "fi|pl|cz|sk|hu|ro|bg|gr|pt|ie|ru|ua|tr|us|ca|au|nz|cn|jp|kr|in|br|mx|ar|za|ng|ke|ir|il|"
-    "tk|ml|ga|cf|gq|ws|su|cc|tv"
+    "tk|ml|ga|cf|gq|ws|su|cc|tv|sh|to|ai|pw|vip|icu|buzz|rest|cyou|zip|mov|tel|asia|pro|name|win|bid"
 )
 _BARE_DOMAIN = re.compile(rf"(?i)(?<![a-z0-9_\-])(?:[a-z0-9-]+\.)+(?:{_TLDS})(?![a-z0-9_\-])")
 # ``word:host.tld`` after the scheme prefix was broken up: the host's dots too.
