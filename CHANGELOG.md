@@ -7,80 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- Name lookups for mail and metadata connections are bounded by the connection deadline: the
-  lookup runs on a thread of its own and is given up when the deadline is over, so a hostile
-  name server cannot hold a worker for the libc resolver timeouts.
-- The record MAC (now `uem-record-v3`) also covers the backend namespace (the Firestore
-  collection prefix): a genuine record copied into another deployment's collections is refused.
-  `_v` stays outside the MAC on purpose (docs/stored-data.md); a test pins that `user_id` is
-  never a sealed field.
-- Paging cursors are verified under every ring key (signed with the active one), so they
-  survive a key rotation while the old key is in the ring.
-- Client names: the combining grapheme joiner, variation selectors, private-use and unassigned
-  code points are dropped as well; a name that cleans to blank falls back to the host of the
-  client id (CIMD).
-- Message ids carry a stable key of their mailbox (id format `m2.` / `p2.`, 8 extra
-  characters): store record id in remote mode, a hash of kind, host and login in local mode. An id
-  issued for one mailbox is refused (`INVALID_REF`, "search again") when the account name now
-  belongs to another one - removed and added again, or the positional `Account N` names - for
-  reads, drafts, sends, moves and flag changes; renaming an account keeps its ids valid. The
-  former `m1.`/`p1.` ids and local download links (`d1.`) stop working.
-- Deployment: the `uv` image, the Cloud Build builder images and the Firestore emulator image are
-  pinned by digest (tag in a comment). `docs/deploy-gcp.md` no longer claims that the build account
-  cannot reach the data (`run.admin` plus `serviceAccountUser` on the runtime account lets a
-  build deploy code that runs as it) and says who may submit builds; `bootstrap.sh` binds
-  `run.admin` on the one Cloud Run service once it exists and drops the project binding.
-  `render.sh` rejects line breaks in values, Cloud Build substitutions reach the scripts as
-  environment variables only, and the guide documents mounted secret files
-  (`STORE_KEYS_FILE`, `PSEUDONYM_KEY_FILE`).
-- Client ID Metadata Documents are fetched from port 443 only (any port on a public host let an
-  unauthenticated visitor probe services), and downloads have an instance-wide limit in addition to
-  the per-network one: new `UEM_RATE_CLIENT_FETCH_GLOBAL` (default `120/1h`).
-- Client and application names on the consent page and in the portal drop **all** Unicode
-  format characters (category `Cf`: Arabic letter mark, soft hyphen, Mongolian vowel separator,
-  invisible operators, tag characters, annotation marks, zero-width joiner ...) and the invisible
-  fillers U+3164, U+115F, U+1160, U+FFA0 (also U+2800, U+17B4, U+17B5); emoji joined by a
-  zero-width joiner therefore show as separate emoji.
-- The sanitised mail HTML (`/m/<id>/html`, `/c/<token>`) is served only to requests that the
-  browser marks as frame loads: a `Sec-Fetch-Dest` other than `iframe` gets 404, so the
-  document cannot be opened as a page of its own on the portal's address (content spoofing).
-  Documentation recommends `CONTENT_ORIGIN` for production.
-- Consent (Allow) always asks for the password again unless it was typed within the
-  re-authentication window (previously only grants with send identities did): a left-open or
-  stolen portal session can no longer mint a 90-day grant that reads, moves or deletes mail. The
-  step carries the request intact and ends in the grant.
-- Operational (non-audit) logs no longer carry account names or raw exception text from the mail
-  path: they log the account pseudonym (the audit one, `a_...`) and exception class or error
-  code. Tracebacks are reduced everywhere (JSON log formatter, access-log errors, background
-  tasks) to class names, error codes and `file:line function` frames - never the exception message,
-  which can hold addresses, folder names or server replies (`jsonlog.safe_trace`).
-- With `CONTENT_ORIGIN`, the content host serves only `/c/*` and the health probes; every other
-  path (portal sign-in, OAuth endpoints, `/mcp`, viewer pages) answers 404 there, so the host that
-  renders untrusted mail HTML offers no phishing surface.
-- Content-origin tokens and paging cursors are no longer signed with `PSEUDONYM_KEY` (which a log
-  analyst running `audit --user` holds): they use keys derived from the store key ring with
-  their own labels. `PSEUDONYM_KEY` now only maps addresses to pseudonyms. A content token's
-  expiry is also capped on the server (at most `CONTENT_TOKEN_TTL` ahead).
-- Viewer URLs no longer carry mail metadata: `/m/<id>` is the message id sealed
-  (AES-256-GCM, derived key, bound to the user; short, URL-safe) and the `/c/<token>` payload of
-  the content origin is sealed too, so platform request logs show neither mailbox, folder, UID nor
-  user id. `docs/deploy-gcp.md` documents a Cloud Logging exclusion for `/m/` and `/c/`; the
-  wording in `docs/oauth.md`, `docs/audit.md` and the DPIA template is corrected.
-- Store: a database writer without keys can no longer forge tokens or raise permissions. Record
-  ids of bearer secrets (access/refresh tokens, authorization codes, portal sessions) are now
-  `HMAC(derived key, secret)` instead of an unkeyed SHA-256, and every record carries a MAC over
-  its kind, id, owner, plain fields (scopes, permissions, `send`, redirect URIs, expiries ...) and
-  sealed blob, verified on every read; a mismatch is treated like a damaged record (the bearer
-  verifier answers 401). **Store format bump** (`uem-record-v2`): records written by an earlier
-  build are rejected; acceptable because nothing is deployed before 0.1.0. `rotate-keys` also
-  re-issues the MAC. Residual risk (rollback of a whole document from a backup) is documented
-  in `docs/stored-data.md`.
-- Store keys: a malformed `STORE_KEYS` / `STORE_ACTIVE_KEY` no longer echoes key material or ids
-  in the startup error (a bare base64 key without `k1=` used to appear in the message); errors
-  name the entry by position.
-
 ### Added
 
 - German translation of the whole end-user UI (portal, sign-in, consent, message viewer,
@@ -89,38 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the language (`09.10.2026 14:30 UTC`); notes the service layer builds (recipient
   warnings on the approval page, viewer notes) are translated by pattern. A completeness test
   lists missing German ids after any UI change (`docs/portal.md#language`).
-
-### Changed
-
-- The viewer's HTML sanitiser no longer runs on asyncio's default executor: own daemon threads
-  (at most 4 at a time, instance-wide), 10 seconds per message (longer counts as too complex),
-  and a request that finds no free worker for 5 seconds is answered as busy.
-- IMAP literal and untagged-data caps are derived from `limits.max_message_bytes` (never below
-  the 32 MiB / 64 MiB defaults), so an operator may raise the message cap above them.
-- Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a
-  stable shape (`event`, `message`, `severity`, `ts`, `instance`, `request_id`, ...), written to
-  **stdout** by `serve` (Cloud Logging reads `severity`) and to stderr by the local stdio server. A
-  per-event allow-list drops unknown fields and replaces values that do not look like short
-  tokens, so mail text cannot reach the log by mistake. Ids are keyed pseudonyms (`PSEUDONYM_KEY`,
-  a per-install key in local mode): account names, client ids and grant/approval ids are no longer
-  logged in clear. IP addresses are never logged; with `AUDIT_LOG_CLIENT_IP` sign-in and
-  rate-limit events carry a keyed pseudonym of the network.
-- Firestore backend: creates and unconditional deletes are written as precondition-free batches
-  that retry when Firestore aborts them under contention, and `Store.get_or_create_user`
-  retries; two intermittent failures under load (concurrent sign-in of one user, concurrent
-  redemption of one authorization code) are fixed.
-- Remote mode: signing in (portal and OAuth) now only verifies the password. The mailbox
-  password is stored sealed, and the account "Main" plus a sender identity created, only if
-  the user ticks the pre-ticked opt-in checkbox "Use this mailbox with AI clients (stores the
-  password encrypted)". Unticked, nothing is stored; an existing "Main" still has its password
-  refreshed at later sign-ins.
-
-### Added
-
 - Documentation: administrator guide, user guide, GDPR notes for operators and a DPIA template
   (`docs/admin-guide.md`, `docs/user-guide.md`, `docs/gdpr.md`, `docs/dpia-template.md`), linked
   from the README.
-
 - Rate limits (`docs/operator-env.md#rate-limits`): every in-memory limit is now one `RateLimits`
   inventory with `UEM_RATE_*` variables (`COUNT/WINDOW`, validated). New: MCP tool calls per user
   and per grant (burst and sustained windows, tighter for tools that change something; the
@@ -181,7 +78,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI builds the production image, smoke-tests it (`scripts/smoke_container.sh`: `/health`,
   `/ready`, `/mcp` refused without a token, Host check, non-root user) and scans it with
   Trivy; the container image base is now pinned by digest and carries OCI labels.
-
 - Message viewer in the portal (work package 3g; `docs/portal.md`): every message in a tool
   result of remote mode links to `PUBLIC_URL/m/<id>` (attachments `/m/<id>/a/<part>`, source
   `/m/<id>/eml`; no tokens in the links - the portal session authorises, a signed-out visitor
@@ -240,7 +136,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `REAUTH_REQUIRED`: a mail password the server rejects is reported per account with a pointer to
   the portal, the account record is marked (`auth_failed_at`, sealed `auth_failed_mark`) and not
   tried again for `UEM_REAUTH_RETRY_AFTER` seconds unless the login changed.
-
 - OAuth 2.1 authorization server for remote mode (work package 3c; `docs/oauth.md`).
   `serve` without dev flags is now the OAuth server: `/.well-known/oauth-protected-resource`
   (RFC 9728) and `/.well-known/oauth-authorization-server` (RFC 8414), `/authorize`
@@ -469,11 +364,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The viewer's HTML sanitiser no longer runs on asyncio's default executor: own daemon threads
+  (at most 4 at a time, instance-wide), 10 seconds per message (longer counts as too complex),
+  and a request that finds no free worker for 5 seconds is answered as busy.
+- IMAP literal and untagged-data caps are derived from `limits.max_message_bytes` (never below
+  the 32 MiB / 64 MiB defaults), so an operator may raise the message cap above them.
+- Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a
+  stable shape (`event`, `message`, `severity`, `ts`, `instance`, `request_id`, ...), written to
+  **stdout** by `serve` (Cloud Logging reads `severity`) and to stderr by the local stdio server. A
+  per-event allow-list drops unknown fields and replaces values that do not look like short
+  tokens, so mail text cannot reach the log by mistake. Ids are keyed pseudonyms (`PSEUDONYM_KEY`,
+  a per-install key in local mode): account names, client ids and grant/approval ids are no longer
+  logged in clear. IP addresses are never logged; with `AUDIT_LOG_CLIENT_IP` sign-in and
+  rate-limit events carry a keyed pseudonym of the network.
+- Firestore backend: creates and unconditional deletes are written as precondition-free batches
+  that retry when Firestore aborts them under contention, and `Store.get_or_create_user`
+  retries; two intermittent failures under load (concurrent sign-in of one user, concurrent
+  redemption of one authorization code) are fixed.
+- Remote mode: signing in (portal and OAuth) now only verifies the password. The mailbox
+  password is stored sealed, and the account "Main" plus a sender identity created, only if
+  the user ticks the pre-ticked opt-in checkbox "Use this mailbox with AI clients (stores the
+  password encrypted)". Unticked, nothing is stored; an existing "Main" still has its password
+  refreshed at later sign-ins.
 - Sign-in no longer discards the password: on the first sign-in it is stored (sealed) as the
   credential of the sign-in mailbox account so that the assistant can read that mailbox;
   later sign-ins refresh it when it changed. The sign-in page says so. The consent page no
   longer offers the pseudo account `primary`.
-
 - Defanging of mail text is more complete: bare domains with a well-known top-level domain
   (`evil.com`, also in e-mail addresses) get `[.]` so renderers with fuzzy link detection
   cannot link them, the host after a `word:` scheme prefix is broken up too, and code
@@ -490,71 +406,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (half of `limits.account_timeout`) instead of 25 folders; later rounds look only in
   INBOX, Sent, the archive, the message's folder and folders that had hits.
 
-### Security
-
-- A mail server that trickles bytes (or stalls the TLS handshake) can no longer pin threads
-  and starve the instance: sign-in verification, the portal connection tests, SMTP submission,
-  client-metadata fetches and connection clean-up no longer use asyncio's shared default
-  executor, every connect, test, login check and submission has an absolute deadline
-  (`NetPolicy.total_timeout`, 60 s) enforced by a watchdog that shuts the sockets down, and
-  idle or forced connection closes abort the socket instead of waiting for a polite LOGOUT.
-  Sending no longer holds the sender lock during the SMTP conversation (the rate limit is
-  reserved up front and given back when the send certainly did not happen).
-- A hostile IMAP server can no longer exhaust memory: a literal above 32 MiB or more than
-  64 MiB of untagged data for one command (already in the greeting, before any login) ends the
-  connection with a protocol error. Header lists are fetched partially (64 KiB per message).
-- After STARTTLS, bytes the server sent before the upgrade are refused (Python 3.14 kept them
-  and parsed them as post-TLS responses, which let a man in the middle inject capabilities).
-- Hosts that users type in (free entry) are always connected to with public addresses only,
-  also when the operator sets `UEM_ALLOW_PRIVATE_NETWORKS`: the accounts carry the rule, so it
-  holds for every later connection and send, not only for the portal test. Site-local IPv6
-  (`fec0::/10`) is no longer treated as public.
-- OAuth: a request parameter sent more than once is `invalid_request` on `/authorize`, `/token` and `/revoke` (RFC 6749 section 3.1), as is a duplicated member in the `/register` body; the last value no longer wins.
-
-- IMAP `LOGIN` now sends the login name as a quoted string (`imaplib` sent it verbatim, so `{`, `%`, `*`, `]` reached the server as protocol syntax); credentials with CR, LF, NUL or other control characters are refused before anything is sent, for IMAP, POP3 and SMTP alike.
-
-- Re-authentication for sensitive portal actions and for granting `send`; connection tests
-  to user-named servers use the SSRF-safe connector (public addresses only, mail ports only,
-  verified TLS) and are rate limited; passwords with line breaks or NUL are refused.
-
-- Message bodies are defanged, not only fenced: images become `[image: alt]`,
-  links `text (hxxps[:]//…)`, HTML tags and reference-link definitions are
-  neutralised; HTML mail no longer yields Markdown links.
-- Table cells also defang autolinks without a word boundary (`_https://…`),
-  e-mail addresses (`＠`) and scheme prefixes (`mailto:`, `xmpp:` …); error
-  results carry details only as structured content.
-- Variation selectors U+E0100–E01EF (and a few more invisible format characters)
-  are stripped from mail text.
-
-- Hostile mail can no longer take the server or a listing down: header, body and folder-name
-  decoders never raise and never return a lone UTF-16 surrogate (UTF-7 such as `+2D0-` killed
-  the stdio server's JSON writer); an unusable charset (`undefined`, NUL, bytes-to-bytes
-  codecs) falls back to UTF-8 / Windows-1252; one message whose headers cannot be handled is
-  shown as a marked placeholder (`[unreadable message: ...]`, id kept, so it can still be moved
-  or deleted) instead of dropping its account from the listing; a malformed MIME parameter
-  (`name*0*`) leaves the message readable (the bare content type is kept, the stdlib's lenient
-  policy is the fallback); MIME bombs (tens of thousands of delimiter lines) are refused before
-  the stdlib parser sees them; header values are capped before RFC 2047 decoding and
-  `References` is deduplicated in linear time.
-- HTML nested deeper than the parser keeps (libxml2 silently drops everything below ~255
-  levels) is converted by stripping tags, with a note, instead of hiding the text from the reader.
-- The send confirmation and the portal approval page identify the original of a reply or
-  forward (sender, date, subject, first lines), say "FORWARDED MESSAGE" for forwards and warn
-  when the subject is not `Re:` / `Fwd:` plus the original's subject. The portal only folds a
-  quote the server verified against the message in the mailbox (`In-Reply-To`); text the
-  model wrote that merely looks like a quote is shown as ordinary text and never described as
-  "not written by the application".
-- Free text in the confirmation prompt (subject, display names, file names, notes) is escaped
-  for Markdown, and `＠` / `﹫` in display names are neutralised like `@`.
-- `save_draft`'s structured `quoted` is fenced and defanged like `get_message` bodies.
-- Defanging also breaks protocol-relative links (`//host/path`) and compatibility forms
-  (fullwidth `ｈｔｔｐｓ://`, `https‥//`).
-- File names: Unicode blanks (Braille blank, NBSP, em space ...) collapse to one space and long
-  names are shortened in the middle, so a run of blanks cannot hide `.exe` behind `.pdf`.
-- The raw-headers page labels authentication / spam headers that are not above the first
-  `Received` line as "from the sender, not checked" and renders raw 8-bit header bytes.
-- Listing items cap subject, address and reference counts and lengths in structured output.
-
 ### Fixed
 
 - Sign-in no longer parks behind tarpitted login checks: the wait for a free check slot ends after
@@ -570,19 +421,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The quoted-printable download decoder is linear on endless whitespace (16 MB took 17 s) and
   both transfer decoders run in a worker thread instead of on the event loop.
 - Deleting a user (portal "delete all my data") no longer races a tool call in flight: activity entries, approvals, send claims, grants, authorization codes and sign-in sessions are only written while the user exists (checked before and after the write), so nothing is left behind for a deleted user.
-
 - `rotate_keys` and the GDPR export no longer abort on one damaged record: it is skipped and counted (a warning without ids or content is logged), the export lists it as `{"unreadable": true}`. New command `universal-email-mcp admin rotate-keys [--dry-run]` (same environment as `serve`; prints counts only; exit status 3 if records were unreadable) replaces the one-off script in the deployment guide.
-
 - Audit: the `send.*` events now carry the account id (and the sender identity id) like every other event instead of the SMTP account name, so the log and the activity feed agree; the Activity page no longer guesses between ids and names. The name of a removed account is kept in a dedicated feed `label` (never in the log). A tool call with both successes and failures is audited as `partial` (severity WARNING) instead of `ok` and shown on the Activity page ("partly succeeded", also in German).
-
 - `serve`: `--config` in OAuth mode is refused with a clear error (it was silently ignored), and a `UEM_*_TTL` / `UEM_SESSION_MAX_AGE` / `UEM_PORTAL_*` value above 10 years is a `ConfigError` naming the variable instead of an overflow at the first token.
-
 - Time windows (`today`, `this_week`, `since`/`before`, and the contact look-back) are days in the server's local time zone and exact: the IMAP search is widened by a day on each side and the messages of the border days are checked on their arrival instant (INTERNALDATE); POP3 compares in the same zone. Before, mail that arrived between local and server midnight fell into the neighbouring day (`today` was empty for the first hours of the day). Hits whose fresh flags contradict an `unread`/`flagged` filter are dropped.
-
 - OAuth consent: Allow and Deny are answered with a 200 page that continues to the client by meta refresh and a visible link (translated, also German) instead of a 303; Chromium blocked a 303 whose callback redirects on because of the CSP `form-action`. The consent pages no longer add the client's host to `form-action`.
-
 - OAuth: a refresh with a narrower `scope` now issues tokens with at most that scope (they used to carry the grant's full scope); the narrowing sticks for the refresh-token chain and `/mcp` honours the token scope.
-
 - A timed-out account no longer blocks the server until the read time-out, and
   retries against a stalling server share one connection attempt.
 - Paging no longer skips messages deleted between pages; cursors stop retrying
@@ -614,6 +458,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mixed` when plain and HTML parts are combined. Text parts beyond the limits
   (100 parts, the HTML size budget) are listed as attachments, the attachment list
   is capped at 100, and notes say what was left out.
+
+### Security
+
+- Name lookups for mail and metadata connections are bounded by the connection deadline: the
+  lookup runs on a thread of its own and is given up when the deadline is over, so a hostile
+  name server cannot hold a worker for the libc resolver timeouts.
+- The record MAC (now `uem-record-v3`) also covers the backend namespace (the Firestore
+  collection prefix): a genuine record copied into another deployment's collections is refused.
+  `_v` stays outside the MAC on purpose (docs/stored-data.md); a test pins that `user_id` is
+  never a sealed field.
+- Paging cursors are verified under every ring key (signed with the active one), so they
+  survive a key rotation while the old key is in the ring.
+- Client names: the combining grapheme joiner, variation selectors, private-use and unassigned
+  code points are dropped as well; a name that cleans to blank falls back to the host of the
+  client id (CIMD).
+- Message ids carry a stable key of their mailbox (id format `m2.` / `p2.`, 8 extra
+  characters): store record id in remote mode, a hash of kind, host and login in local mode. An id
+  issued for one mailbox is refused (`INVALID_REF`, "search again") when the account name now
+  belongs to another one - removed and added again, or the positional `Account N` names - for
+  reads, drafts, sends, moves and flag changes; renaming an account keeps its ids valid. The
+  former `m1.`/`p1.` ids and local download links (`d1.`) stop working.
+- Deployment: the `uv` image, the Cloud Build builder images and the Firestore emulator image are
+  pinned by digest (tag in a comment). `docs/deploy-gcp.md` no longer claims that the build account
+  cannot reach the data (`run.admin` plus `serviceAccountUser` on the runtime account lets a
+  build deploy code that runs as it) and says who may submit builds; `bootstrap.sh` binds
+  `run.admin` on the one Cloud Run service once it exists and drops the project binding.
+  `render.sh` rejects line breaks in values, Cloud Build substitutions reach the scripts as
+  environment variables only, and the guide documents mounted secret files
+  (`STORE_KEYS_FILE`, `PSEUDONYM_KEY_FILE`).
+- Client ID Metadata Documents are fetched from port 443 only (any port on a public host let an
+  unauthenticated visitor probe services), and downloads have an instance-wide limit in addition to
+  the per-network one: new `UEM_RATE_CLIENT_FETCH_GLOBAL` (default `120/1h`).
+- Client and application names on the consent page and in the portal drop **all** Unicode
+  format characters (category `Cf`: Arabic letter mark, soft hyphen, Mongolian vowel separator,
+  invisible operators, tag characters, annotation marks, zero-width joiner ...) and the invisible
+  fillers U+3164, U+115F, U+1160, U+FFA0 (also U+2800, U+17B4, U+17B5); emoji joined by a
+  zero-width joiner therefore show as separate emoji.
+- The sanitised mail HTML (`/m/<id>/html`, `/c/<token>`) is served only to requests that the
+  browser marks as frame loads: a `Sec-Fetch-Dest` other than `iframe` gets 404, so the
+  document cannot be opened as a page of its own on the portal's address (content spoofing).
+  Documentation recommends `CONTENT_ORIGIN` for production.
+- Consent (Allow) always asks for the password again unless it was typed within the
+  re-authentication window (previously only grants with send identities did): a left-open or
+  stolen portal session can no longer mint a 90-day grant that reads, moves or deletes mail. The
+  step carries the request intact and ends in the grant.
+- Operational (non-audit) logs no longer carry account names or raw exception text from the mail
+  path: they log the account pseudonym (the audit one, `a_...`) and exception class or error
+  code. Tracebacks are reduced everywhere (JSON log formatter, access-log errors, background
+  tasks) to class names, error codes and `file:line function` frames - never the exception message,
+  which can hold addresses, folder names or server replies (`jsonlog.safe_trace`).
+- With `CONTENT_ORIGIN`, the content host serves only `/c/*` and the health probes; every other
+  path (portal sign-in, OAuth endpoints, `/mcp`, viewer pages) answers 404 there, so the host that
+  renders untrusted mail HTML offers no phishing surface.
+- Content-origin tokens and paging cursors are no longer signed with `PSEUDONYM_KEY` (which a log
+  analyst running `audit --user` holds): they use keys derived from the store key ring with
+  their own labels. `PSEUDONYM_KEY` now only maps addresses to pseudonyms. A content token's
+  expiry is also capped on the server (at most `CONTENT_TOKEN_TTL` ahead).
+- Viewer URLs no longer carry mail metadata: `/m/<id>` is the message id sealed
+  (AES-256-GCM, derived key, bound to the user; short, URL-safe) and the `/c/<token>` payload of
+  the content origin is sealed too, so platform request logs show neither mailbox, folder, UID nor
+  user id. `docs/deploy-gcp.md` documents a Cloud Logging exclusion for `/m/` and `/c/`; the
+  wording in `docs/oauth.md`, `docs/audit.md` and the DPIA template is corrected.
+- Store: a database writer without keys can no longer forge tokens or raise permissions. Record
+  ids of bearer secrets (access/refresh tokens, authorization codes, portal sessions) are now
+  `HMAC(derived key, secret)` instead of an unkeyed SHA-256, and every record carries a MAC over
+  its kind, id, owner, plain fields (scopes, permissions, `send`, redirect URIs, expiries ...) and
+  sealed blob, verified on every read; a mismatch is treated like a damaged record (the bearer
+  verifier answers 401). **Store format bump** (`uem-record-v2`): records written by an earlier
+  build are rejected; acceptable because nothing is deployed before 0.1.0. `rotate-keys` also
+  re-issues the MAC. Residual risk (rollback of a whole document from a backup) is documented
+  in `docs/stored-data.md`.
+- Store keys: a malformed `STORE_KEYS` / `STORE_ACTIVE_KEY` no longer echoes key material or ids
+  in the startup error (a bare base64 key without `k1=` used to appear in the message); errors
+  name the entry by position.
+- A mail server that trickles bytes (or stalls the TLS handshake) can no longer pin threads
+  and starve the instance: sign-in verification, the portal connection tests, SMTP submission,
+  client-metadata fetches and connection clean-up no longer use asyncio's shared default
+  executor, every connect, test, login check and submission has an absolute deadline
+  (`NetPolicy.total_timeout`, 60 s) enforced by a watchdog that shuts the sockets down, and
+  idle or forced connection closes abort the socket instead of waiting for a polite LOGOUT.
+  Sending no longer holds the sender lock during the SMTP conversation (the rate limit is
+  reserved up front and given back when the send certainly did not happen).
+- A hostile IMAP server can no longer exhaust memory: a literal above 32 MiB or more than
+  64 MiB of untagged data for one command (already in the greeting, before any login) ends the
+  connection with a protocol error. Header lists are fetched partially (64 KiB per message).
+- After STARTTLS, bytes the server sent before the upgrade are refused (Python 3.14 kept them
+  and parsed them as post-TLS responses, which let a man in the middle inject capabilities).
+- Hosts that users type in (free entry) are always connected to with public addresses only,
+  also when the operator sets `UEM_ALLOW_PRIVATE_NETWORKS`: the accounts carry the rule, so it
+  holds for every later connection and send, not only for the portal test. Site-local IPv6
+  (`fec0::/10`) is no longer treated as public.
+- OAuth: a request parameter sent more than once is `invalid_request` on `/authorize`, `/token` and `/revoke` (RFC 6749 section 3.1), as is a duplicated member in the `/register` body; the last value no longer wins.
+- IMAP `LOGIN` now sends the login name as a quoted string (`imaplib` sent it verbatim, so `{`, `%`, `*`, `]` reached the server as protocol syntax); credentials with CR, LF, NUL or other control characters are refused before anything is sent, for IMAP, POP3 and SMTP alike.
+- Re-authentication for sensitive portal actions and for granting `send`; connection tests
+  to user-named servers use the SSRF-safe connector (public addresses only, mail ports only,
+  verified TLS) and are rate limited; passwords with line breaks or NUL are refused.
+- Message bodies are defanged, not only fenced: images become `[image: alt]`,
+  links `text (hxxps[:]//…)`, HTML tags and reference-link definitions are
+  neutralised; HTML mail no longer yields Markdown links.
+- Table cells also defang autolinks without a word boundary (`_https://…`),
+  e-mail addresses (`＠`) and scheme prefixes (`mailto:`, `xmpp:` …); error
+  results carry details only as structured content.
+- Variation selectors U+E0100–E01EF (and a few more invisible format characters)
+  are stripped from mail text.
+- Hostile mail can no longer take the server or a listing down: header, body and folder-name
+  decoders never raise and never return a lone UTF-16 surrogate (UTF-7 such as `+2D0-` killed
+  the stdio server's JSON writer); an unusable charset (`undefined`, NUL, bytes-to-bytes
+  codecs) falls back to UTF-8 / Windows-1252; one message whose headers cannot be handled is
+  shown as a marked placeholder (`[unreadable message: ...]`, id kept, so it can still be moved
+  or deleted) instead of dropping its account from the listing; a malformed MIME parameter
+  (`name*0*`) leaves the message readable (the bare content type is kept, the stdlib's lenient
+  policy is the fallback); MIME bombs (tens of thousands of delimiter lines) are refused before
+  the stdlib parser sees them; header values are capped before RFC 2047 decoding and
+  `References` is deduplicated in linear time.
+- HTML nested deeper than the parser keeps (libxml2 silently drops everything below ~255
+  levels) is converted by stripping tags, with a note, instead of hiding the text from the reader.
+- The send confirmation and the portal approval page identify the original of a reply or
+  forward (sender, date, subject, first lines), say "FORWARDED MESSAGE" for forwards and warn
+  when the subject is not `Re:` / `Fwd:` plus the original's subject. The portal only folds a
+  quote the server verified against the message in the mailbox (`In-Reply-To`); text the
+  model wrote that merely looks like a quote is shown as ordinary text and never described as
+  "not written by the application".
+- Free text in the confirmation prompt (subject, display names, file names, notes) is escaped
+  for Markdown, and `＠` / `﹫` in display names are neutralised like `@`.
+- `save_draft`'s structured `quoted` is fenced and defanged like `get_message` bodies.
+- Defanging also breaks protocol-relative links (`//host/path`) and compatibility forms
+  (fullwidth `ｈｔｔｐｓ://`, `https‥//`).
+- File names: Unicode blanks (Braille blank, NBSP, em space ...) collapse to one space and long
+  names are shortened in the middle, so a run of blanks cannot hide `.exe` behind `.pdf`.
+- The raw-headers page labels authentication / spam headers that are not above the first
+  `Received` line as "from the sender, not checked" and renders raw 8-bit header bytes.
+- Listing items cap subject, address and reference counts and lengths in structured output.
 
 ## [0.0.1] - 2026-09-30
 
