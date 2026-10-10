@@ -12,7 +12,9 @@ place). It is bound to the tool and a hash of the query arguments, and signed
 with HMAC-SHA256.
 
 The key is per process in local mode (cursors die with the process — fine for a
-paging session); remote mode passes a shared key so any instance can continue.
+paging session); remote mode passes a shared key so any instance can continue. Cursors are
+signed with the first key; ``extra_keys`` (older ring keys) are only accepted for verification,
+so cursors survive a key rotation as long as the old key is still in the ring.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -71,11 +73,12 @@ def query_hash(args: Mapping[str, Any]) -> str:
 
 
 class CursorCodec:
-    def __init__(self, key: bytes | None = None) -> None:
+    def __init__(self, key: bytes | None = None, *, extra_keys: Sequence[bytes] = ()) -> None:
         self._key = key or secrets.token_bytes(32)
+        self._verify_keys = (self._key, *extra_keys)
 
-    def _mac(self, payload: bytes) -> bytes:
-        return hmac.new(self._key, payload, hashlib.sha256).digest()[:_MAC_LEN]
+    def _mac(self, payload: bytes, key: bytes | None = None) -> bytes:
+        return hmac.new(key or self._key, payload, hashlib.sha256).digest()[:_MAC_LEN]
 
     def encode(self, cursor: Cursor) -> str:
         data = {
@@ -101,7 +104,10 @@ class CursorCodec:
             payload, mac_bytes = unb64u(body), unb64u(mac)
         except (ValueError, binascii.Error) as e:
             raise InvalidCursor("cursor is corrupted") from e
-        if not hmac.compare_digest(mac_bytes, self._mac(payload)):
+        valid = False
+        for key in self._verify_keys:  # no early exit: same work for every key
+            valid |= hmac.compare_digest(mac_bytes, self._mac(payload, key))
+        if not valid:
             raise InvalidCursor(
                 "cursor signature is invalid (tampered, or issued before a server restart)"
             )

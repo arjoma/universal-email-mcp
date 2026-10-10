@@ -518,3 +518,25 @@ async def test_a_re_added_account_gets_a_new_key_so_old_ids_are_refused():
     with pytest.raises(InvalidRef):
         ctx2.service.resolve(old_id)
     await h.pool.aclose()
+
+
+async def test_cursors_survive_a_ring_key_rotation():
+    from universal_email_mcp.service.cursor import Cursor
+
+    h = Harness(PoolSettings(), [0.0])
+    rec = await h.store.create(record("alice", "Mine"))
+    ctx = await h.pool.acquire(principal("alice", {rec.id: "read"}))
+    cur = Cursor(tool="find_messages", query="q")
+    text = ctx.service.cursors.encode(cur)
+    await h.pool.aclose()
+    # a new key becomes active, the old one stays in the ring
+    ring = KeyRing({"k1": b"k" * 32, "k2": b"m" * 32}, active="k2")
+    pool2 = UserPool(
+        Store(MemoryBackend(), ring),
+        h.op,
+        lambda service, maps: SimpleNamespace(instructions="", maps=maps),
+        clock=lambda: 0.0,
+    )
+    ctx2 = await pool2.acquire(principal("alice", {rec.id: "read"}))
+    assert ctx2.service.cursors.decode(text, tool="find_messages", query="q") == cur
+    await pool2.aclose()
