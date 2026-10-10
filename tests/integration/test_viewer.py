@@ -161,19 +161,19 @@ async def test_message_page_shows_headers_text_attachments_and_leaves_seen_alone
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(env.tag))
         assert not env.seen(addr, ref)
-        page = b.page(f"/m/{ref.encode()}")
+        page = b.page(f"/m/{b.link(ref)}")
         assert f"Quarterly report {env.tag}" in page
         assert "Anna Example" in page and "anna@example.com" in page
         assert "carl@example.org" in page and "dora@example.net" in page
         assert f"Plain version of the report {env.tag}" in page
         assert "Formatted" not in page  # the HTML version is opt-in
-        assert "/m/" + ref.encode() + "/thread" in page
-        assert "/m/" + ref.encode() + "/headers" in page
-        assert "/m/" + ref.encode() + "/eml" in page
+        assert "/m/" + b.link(ref) + "/thread" in page
+        assert "/m/" + b.link(ref) + "/headers" in page
+        assert "/m/" + b.link(ref) + "/eml" in page
         assert re.search(r'/m/[^"]+/a/2"', page) or "/a/" in page
         assert "page.html" in page
         # no frame without view=html: the page CSP does not even allow one
-        r = b.get(f"/m/{ref.encode()}")
+        r = b.get(f"/m/{b.link(ref)}")
         assert "frame-src" not in r.headers["content-security-policy"]
         assert r.headers["cache-control"] == "no-store"
         assert not env.seen(addr, ref)  # BODY.PEEK: nothing was marked as read
@@ -183,7 +183,7 @@ async def test_html_view_is_sandboxed_sanitised_and_images_need_a_click(env: Env
     addr = env.address("alice")
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(env.tag))
-        mid = ref.encode()
+        mid = b.link(ref)
         page = b.get(f"/m/{mid}?view=html")
         assert page.status_code == 200
         iframe = re.search(r"<iframe[^>]*>", page.text)
@@ -232,7 +232,7 @@ async def test_hostile_html_from_the_corpus_is_neutralised(env: Env):
     with env.browser(addr) as b:
         raw = (DATA / "hostile-html.eml").read_bytes()
         ref = env.put(addr, raw)
-        doc = b.get(f"/m/{ref.encode()}/html")
+        doc = b.get(f"/m/{b.link(ref)}/html")
         assert doc.status_code == 200
         body = doc.text.lower()
         for bad in (
@@ -254,7 +254,7 @@ async def test_hostile_html_from_the_corpus_is_neutralised(env: Env):
         assert 'href="https://attacker.test/login"' in body
         assert 'rel="noopener noreferrer"' in body
         # the page around it names the sender's real target, not the text of the link
-        page = b.page(f"/m/{ref.encode()}?view=html")
+        page = b.page(f"/m/{b.link(ref)}?view=html")
         assert "hxxps[:]//attacker[.]test/login" in page
         assert "<script" not in page.lower()
 
@@ -264,7 +264,7 @@ async def test_raw_headers_and_source(env: Env):
     with env.browser(addr) as b:
         raw = rich_message(env.tag)
         ref = env.put(addr, raw)
-        mid = ref.encode()
+        mid = b.link(ref)
         page = b.page(f"/m/{mid}/headers")
         assert "Received" in page and re.search(r"from mx\.example\.com\s+by mail", page)
         assert "Authentication-Results" in page and "dkim=pass" in page
@@ -283,7 +283,7 @@ async def test_attachment_download_streams_exact_bytes_with_safe_headers(env: En
     addr = env.address("alice")
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(env.tag))
-        mid = ref.encode()
+        mid = b.link(ref)
         page = b.page(f"/m/{mid}")
         sections = re.findall(rf"/m/{re.escape(mid)}/a/([0-9.]+)", page)
         assert len(sections) >= 2
@@ -318,7 +318,7 @@ async def test_hostile_file_names_never_reach_a_header_raw(env: Env):
     addr = env.address("alice")
     with env.browser(addr) as b:
         ref = env.put(addr, (DATA / "attachment-names.eml").read_bytes())
-        mid = ref.encode()
+        mid = b.link(ref)
         page = b.page(f"/m/{mid}")
         for sec in dict.fromkeys(re.findall(rf"/m/{re.escape(mid)}/a/([0-9.]+)", page)):
             r = b.get(f"/m/{mid}/a/{sec}")
@@ -353,7 +353,7 @@ async def test_thread_page(env: Env):
         reply.set_content("The reply with more details.\n")
         ref1 = env.put(addr, first.as_bytes())
         env.put(addr, reply.as_bytes())
-        page = b.page(f"/m/{ref1.encode()}/thread")
+        page = b.page(f"/m/{b.link(ref1)}/thread")
         assert "First message of the conversation." in page
         assert "The reply with more details." in page
         assert page.count("<details") == 2
@@ -367,8 +367,9 @@ async def test_signed_out_is_sent_to_sign_in_and_back(env: Env):
     addr = env.address("alice")
     ref = env.put(addr, rich_message(env.tag))
     # nothing signed in yet: build the account by signing in, then look as a stranger
-    env.browser(addr).client.close()
-    mid = ref.encode()
+    stranger = env.browser(addr)
+    mid = stranger.link(ref)
+    stranger.client.close()
     with Browser(env.app, addr) as b:
         for path in (
             f"/m/{mid}",
@@ -393,11 +394,11 @@ async def test_another_users_message_id_is_a_404_everywhere(env: Env):
     ref = env.put(alice, rich_message(env.tag))
     secret = f"Quarterly report {env.tag}"
     with env.browser(alice) as a, env.browser(mallory) as m:
-        assert secret in a.page(f"/m/{ref.encode()}")
+        assert secret in a.page(f"/m/{a.link(ref)}")
         # a forged id: mallory also has an account called "Main" (her own mailbox), so
         # the id resolves inside *her* context - never to alice's mail
         env.put(mallory, b"From: x@example.com\r\nSubject: Mallory note\r\n\r\nhers\r\n")
-        mid = ref.encode()
+        mid = a.link(ref)  # alice's own link, opened by mallory: sealed for alice, opens nothing
         for path in (
             f"/m/{mid}",
             f"/m/{mid}?view=html",
@@ -409,12 +410,10 @@ async def test_another_users_message_id_is_a_404_everywhere(env: Env):
             f"/m/{mid}/a/3",
         ):
             r = m.get(path)
-            # normally a 404 (UIDVALIDITY differs); if two mailboxes happen to share it the id
-            # resolves to mallory's *own* mail - never to alice's
-            assert r.status_code in (200, 404, 410), (path, r.status_code)
+            assert r.status_code == 404, (path, r.status_code)
             assert secret not in r.text and r.content != BLOB
         # an id naming an account mallory does not have
-        other = MessageRef("Alices Private", "INBOX", ref.uidvalidity, ref.uid).encode()
+        other = m.link(MessageRef("Alices Private", "INBOX", ref.uidvalidity, ref.uid))
         for path in (f"/m/{other}", f"/m/{other}/eml", f"/m/{other}/a/2"):
             r = m.get(path)
             assert r.status_code == 404 and secret not in r.text
@@ -428,17 +427,17 @@ async def test_an_account_without_read_is_not_viewable(env: Env):
     addr = env.address("alice")
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(env.tag))
-        assert b.get(f"/m/{ref.encode()}").status_code == 200
+        assert b.get(f"/m/{b.link(ref)}").status_code == 200
         (main,) = await env.store.list_for_user(MailAccount, env.uid(addr))
         from dataclasses import replace
 
         await env.store.update(replace(main, permissions=("organize",)))
-        r = b.get(f"/m/{ref.encode()}")
+        r = b.get(f"/m/{b.link(ref)}")
         assert r.status_code == 404
         await env.store.update(
             replace(await env.store.get(MailAccount, main.id) or main, permissions=("read",))
         )
-        assert b.get(f"/m/{ref.encode()}").status_code == 200
+        assert b.get(f"/m/{b.link(ref)}").status_code == 200
 
 
 async def test_removing_the_account_ends_access(env: Env):
@@ -446,9 +445,9 @@ async def test_removing_the_account_ends_access(env: Env):
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(env.tag))
         (main,) = await env.store.list_for_user(MailAccount, env.uid(addr))
-        assert b.get(f"/m/{ref.encode()}/eml").status_code == 200
+        assert b.get(f"/m/{b.link(ref)}/eml").status_code == 200
         await env.store.delete(MailAccount, main.id)
-        assert b.get(f"/m/{ref.encode()}/eml").status_code == 404
+        assert b.get(f"/m/{b.link(ref)}/eml").status_code == 404
 
 
 # ------------------------------------------------------------------------------- content origin
@@ -483,7 +482,7 @@ async def test_content_origin_serves_the_html_from_another_host(imap_server: Ima
     addr = env.address("alice")
     with env.browser(addr) as b:
         ref = env.put(addr, rich_message(tag))
-        mid = ref.encode()
+        mid = b.link(ref)
         page = b.get(f"/m/{mid}?view=html")
         src = re.search(r'<iframe[^>]* src="([^"]+)"', page.text)
         assert src is not None
@@ -531,7 +530,7 @@ async def test_pop3_accounts_can_be_viewed_too(env: Env):
             (summary,) = s.fetch_summaries("INBOX", list(res.uids[:1]))
         finally:
             s.close()
-        mid = summary.ref.encode()
+        mid = b.link(summary.ref)
         assert f"Quarterly report {env.tag}" in b.page(f"/m/{mid}")
         assert "Authentication-Results" in b.page(f"/m/{mid}/headers")
         eml = b.get(f"/m/{mid}/eml")
@@ -557,7 +556,7 @@ async def test_raw_headers_label_forged_authentication_and_survive_8bit(env: Env
     )
     with env.browser(addr) as b:
         ref = env.put(addr, raw)
-        r = b.get(f"/m/{ref.encode()}/headers")
+        r = b.get(f"/m/{b.link(ref)}/headers")
         assert r.status_code == 200
         page = r.text
         auth_section = page.split("All headers")[0]

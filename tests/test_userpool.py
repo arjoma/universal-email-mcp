@@ -459,10 +459,36 @@ async def test_mcp_contexts_carry_portal_links():
     ctx = await h.pool.acquire(principal("alice", {rec.id: "read"}))
     ref = MessageRef("Mine", "INBOX", 7, 3)
     base = h.op.public_url
-    assert ctx.service.viewer_url(ref) == f"{base}/m/{ref.encode()}"
-    assert ctx.service.attachment_url(ref, "2.1") == f"{base}/m/{ref.encode()}/a/2.1"
-    assert ctx.service.message_url(ref) == f"{base}/m/{ref.encode()}/eml"
+    sealed = h.pool.viewer_ids.seal("alice", ref.encode())
+    assert ref.encode() not in (ctx.service.viewer_url(ref) or "")  # opaque: no folder, no uid in the URL
+    assert ctx.service.viewer_url(ref) == f"{base}/m/{sealed}"
+    assert ctx.service.attachment_url(ref, "2.1") == f"{base}/m/{sealed}/a/2.1"
+    assert ctx.service.message_url(ref) == f"{base}/m/{sealed}/eml"
+    assert h.pool.viewer_ids.open("bob", sealed) is None
     pop = MessageRef("Mine", "INBOX", 0, 0, "uidl-1")
     assert ctx.service.attachment_url(pop, "1") is None  # POP3 has no parts to stream
     assert "portal viewer" in ctx.service.download_status
+    await h.pool.aclose()
+
+
+async def test_cursors_are_signed_with_the_store_ring_not_the_pseudonym_key():
+    """Review M2: the holder of PSEUDONYM_KEY (a log analyst) cannot sign paging cursors."""
+    import hashlib
+    import hmac
+
+    from universal_email_mcp.errors import InvalidCursor
+    from universal_email_mcp.service.cursor import Cursor, CursorCodec
+
+    h = Harness(PoolSettings(), [0.0])
+    rec = await h.store.create(record("alice", "Mine"))
+    ctx = await h.pool.acquire(principal("alice", {rec.id: "read"}))
+    cur = Cursor(tool="find_messages", query="q")
+    mine = ctx.service.cursors.encode(cur)
+    assert ctx.service.cursors.decode(mine, tool="find_messages", query="q") == cur
+    old_key = hmac.new(
+        h.op.pseudonym_key, b"uem-cursor-v1\0" + b"alice", hashlib.sha256
+    ).digest()  # what the analyst can compute
+    forged = CursorCodec(old_key).encode(cur)
+    with pytest.raises(InvalidCursor):
+        ctx.service.cursors.decode(forged, tool="find_messages", query="q")
     await h.pool.aclose()

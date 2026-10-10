@@ -52,6 +52,14 @@ class Browser:
     def __init__(self, app: Starlette, address: str = "alice@example.org") -> None:
         self.client: TestClient = new_client(app)
         self.address = address
+        self.app = app
+
+    def link(self, message_id: Any) -> str:
+        """The id of a message in this user's viewer URLs (``/m/<id>``): the message id (or
+        a ``MessageRef``) sealed for the user, as the service builds links."""
+        mid = message_id if isinstance(message_id, str) else message_id.encode()
+        uid = self.app.state.oauth_service.pseudonyms.user_id(self.address)
+        return self.app.state.user_pool.viewer_ids.seal(uid, mid)
 
     # No ``with client`` here: the lifespan (MCP session manager) may only run once per app,
     # and several browsers can share one app.

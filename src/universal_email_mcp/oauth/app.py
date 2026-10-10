@@ -166,7 +166,6 @@ async def build_oauth_app(
         pool=pool,
         max_download_bytes=op.max_download_bytes,
         content_origin=op.content_origin,
-        content_key=op.pseudonym_key,
     )
 
     @asynccontextmanager

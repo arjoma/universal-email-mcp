@@ -47,8 +47,19 @@ tell apart by the `event` field and the `logger` name `universal_email_mcp.audit
   pseudonym in two kinds). In local mode the key is a **per-install key** in the state directory
   (`audit.key`, mode 0600, created on first use; a throw-away key if that fails). Without the key a
   pseudonym cannot be reversed or checked.
-* **Never logged**: addresses, subjects, bodies, folder names, search terms, file names, message
-  ids, tool *arguments*, tokens, passwords, client names, account names, IP addresses.
+* **Never logged by the service**: addresses, subjects, bodies, folder names, search terms, file
+  names, message ids, tool *arguments*, tokens, passwords, client names, account names, IP
+  addresses. This covers the service's own log lines (audit events and operational logs: they
+  carry the account *pseudonym* and exception class or error code, never an account name or the
+  text of an exception from the mail path). The **platform's request logs** (Cloud Run, load
+  balancer) are outside the service: they keep full request URLs, and the viewer addresses
+  `/m/<id>` and `/c/<token>` in them are opaque (sealed with a key of the store key ring) but
+  still identify a message to whoever replays them; exclude them, see
+  [deploy-gcp.md](deploy-gcp.md#10-logging-audit-events-and-alerting).
+* **What `PSEUDONYM_KEY` protects.** It only maps addresses to pseudonyms (user ids, log
+  pseudonyms). Whoever holds it (for example a log analyst running `audit --user`) can check
+  whether a known address appears in the logs - and nothing else: it signs no cursor, no
+  content-origin address and no token, and it is not a key of the store.
 * **IP addresses** are not logged. With `AUDIT_LOG_CLIENT_IP=true` the sign-in and rate-limit
   events carry `ip` = a keyed pseudonym (`n_...`) of the *network* (IPv4 /24, IPv6 /48): enough
   to see "many failures from one place", useless for identifying a person.

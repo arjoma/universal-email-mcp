@@ -36,7 +36,6 @@ import hashlib
 import hmac
 import logging
 import re
-import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
@@ -63,6 +62,7 @@ from universal_email_mcp.presets import resolve_server_entry
 from universal_email_mcp.service.cursor import CursorCodec
 from universal_email_mcp.service.folder_map import STARTUP_TIMEOUT, FolderMap
 from universal_email_mcp.service.mail import MailService
+from universal_email_mcp.service.opaque import LinkId, ViewerIds
 from universal_email_mcp.service.remote_send import StoreRemoteSend
 from universal_email_mcp.service.router import AccountRouter
 from universal_email_mcp.store import Identity as IdentityRecord
@@ -109,14 +109,15 @@ class PortalLinks:
     """``DownloadLinks`` of remote mode: the portal's viewer routes (``/m/<id>/...``). The
     links carry no token: opening one needs the portal session of the mailbox's owner."""
 
-    def __init__(self, base: str) -> None:
+    def __init__(self, base: str, link_id: LinkId) -> None:
         self._base = base.rstrip("/")
+        self._id = link_id
 
     def attachment_url(self, ref: MessageRef, section: str) -> str | None:
-        return f"{self._base}/m/{ref.encode()}/a/{section}"
+        return f"{self._base}/m/{self._id(ref.encode())}/a/{section}"
 
     def message_url(self, ref: MessageRef) -> str | None:
-        return f"{self._base}/m/{ref.encode()}/eml"
+        return f"{self._base}/m/{self._id(ref.encode())}/eml"
 
 
 def _account_name(rec: MailAccount, taken: set[str], position: int) -> str:
@@ -365,7 +366,10 @@ class UserPool:
         self._retired: list[UserContext] = []
         self._calls: dict[str, int] = {}
         self._tasks: set[asyncio.Task[None]] = set()
-        self._cursor_secret = op.pseudonym_key or secrets.token_bytes(32)
+        # Keys of the store ring, never the pseudonym key (which an analyst of the logs may
+        # hold): whoever can sign cursors or open viewer links must hold the store keys.
+        self._cursor_secret = store.keys.derive("cursor-v1")[0]
+        self.viewer_ids = ViewerIds(store.keys.derive("viewer-id-v1"))
         self._sweeper: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------ contexts
@@ -396,12 +400,18 @@ class UserPool:
             ),
         )
         base = self.op.public_url
+        user_id = principal.user_id
+
+        def link_id(message_id: str) -> str:
+            return self.viewer_ids.seal(user_id, message_id)
+
         service = MailService(
             config,
             router=router,
             cursors=CursorCodec(self._cursor_key(principal.user_id)),
             viewer_base=base,
-            download_links=PortalLinks(base) if base else None,
+            link_id=link_id,
+            download_links=PortalLinks(base, link_id) if base else None,
             download_status="on (portal viewer, sign-in required)" if base else "off",
             remote_send=StoreRemoteSend(
                 self.store,

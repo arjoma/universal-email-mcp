@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Content-origin tokens and paging cursors are no longer signed with `PSEUDONYM_KEY` (which a log
+  analyst running `audit --user` holds): they use keys derived from the store key ring with
+  their own labels. `PSEUDONYM_KEY` now only maps addresses to pseudonyms. A content token's
+  expiry is also capped on the server (at most `CONTENT_TOKEN_TTL` ahead).
+- Viewer URLs no longer carry mail metadata: `/m/<id>` is the message id sealed
+  (AES-256-GCM, derived key, bound to the user; short, URL-safe) and the `/c/<token>` payload of
+  the content origin is sealed too, so platform request logs show neither mailbox, folder, UID nor
+  user id. `docs/deploy-gcp.md` documents a Cloud Logging exclusion for `/m/` and `/c/`; the
+  wording in `docs/oauth.md`, `docs/audit.md` and the DPIA template is corrected.
 - Store: a database writer without keys can no longer forge tokens or raise permissions. Record
   ids of bearer secrets (access/refresh tokens, authorization codes, portal sessions) are now
   `HMAC(derived key, secret)` instead of an unkeyed SHA-256, and every record carries a MAC over

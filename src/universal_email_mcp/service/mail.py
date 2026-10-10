@@ -58,6 +58,7 @@ from universal_email_mcp.service.cursor import Cursor, CursorCodec, Key, SourceP
 from universal_email_mcp.service.drafts import Drafter
 from universal_email_mcp.service.folder_map import FolderMap
 from universal_email_mcp.service.index import HeaderIndex
+from universal_email_mcp.service.opaque import LinkId
 from universal_email_mcp.service.organize import Conversation, Organizer
 from universal_email_mcp.service.paging import (
     MAX_CURSOR_RETRIES,
@@ -362,6 +363,7 @@ class MailService:
         index: HeaderIndex | None = None,
         cursors: CursorCodec | None = None,
         viewer_base: str | None = None,
+        link_id: LinkId | None = None,
         download_links: DownloadLinks | None = None,
         download_status: str | None = None,
         remote_send: RemoteSend | None = None,
@@ -371,6 +373,7 @@ class MailService:
         self.index = index or HeaderIndex()
         self.cursors = cursors or CursorCodec()
         self._viewer_base = viewer_base
+        self._link_id: LinkId = link_id or (lambda message_id: message_id)
         self._download_links = download_links
         self.download_status = download_status or ("on" if download_links else "off")
         """One line for ``account_info``: links on (where, how long) or off (why)."""
@@ -402,7 +405,7 @@ class MailService:
         """Link to the portal message viewer (remote mode, M3); ``None`` locally."""
         if not self._viewer_base:
             return None
-        return f"{self._viewer_base.rstrip('/')}/m/{ref.encode()}"
+        return f"{self._viewer_base.rstrip('/')}/m/{self._link_id(ref.encode())}"
 
     def message_url(self, ref: MessageRef) -> str | None:
         """``.eml`` download link when a provider is configured."""

@@ -229,15 +229,17 @@ async def test_tool_results_carry_portal_viewer_links(imap_server: ImapServer, b
             assert not r.is_error, text(r)
             hit = (r.structured_content or {})["messages"][0]
             mid = hit["id"]
-            assert hit["viewer_url"] == f"{w.url}/m/{mid}"
+            sid = w.pool.viewer_ids.seal(w.users["alice"], mid)  # sealed: no mailbox data in URLs
+            assert mid not in hit["viewer_url"]
+            assert hit["viewer_url"] == f"{w.url}/m/{sid}"
             got = await c.call_tool("get_message", {"id": mid})
             assert not got.is_error, text(got)
             data = got.structured_content or {}
-            assert data["message"]["viewer_url"] == f"{w.url}/m/{mid}"
-            assert data["eml_url"] == f"{w.url}/m/{mid}/eml"
+            assert data["message"]["viewer_url"] == f"{w.url}/m/{sid}"
+            assert data["eml_url"] == f"{w.url}/m/{sid}/eml"
             urls = [a["download_url"] for a in data["attachments"]]
-            assert urls and all(u and u.startswith(f"{w.url}/m/{mid}/a/") for u in urls)
-            assert f"{w.url}/m/{mid}" in text(got)
+            assert urls and all(u and u.startswith(f"{w.url}/m/{sid}/a/") for u in urls)
+            assert f"{w.url}/m/{sid}" in text(got)
             for u in (data["message"]["viewer_url"], data["eml_url"], *urls):
                 assert "token" not in u and "?" not in u
 

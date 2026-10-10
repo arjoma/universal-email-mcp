@@ -31,8 +31,6 @@ class PortalService:
     max_download_bytes: int = 100 * 1024 * 1024
     content_origin: str | None = None
     """Separate origin that serves the sandboxed HTML of mail (``CONTENT_ORIGIN``), if any."""
-    content_key: bytes = b""
-    """Signs the short-lived addresses of the HTML view on the content origin."""
 
     @property
     def custom_allowed(self) -> bool:

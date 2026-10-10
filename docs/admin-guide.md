@@ -229,8 +229,8 @@ Recommended start for a pilot: `UEM_READ_ONLY=true`; then `UEM_SEND_POLICY=confi
 
 | Secret | Variable | Used for | Rotation today |
 |---|---|---|---|
-| Store key ring | `STORE_KEYS` or `STORE_KEYS_FILE`, `STORE_ACTIVE_KEY` | AES-256-GCM sealing of mail passwords, server settings, activity; also the keys of the sealed `requestState` of send confirmations (derived from the ring) | supported, below |
-| Pseudonym key | `PSEUDONYM_KEY` or `PSEUDONYM_KEY_FILE` | HMAC that turns a mail address into the user id (`u_...`); pseudonyms in logs; signed paging cursors; signed content-origin addresses | **not supported** |
+| Store key ring | `STORE_KEYS` or `STORE_KEYS_FILE`, `STORE_ACTIVE_KEY` | AES-256-GCM sealing of mail passwords, server settings, activity; the MAC of every record and the keyed ids of tokens and sessions; also (derived from the ring, one key per purpose) the sealed `requestState` of send confirmations, the paging cursors, the opaque viewer ids and the content-origin addresses | supported, below |
+| Pseudonym key | `PSEUDONYM_KEY` or `PSEUDONYM_KEY_FILE` | HMAC that turns a mail address into the user id (`u_...`) and the pseudonyms in logs - **nothing else**; an analyst who runs `audit --user` needs it and gets no way to forge cursors, viewer links or tokens | **not supported** |
 | Local audit key | file `audit.key` in the platform state directory (mode 0600) | pseudonyms in local-mode audit lines | delete the file to get a new one (old log lines can then no longer be matched) |
 | Mailbox passwords | portal, stored sealed (remote); keyring or env (local) | logging in to mail servers | users change them (portal "Password" action) |
 
