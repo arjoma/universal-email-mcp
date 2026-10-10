@@ -114,8 +114,12 @@ An unauthenticated `/mcp` request answers `401` with
 `WWW-Authenticate: Bearer realm=..., resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"`,
 from which MCP clients discover everything else.
 
-Send-only grants include `mail.read`. Granting `send` asks for the password again unless it
-was typed within `UEM_REAUTH_WINDOW` (the consent page then shows a password step).
+Send-only grants include `mail.read`. **Every consent (Allow) asks for the password again**
+unless it was typed within `UEM_REAUTH_WINDOW` (signing in at the start of the same request
+counts): a browser session that was left open or stolen must not be enough to mint a grant that
+lasts up to 90 days, whatever it contains. The consent page then shows a password step that carries
+the request (client, selections) along and ends in the same grant; the text names sending when
+identities are included.
 
 The MCP Python SDK's server-side OAuth provider was not used: it assumes registered
 clients (no Client ID Metadata Documents) and ties the authorization UI to its provider

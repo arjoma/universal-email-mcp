@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Consent (Allow) always asks for the password again unless it was typed within the
+  re-authentication window (previously only grants with send identities did): a left-open or
+  stolen portal session can no longer mint a 90-day grant that reads, moves or deletes mail. The
+  step carries the request intact and ends in the grant.
 - Operational (non-audit) logs no longer carry account names or raw exception text from the mail
   path: they log the account pseudonym (the audit one, `a_...`) and exception class or error
   code. Tracebacks are reduced everywhere (JSON log formatter, access-log errors, background
