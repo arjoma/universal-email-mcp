@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Name lookups for mail and metadata connections are bounded by the connection deadline: the
+  lookup runs on a thread of its own and is given up when the deadline is over, so a hostile
+  name server cannot hold a worker for the libc resolver timeouts.
 - The record MAC (now `uem-record-v3`) also covers the backend namespace (the Firestore
   collection prefix): a genuine record copied into another deployment's collections is refused.
   `_v` stays outside the MAC on purpose (docs/stored-data.md); a test pins that `user_id` is

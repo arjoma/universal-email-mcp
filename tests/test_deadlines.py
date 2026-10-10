@@ -345,3 +345,40 @@ async def test_sign_in_check_waiting_for_a_slot_gives_up_as_busy():
                 pass
     async with bounded_slot(sem, 0.1):  # the slot came back
         pass
+
+
+def test_a_slow_name_lookup_is_cut_at_the_deadline():
+    from universal_email_mcp.mail.net import Deadline, resolve_checked
+
+    release = threading.Event()
+
+    def slow(_host: str, _port: int) -> list[str]:
+        release.wait(10)
+        return ["93.184.216.34"]
+
+    t0 = time.monotonic()
+    with Deadline(0.3), pytest.raises(ServerUnreachable):
+        resolve_checked("slow.example", 993, NetPolicy(), slow)
+    assert time.monotonic() - t0 < 2
+    release.set()
+
+
+def test_name_lookup_inside_a_deadline_still_returns_results_and_errors():
+    from universal_email_mcp.mail.net import Deadline, resolve_checked
+
+    def ok(_h: str, _p: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    def boom(_h: str, _p: int) -> list[str]:
+        raise OSError("no such host")
+
+    with Deadline(5):
+        assert [str(a) for a in resolve_checked("h.example", 993, NetPolicy(), ok)] == [
+            "93.184.216.34"
+        ]
+        with pytest.raises(ServerUnreachable):
+            resolve_checked("h.example", 993, NetPolicy(), boom)
+    with Deadline(0.01):  # already over
+        time.sleep(0.05)
+        with pytest.raises(ServerUnreachable):
+            resolve_checked("h.example", 993, NetPolicy(), ok)
