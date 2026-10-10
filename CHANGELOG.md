@@ -551,6 +551,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sign-in no longer parks behind tarpitted login checks: the wait for a free check slot ends after
+  5 seconds as "busy" (503, "temporarily unavailable") instead of holding until the check deadline.
 - A single damaged or tampered record no longer makes a listing (`Store.list_for_user`, so
   the portal pages and the activity list) fail: it is skipped, counted and logged without
   content.
