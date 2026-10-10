@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The record MAC (now `uem-record-v3`) also covers the backend namespace (the Firestore
+  collection prefix): a genuine record copied into another deployment's collections is refused.
+  `_v` stays outside the MAC on purpose (docs/stored-data.md); a test pins that `user_id` is
+  never a sealed field.
 - Paging cursors are verified under every ring key (signed with the active one), so they
   survive a key rotation while the old key is in the ring.
 - Client names: the combining grapheme joiner, variation selectors, private-use and unassigned
