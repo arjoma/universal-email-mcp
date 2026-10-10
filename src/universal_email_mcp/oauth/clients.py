@@ -22,6 +22,7 @@ import secrets
 import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from universal_email_mcp.bounded import run_deadline
 from universal_email_mcp.jsonlog import log_event
@@ -42,9 +43,18 @@ MAX_NAME = 100
 MAX_REDIRECT_URIS = 10
 MAX_CONCURRENT_FETCHES = 8
 ALLOWED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token"})
-_INVISIBLE_FILLERS = frozenset("\u3164\u115f\u1160\uffa0\u2800\u17b4\u17b5")
+_INVISIBLE_FILLERS = frozenset("\u3164\u115f\u1160\uffa0\u2800\u17b4\u17b5\u034f")
 """Characters that render as nothing (or as blank space) but are not format characters:
-Hangul fillers, the Braille blank and the Khmer inherent vowels."""
+Hangul fillers, the Braille blank, the Khmer inherent vowels and the combining grapheme joiner."""
+_DROPPED_CATEGORIES = frozenset({"Cf", "Co", "Cn", "Cs"})
+"""Format, private-use, unassigned and surrogate code points are never shown."""
+
+
+def _dropped(c: str) -> bool:
+    if c in _INVISIBLE_FILLERS or unicodedata.category(c) in _DROPPED_CATEGORIES:
+        return True
+    cp = ord(c)
+    return 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF  # variation selectors
 
 
 class ClientError(Exception):
@@ -77,13 +87,15 @@ def clean_text(value: object, limit: int = MAX_NAME) -> str:
     soft hyphen, Arabic letter mark, tag characters, invisible operators, interlinear
     annotation marks, BOM ...) and the invisible fillers are removed. Dropping the zero-width
     joiner too means emoji sequences fall apart into single emoji: acceptable for the name of
-    an application, and the only safe rule (a joiner is an invisible character like the rest)."""
+    an application, and the only safe rule (a joiner is an invisible character like the rest).
+    Variation selectors, the combining grapheme joiner, private-use and unassigned code points
+    go too (nothing a reader can verify is drawn for them)."""
     if not isinstance(value, str):
         return ""
     text = "".join(
         " " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c
         for c in value
-        if unicodedata.category(c) != "Cf" and c not in _INVISIBLE_FILLERS
+        if not _dropped(c)
     )
     return " ".join(text.split())[:limit]
 
@@ -145,7 +157,11 @@ def parse_client_document(client_id: str, body: bytes) -> tuple[str, tuple[str, 
         redirects = _redirect_list(doc.get("redirect_uris"))
     except ValueError as e:
         raise ClientError("The client's metadata document is not acceptable.", str(e)) from None
-    return clean_text(doc.get("client_name")), redirects
+    name = clean_text(doc.get("client_name"))
+    if not name:
+        # a name that cleans to blank: show the host of the client id instead
+        name = clean_text(urlsplit(client_id).hostname or "")
+    return name, redirects
 
 
 def parse_registration(body: object, cfg: OAuthConfig) -> tuple[str, tuple[str, ...]]:

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Client names: the combining grapheme joiner, variation selectors, private-use and unassigned
+  code points are dropped as well; a name that cleans to blank falls back to the host of the
+  client id (CIMD).
 - Message ids carry a stable key of their mailbox (id format `m2.` / `p2.`, 8 extra
   characters): store record id in remote mode, a hash of kind, host and login in local mode. An id
   issued for one mailbox is refused (`INVALID_REF`, "search again") when the account name now

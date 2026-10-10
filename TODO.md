@@ -7,13 +7,11 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
-- [ ] Review leftovers (store/web WP): `clean_text` still lets through U+034F, variation selectors,
-      private-use and unassigned code points (a name of only those cleans to a blank; fall back to
-      the client id's host); paging cursors use the active ring key only (cursors die at a key
-      rotation); the record MAC does not cover `_v` or the collection prefix; a single damaged record
-      makes `list_for_user` raise (portal 500) instead of being skipped and reported; the record MAC
-      assumes `user_id` stays a plain field; Dependabot does not read `cloudbuild.yaml` or the CI
-      emulator image (digests are bumped by hand).
+- [ ] Review leftovers (store/web WP): paging cursors use the active ring key only (cursors die at
+      a key rotation); the record MAC does not cover `_v` or the collection prefix; a single
+      damaged record makes `list_for_user` raise (portal 500) instead of being skipped and
+      reported; the record MAC assumes `user_id` stays a plain field; Dependabot does not read
+      `cloudbuild.yaml` or the CI emulator image (digests are bumped by hand).
 
 - [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from
       `limits.max_message_bytes`, which an operator may raise above that.

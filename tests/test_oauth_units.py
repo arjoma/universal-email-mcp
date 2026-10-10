@@ -186,3 +186,38 @@ def test_clean_text_drops_every_format_character_and_the_fillers():
         == "Müller & Söhne – 日本語 العربية 🙂"
     )
     assert clean_text(5) == "" and clean_text("x" * 500, 10) == "x" * 10
+
+
+def test_clean_text_drops_selectors_private_use_and_unassigned():
+    from universal_email_mcp.oauth.clients import clean_text
+
+    for ch in (
+        "\u034f",
+        "\ufe0f",
+        "\ufe00",
+        "\U000e0100",
+        "\U000e01ef",
+        "\ue000",
+        "\U000f0000",
+        "\u0378",
+        "\ud800",
+    ):
+        assert clean_text(f"A{ch}B") == "AB", hex(ord(ch))
+    assert clean_text("\u034f\ufe0f\ue000\u0378") == ""
+
+
+def test_client_document_name_of_invisible_characters_falls_back_to_host():
+    import json
+
+    from universal_email_mcp.oauth.clients import parse_client_document
+
+    cid = "https://app.example.org/client.json"
+    doc = {
+        "client_id": cid,
+        "client_name": "\u034f\ufe0f\ue000",
+        "redirect_uris": ["https://app.example.org/cb"],
+    }
+    name, _ = parse_client_document(cid, json.dumps(doc).encode())
+    assert name == "app.example.org"
+    doc["client_name"] = "Real"
+    assert parse_client_document(cid, json.dumps(doc).encode())[0] == "Real"
