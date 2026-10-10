@@ -126,7 +126,7 @@ works only on your computer while the server runs and for 24 hours at most.
 | **Privacy** | What is stored about you with counts and retention; **download my data**; **delete all my data**. |
 
 Sensitive actions (adding an account, changing a password, raising permissions, allowing send,
-approving a send, granting `send` at consent) ask for your password again unless you typed it in
+approving a send, allowing an application at the consent page) ask for your password again unless you typed it in
 the last 5 minutes. A portal session ends after 30 minutes idle or 12 hours.
 
 ### What is stored, export, deletion

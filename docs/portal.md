@@ -124,8 +124,8 @@ thread-folder copy (`file_replies`), the draft removal and `\Answered` happen as
 Typing the password again (checked live against the login server) opens a window of
 `UEM_REAUTH_WINDOW` seconds (default 300). Signing in counts. Needed for: opening or
 submitting the add-account form, removing an account, changing an account's password, raising
-an account's permissions, allowing an identity to send, **approving a pending send**, and **granting `send` to a client
-at the consent page**. When the window is over the user is sent to `/portal/reauth` and back;
+an account's permissions, allowing an identity to send, **approving a pending send**, and
+**every consent to an AI client** (Allow at the consent page, whatever it grants). When the window is over the user is sent to `/portal/reauth` and back;
 nothing secret is carried along (a half-filled form is lost, never a password).
 Wrong passwords count against the same limits as sign-in (5 failures per address and 15
 minutes).

@@ -319,7 +319,11 @@ CONTEXTS: dict[str, dict[str, Any]] = {
         "redirect_host": HOSTILE,
         "denied": False,
     },
-    "consent_reauth.html": {"error": "bad_credentials", "carried": [("grant", HOSTILE)]},
+    "consent_reauth.html": {
+        "error": "bad_credentials",
+        "carried": [("grant", HOSTILE)],
+        "sending": False,
+    },
     "error.html": {"reason": "notfound"},
     "headers.html": {
         "mid": "m1.x",

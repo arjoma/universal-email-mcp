@@ -221,24 +221,72 @@ async def test_the_reauth_window_covers_a_second_send_grant_and_then_expires(ali
     assert r4.status_code == 200 and 'type="password"' in r4.text
 
 
-async def test_granting_only_reading_never_asks_for_the_password(alice, store, clock):
+async def test_every_consent_asks_for_the_password_after_the_window(alice, store, clock):
+    """Review W1: a left-open or stolen portal session (12 h) must not be enough to mint a
+    90-day grant, also one that only reads, moves or deletes mail."""
     await send_ready(store)
-    a = authz(alice, "mail.read mail.send")
+    a = authz(alice, "mail.read mail.organize")
     main = account_id_of(a.consent_page().text)
-    clock.advance(hours=3)
-    alice.sign_in()  # session still valid? the idle timeout is 30 minutes
-    _, r = approve(alice, a, [f"{main}:mail.read"])
-    assert r.status_code in (303, 200)
+    clock.advance(minutes=10)  # session alive, password entry long ago
+    grants = [f"{main}:mail.read", f"{main}:mail.organize"]
+    _, r = approve(alice, a, grants)
+    assert r.status_code == 200 and 'type="password"' in r.text and 'id="continue"' not in r.text
+    assert "access your mailboxes" in r.text  # not the text about sending
+    assert await store.list_for_user(Grant, ALICE) == []  # nothing was created
+    # the question carries the request intact (client, selections) and a wrong password is refused
+    form = {**hidden_fields(r.text), "grant": grants}
+    bad = alice.client.post("/authorize", data={**form, "password": "wrong"})
+    assert bad.status_code == 401 and 'type="password"' in bad.text
+    assert await store.list_for_user(Grant, ALICE) == []
+    ok = alice.client.post("/authorize", data={**form, "password": PASSWORD})
+    assert ok.status_code == 200 and 'id="continue"' in ok.text
+    code = query_of(location_of(ok))["code"]
+    assert a.exchange(code).json()["scope"] == "mail.read mail.organize"
+    (grant,) = await store.list_for_user(Grant, ALICE)
+    assert grant.client_id == a.client_id
+    # the window now covers the next consent, and ends five minutes later
+    clock.advance(minutes=2)
+    _, r2 = approve(alice, authz(alice, "mail.read", name="Second"), [f"{main}:mail.read"])
+    assert 'id="continue"' in r2.text
+    clock.advance(minutes=4)
+    _, r3 = approve(alice, authz(alice, "mail.read", name="Third"), [f"{main}:mail.read"])
+    assert 'type="password"' in r3.text
 
 
-async def test_an_unknown_identity_is_dropped_and_asks_for_no_password(alice, store, clock):
+async def test_consent_right_after_signing_in_asks_nothing_more(app, store, clock):
+    """The password was just typed at the sign-in that started the request."""
+    with Browser(app) as b:
+        a = authz(b, "mail.read")  # not signed in yet: the consent page comes after the sign-in
+        main = account_id_of(a.consent_page().text)
+        _, r = approve(b, a, [f"{main}:mail.read"])
+        assert r.status_code == 200 and 'id="continue"' in r.text
+
+
+async def test_a_consent_post_without_the_password_cannot_be_forced_through(alice, store, clock):
+    await send_ready(store)
+    a = authz(alice, "mail.read")
+    main = account_id_of(a.consent_page().text)
+    clock.advance(minutes=10)
+    for password in (None, "", " "):
+        extra = {} if password is None else {"password": password}
+        _, r = approve(alice, a, [f"{main}:mail.read"], **extra)
+        assert 'id="continue"' not in r.text
+    assert await store.list_for_user(Grant, ALICE) == []
+
+
+async def test_an_unknown_identity_is_dropped_and_the_question_is_about_reading(
+    alice, store, clock
+):
     await send_ready(store)
     a = authz(alice, "mail.read mail.send")
     main = account_id_of(a.consent_page().text)
     clock.advance(minutes=10)
     _, r = approve(alice, a, [f"{main}:mail.read"], ["i_0000000000000000"])
-    assert 'id="continue"' in r.text  # no valid identity: a plain read grant, no password prompt
-    code = query_of(location_of(r))["code"]
+    # no valid identity: a plain read grant - which asks for the password like any consent
+    assert 'type="password"' in r.text and "send mail as you" not in r.text
+    form = {**hidden_fields(r.text), "grant": [f"{main}:mail.read"], "password": PASSWORD}
+    ok = alice.client.post("/authorize", data=form)
+    code = query_of(location_of(ok))["code"]
     assert a.exchange(code).json()["scope"] == "mail.read"
 
 

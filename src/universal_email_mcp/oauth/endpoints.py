@@ -487,17 +487,28 @@ class OAuthEndpoints:
             ]
         if not account_scopes and not identity_ids:
             return await self._consent_page(request, req, session, error="nothing", status=400)
-        if identity_ids and not svc.store.reauth_fresh(session, svc.cfg.reauth_window):
-            # Letting a client send mail as the user needs the password again (design 6).
+        if not svc.store.reauth_fresh(session, svc.cfg.reauth_window):
+            # Every consent needs the password again (unless it was typed within the window,
+            # e.g. at the sign-in that started this very request): a 12 hour browser session
+            # that was left open or stolen must not be enough to mint a 90 day grant that can
+            # read, move or delete mail - and sending as the user is the same step (design 6).
             password = form.get("password")
+            sending = bool(identity_ids)
             if not isinstance(password, str) or not password:
-                return self._reauth_page(request, req, form, user)
+                return self._reauth_page(request, req, form, user, sending=sending)
             error = await signin.verify_user_password(svc, request, user, password)
             if error:
                 status = 401 if error == signin.BAD_CREDENTIALS else 429
-                return self._reauth_page(request, req, form, user, error=error, status=status)
+                return self._reauth_page(
+                    request, req, form, user, error=error, status=status, sending=sending
+                )
             session = await svc.store.mark_reauth(session)
-            await svc.audit("portal.reauth", outcome="ok", user=user.id, reason="consent_send")
+            await svc.audit(
+                "portal.reauth",
+                outcome="ok",
+                user=user.id,
+                reason="consent_send" if sending else "consent",
+            )
         scope = ops.compute_scope(svc.cfg.offered_scopes, account_scopes, identity_ids)
         grant = await svc.store.create_grant(
             user_id=user.id,
@@ -539,8 +550,10 @@ class OAuthEndpoints:
         *,
         error: str = "",
         status: int = 200,
+        sending: bool = False,
     ) -> Response:
-        """Ask for the password again before the grant that allows sending is created.
+        """Ask for the password again before the grant is created (``sending``: it also
+        allows sending mail as the user, which the page says).
         The selections travel along as hidden fields (they are not secret)."""
         carried = [("grant", str(v)) for v in form.getlist("grant")] + [
             ("identity", str(v)) for v in form.getlist("identity")
@@ -552,6 +565,7 @@ class OAuthEndpoints:
             error=error,
             address=user.primary_address,
             carried=carried,
+            sending=sending,
             **self._page_context(req),
         )
 
