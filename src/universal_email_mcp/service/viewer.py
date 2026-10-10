@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesHeaderParser
 
-from universal_email_mcp.bounded import run_deadline
+from universal_email_mcp.bounded import GRACE, run_deadline
 from universal_email_mcp.errors import AttachmentNotFound, Busy, TooLarge
 from universal_email_mcp.mail.bodystructure import SECTION_RE
 from universal_email_mcp.mail.htmlview import HtmlView, TooComplex, build_html_view
@@ -36,14 +37,16 @@ HEADER_BYTES = 256 * 1024
 MAX_HEADER_LINES = 400
 MAX_HEADER_VALUE = 4000
 THREAD_BODIES = 25
+"""Messages of a conversation whose text is read for the thread page."""
 HTML_VIEW_WORKERS = 4
 """Most HTML sanitisations running at once, instance-wide (each on a thread of its own)."""
 HTML_VIEW_SECONDS = 10.0
-"""Longest a sanitisation may take; longer counts as "too complex"."""
+"""Longest a caller waits for a sanitisation; longer counts as "too complex"."""
 HTML_VIEW_QUEUE_SECONDS = 5.0
 """Longest a request waits for a free sanitiser before it is answered as busy."""
-_html_slots = asyncio.Semaphore(HTML_VIEW_WORKERS)
-"""Messages of a conversation whose text is read for the thread page."""
+_html_slots = threading.BoundedSemaphore(HTML_VIEW_WORKERS)
+"""Released by the worker thread itself when it ends, so a thread that is still busy keeps
+its slot even after the caller gave up."""
 
 _SPACES = re.compile(r"\s+")
 _AUTH_HEADERS = frozenset(
@@ -147,19 +150,23 @@ class Viewer:
         raw = await self._router.run_one(account, lambda a: self._router.call(a, fn))
         # CPU only, but a pathological message must not occupy asyncio's default executor
         # (shared with everything else): own daemon thread, a few at a time, a time limit.
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + HTML_VIEW_QUEUE_SECONDS
+        while not _html_slots.acquire(blocking=False):
+            if loop.time() >= give_up:
+                raise Busy("too many messages are being prepared for display")
+            await asyncio.sleep(0.05)
+
+        def build() -> HtmlView:
+            try:
+                return build_html_view(raw, remote_images=remote_images)
+            finally:
+                _html_slots.release()
+
         try:
-            await asyncio.wait_for(_html_slots.acquire(), HTML_VIEW_QUEUE_SECONDS)
-        except TimeoutError:
-            raise Busy("too many messages are being prepared for display") from None
-        try:
-            return await run_deadline(
-                lambda: build_html_view(raw, remote_images=remote_images),
-                seconds=HTML_VIEW_SECONDS,
-            )
+            return await run_deadline(build, seconds=max(0.05, HTML_VIEW_SECONDS - GRACE))
         except TimeoutError:
             raise TooComplex("the HTML took too long to sanitise") from None
-        finally:
-            _html_slots.release()
 
     # ------------------------------------------------------------ thread
 
