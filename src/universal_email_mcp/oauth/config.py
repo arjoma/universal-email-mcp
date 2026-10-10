@@ -76,6 +76,10 @@ class RateLimits:
     """``/token`` and ``/revoke`` per network."""
     client_fetch_ip: Rate = _r(30, minutes=1)
     """Client ID Metadata Document downloads per network."""
+    client_fetch_global: Rate = _r(120, hours=1)
+    """The same for the whole instance: every download that is not served from the cache also
+    writes a client record, so many networks together must not fill the store or make the
+    instance a fetch cannon."""
     # portal
     portal_user: Rate = _r(60, minutes=10)
     """State-changing portal requests (any POST) per signed-in user."""

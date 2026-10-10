@@ -120,7 +120,13 @@ def build_service(
     return OAuthService(
         cfg=cfg,
         store=store,
-        clients=ClientRegistry(store, cfg, fetch_policy, fetch_limiter=limits.client_fetch),
+        clients=ClientRegistry(
+            store,
+            cfg,
+            fetch_policy,
+            fetch_limiter=limits.client_fetch,
+            global_limiter=limits.client_fetch_global,
+        ),
         pseudonyms=Pseudonyms(op.pseudonym_key),
         login=login or ImapLoginVerifier(net),
         login_domains=op.login_domains,

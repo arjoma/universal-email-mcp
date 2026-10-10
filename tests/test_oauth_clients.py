@@ -37,7 +37,7 @@ def policy(server: DocServer, **kw: object) -> FetchPolicy:
         net=NetPolicy(allow_private=True, connect_timeout=3, read_timeout=3),
         ca_file=server.ca_file,
         resolver=resolver,
-        **kw,  # type: ignore[arg-type]
+        **{"ports": None, **kw},  # type: ignore[arg-type]  # the test server has a random port
     )
 
 
@@ -267,3 +267,57 @@ def test_dcr_clients_cannot_use_urls_and_urls_are_not_registered(web, server):
     assert HOST  # keep import used
     r = Authz(c, "dcr_doesnotexist").open()
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------- ports and the global limit (review W5)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://client.test:8443/c.json",
+        "https://client.test:22/c.json",
+        "https://client.test:6379/c.json",
+        "https://client.test:80/c.json",
+        "https://client.test:444/c.json",
+    ],
+)
+def test_only_port_443_is_acceptable_for_client_documents(url):
+    with pytest.raises(FetchError, match="443"):
+        check_document_url(url)
+    with pytest.raises(FetchError):
+        fetch_document(url, FetchPolicy(resolver=lambda h, p: ["93.184.216.34"]))
+    assert check_document_url("https://client.test/c.json")[1] == 443
+    assert check_document_url("https://client.test:443/c.json")[1] == 443
+    assert check_document_url(url, None)[1] != 443  # only tests may open the port
+
+
+def test_the_default_policy_never_connects_to_other_ports():
+    seen: list[int] = []
+
+    def resolver_(host: str, port: int) -> list[str]:
+        seen.append(port)
+        return ["127.0.0.1"]
+
+    with pytest.raises(FetchError):
+        fetch_document("https://client.test:8443/c.json", FetchPolicy(resolver=resolver_))
+    assert seen == []  # refused before any name lookup
+
+
+async def test_client_fetches_have_one_budget_for_the_whole_instance(server):
+    """Review W5: many networks together cannot make the instance fetch (and cache) without
+    end - the per-network limit alone is a limit per attacker address."""
+    from dataclasses import replace
+
+    from universal_email_mcp.oauth.config import Rate, RateLimits
+
+    limits = replace(RateLimits(), client_fetch_global=Rate(3, timedelta(hours=1)))
+    app = await make_app(fetch_policy=policy(server), rate_limits=limits)
+    with new_client(app) as c:
+        for i in range(3):
+            assert Authz(c, server.url(f"/g{i}.json")).open().status_code == 400  # fetched, no doc
+        before = len(server.hits)
+        assert before == 3
+        r = Authz(c, server.url("/g3.json")).open()
+        assert r.status_code == 429 or "Too many" in r.text
+        assert len(server.hits) == before  # no further request reached the document server

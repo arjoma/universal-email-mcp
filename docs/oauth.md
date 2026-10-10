@@ -128,13 +128,14 @@ interface. The SDK's *client* is what the end-to-end tests drive.
 ## Clients
 
 * **Client ID Metadata Documents (CIMD, preferred).** `client_id` is an `https` URL
-  (with a path, no query, no fragment, no credentials, no IP literal). The server fetches it
+  (with a path, no query, no fragment, no credentials, no IP literal, **port 443 only**). The server fetches it
   and requires: status 200, JSON content type, at most 16 KiB, a `client_id` member equal to
   the URL, `redirect_uris` (non-empty), no client secret or JWKS, `token_endpoint_auth_method`
   `none` if present. The fetch resolves the host once, checks **every** address (public
   unicast only, unless the operator allows private networks), connects to the checked IP and
   verifies TLS for the host name; redirects are **not** followed; a 10 s deadline covers slow
-  senders; no cookies, no compression. The document is cached in the store for one hour, so
+  senders; no cookies, no compression; downloads are rate limited per network and for the whole instance
+  (`UEM_RATE_CLIENT_FETCH_IP`, `UEM_RATE_CLIENT_FETCH_GLOBAL`). The document is cached in the store for one hour, so
   a changed document takes effect after that. Only the (cleaned, length-limited, escaped)
   name is shown; logos and other URLs in the document are never fetched.
 * **Dynamic Client Registration (fallback).** Open but rate limited (10 per IP and hour,

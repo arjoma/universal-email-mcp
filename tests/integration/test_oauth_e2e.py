@@ -223,6 +223,7 @@ async def test_sdk_oauth_client_with_client_id_metadata_document(
             net=NetPolicy(allow_private=True, connect_timeout=3, read_timeout=3),
             ca_file=docs.ca_file,
             resolver=resolver,
+            ports=None,  # the test server listens on a random port
         )
         app = await build_oauth_app(op, login=verifier(), fetch_policy=fetch)
         browser = Browser(user, imap_server.password)

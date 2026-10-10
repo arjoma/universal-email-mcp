@@ -172,11 +172,13 @@ class ClientRegistry:
         fetch_policy: FetchPolicy | None = None,
         *,
         fetch_limiter: RateLimiter | None = None,
+        global_limiter: RateLimiter | None = None,
     ) -> None:
         self._store = store
         self._cfg = cfg
         self._fetch_policy = fetch_policy or FetchPolicy()
         self._fetch_limiter = fetch_limiter
+        self._global_limiter = global_limiter
         self._sem = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
 
     @staticmethod
@@ -195,7 +197,7 @@ class ClientRegistry:
 
     async def _resolve_document(self, client_id: str, ip: str) -> ClientInfo:
         try:
-            check_document_url(client_id)
+            check_document_url(client_id, self._fetch_policy.ports)
         except FetchError as e:
             raise ClientError("The client identifier is not acceptable.", str(e)) from None
         cached = await self._store.get(OAuthClient, client_id)
@@ -205,6 +207,13 @@ class ClientRegistry:
             raise ClientError(
                 "Too many requests. Please try again in a minute.", "fetch rate limit"
             )
+        if self._global_limiter is not None:
+            # one budget for the whole instance, however many networks ask
+            if self._global_limiter.blocked("*"):
+                raise ClientError(
+                    "Too many requests. Please try again later.", "global fetch rate limit"
+                )
+            self._global_limiter.add("*")
         try:
             async with self._sem:
                 body = await run_deadline(
