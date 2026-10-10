@@ -10,7 +10,9 @@ fetch therefore reuses the building blocks of the mail connections (``mail/net.p
 5. the body is capped (``max_bytes``) and the whole exchange has a deadline that also
    covers a server that trickles bytes (a watchdog closes the socket).
 
-Blocking code: call it through ``asyncio.to_thread``.
+Blocking code: :class:`~universal_email_mcp.oauth.clients.ClientRegistry` runs it with
+``bounded.run_deadline`` (a daemon thread of its own under a deadline), never on asyncio's
+default executor.
 """
 
 from __future__ import annotations
