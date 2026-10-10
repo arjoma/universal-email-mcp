@@ -177,8 +177,9 @@ async def test_viewer_use_is_in_the_feed(imap_server: ImapServer, box_a: Mailbox
         raw, _rec = await w.store.create_portal_session(w.users["alice"], fresh_login=True)
         async with httpx2.AsyncClient(base_url=w.url, timeout=60) as browser:
             browser.cookies.set("uem_session", raw)
-            assert (await browser.get(f"/m/{mid}")).status_code == 200
-            assert (await browser.get(f"/m/{mid}/eml")).status_code == 200
+            sid = w.pool.viewer_ids.seal(w.users["alice"], mid)
+            assert (await browser.get(f"/m/{sid}")).status_code == 200
+            assert (await browser.get(f"/m/{sid}/eml")).status_code == 200
         events = [e.event for e in await w.store.list_activity(w.users["alice"])]
         assert "viewer.open" in events and "viewer.raw" in events
 

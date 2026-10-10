@@ -4,7 +4,10 @@ Chat clients cannot receive large files and a text summary is not always enough,
 message in a tool result carries a link into the portal. Opening it needs a portal session;
 the link itself grants nothing:
 
-* the message id names an account **by the name its owner gave it**; it is resolved inside the
+* the id in the URL is the message id sealed under a key of the store (authenticated
+  encryption, bound to the signed-in user): the URL - which platform request logs keep -
+  reveals no mailbox, folder or UID, and another user's link opens nothing. The message id
+  inside names an account **by the name its owner gave it**; it is resolved inside the
   per-user viewer context (:meth:`~universal_email_mcp.service.userpool.UserPool.lease_viewer`),
   which holds only the signed-in user's own accounts that grant ``read``. An id naming anything
   else - another user's account, a removed account, a forged id - fails exactly like a message
@@ -23,15 +26,9 @@ Everything is read-only (``BODY.PEEK``): viewing a message does not mark it read
 from __future__ import annotations
 
 import asyncio
-import binascii
 import contextlib
-import hashlib
-import hmac
-import json
 import logging
 import re
-import secrets
-import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
@@ -42,7 +39,6 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from universal_email_mcp.b64 import b64u, unb64u
 from universal_email_mcp.errors import (
     AccountTimeout,
     AttachmentNotFound,
@@ -64,14 +60,14 @@ from universal_email_mcp.portal.service import PortalService
 from universal_email_mcp.server import render
 from universal_email_mcp.server.downloads import content_disposition
 from universal_email_mcp.server.http import RouteGroup
+from universal_email_mcp.service.opaque import ContentTokens, ViewerIds
 from universal_email_mcp.service.userpool import UserContext
 from universal_email_mcp.service.viewer import Viewer
 
 log = logging.getLogger(__name__)
 
-_MESSAGE_ID = re.compile(r"^[mp]1\.[A-Za-z0-9_-]{1,3000}$")
+_SEALED_ID = re.compile(r"^[A-Za-z0-9_-]{1,3000}$")
 _SECTION = re.compile(r"^[0-9.]{1,100}$")
-CONTENT_TOKEN_TTL = 120.0
 FILE_HEADERS = {
     "x-content-type-options": "nosniff",
     "content-security-policy": "sandbox; default-src 'none'; frame-ancestors 'none'",
@@ -89,50 +85,6 @@ HTML_HEADERS = {
     "cross-origin-resource-policy": "same-site",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 }
-
-
-# --------------------------------------------------------------------------- content tokens
-
-
-class ContentTokens:
-    """Short-lived, tamper-evident addresses of the HTML view on the content origin (which
-    never receives the portal cookie): user, message id, remote-images choice, expiry."""
-
-    def __init__(
-        self,
-        key: bytes | None = None,
-        *,
-        ttl: float = CONTENT_TOKEN_TTL,
-        clock: Callable[[], float] = time.time,
-    ) -> None:
-        self._key = hmac.new(
-            key or secrets.token_bytes(32), b"uem-content-v1", hashlib.sha256
-        ).digest()
-        self._ttl = ttl
-        self._clock = clock
-
-    def _mac(self, payload: bytes) -> bytes:
-        return hmac.new(self._key, payload, hashlib.sha256).digest()[:16]
-
-    def issue(self, user_id: str, message_id: str, remote_images: bool) -> str:
-        data = [user_id, message_id, int(remote_images), int(self._clock() + self._ttl)]
-        payload = json.dumps(data, separators=(",", ":")).encode()
-        return b64u(payload) + "." + b64u(self._mac(payload))
-
-    def verify(self, token: str) -> tuple[str, str, bool] | None:
-        try:
-            body, mac = token.split(".", 1)
-            payload = unb64u(body)
-            if not hmac.compare_digest(unb64u(mac), self._mac(payload)):
-                return None
-            user_id, message_id, images, exp = json.loads(payload)
-            if not (isinstance(user_id, str) and isinstance(message_id, str)):
-                return None
-            if self._clock() >= float(exp):
-                return None
-            return user_id, message_id, bool(images)
-        except (ValueError, TypeError, binascii.Error):
-            return None
 
 
 # --------------------------------------------------------------------------- helpers
@@ -185,7 +137,9 @@ class ViewerEndpoints(PortalEndpoints):
     def __init__(self, ps: PortalService) -> None:
         super().__init__(ps)
         self.pool = ps.pool
-        self.tokens = ContentTokens(ps.content_key or None)
+        keys = ps.oauth.store.keys
+        self.tokens = ContentTokens(keys.derive("content-origin-v1"))
+        self.ids = ViewerIds(keys.derive("viewer-id-v1"))
         self.public = ps.oauth.cfg.issuer
 
     # ------------------------------------------------------------------ plumbing
@@ -228,20 +182,32 @@ class ViewerEndpoints(PortalEndpoints):
         mid: str,
         handler: Callable[[Auth, Viewer, str], Any],
     ) -> Response:
-        """Session check, id syntax, lease; every failure ends in the same fixed pages."""
+        """Session check, rate limit, opening the sealed id, lease; every failure ends in the
+        same fixed pages. ``handler`` gets the plain message id; ``mid`` (the sealed one from
+        the URL) is what links on the page use."""
         auth = await self._auth(request)
         if auth is None:
             return self._to_signin(request)
-        if self.pool is None or not _MESSAGE_ID.match(mid):
-            return self._error(request, None, "messagegone")
         if wait := await self._hit(request, auth.user.id, "viewer"):
             return self._too_many(request, wait)
+        plain = self._open_id(auth.user.id, mid)
+        if self.pool is None or plain is None:
+            return self._error(request, None, "messagegone")
         async with AsyncExitStack() as stack:
             try:
                 viewer, _ctx = await self._open(auth, stack)
-                return await handler(auth, viewer, mid)
+                return await handler(auth, viewer, plain)
             except Exception as e:  # noqa: BLE001 - never a stack trace in the browser
                 return self._error(request, e)
+
+    def _open_id(self, user_id: str, sealed: str) -> str | None:
+        """The message id behind a URL id, or ``None`` (syntax, forgery, another user's)."""
+        if not _SEALED_ID.match(sealed):
+            return None
+        return self.ids.open(user_id, sealed)
+
+    def _link(self, user_id: str, message_id: str) -> str:
+        return self.ids.seal(user_id, message_id)
 
     # ------------------------------------------------------------------ pages
 
@@ -249,6 +215,8 @@ class ViewerEndpoints(PortalEndpoints):
         mid = request.path_params["mid"]
         want_html = request.query_params.get("view") == "html"
         images = request.query_params.get("images") == "1"
+
+        sid = mid
 
         async def handler(auth: Auth, viewer: Viewer, mid: str) -> Response:
             viewer.resolve(mid)
@@ -260,7 +228,7 @@ class ViewerEndpoints(PortalEndpoints):
                 except TooComplex:
                     view = None
             frame = (
-                self._frame_url(auth, mid, images and view is not None)
+                self._frame_url(auth, mid, sid, images and view is not None)
                 if view and view.document
                 else ""
             )
@@ -278,20 +246,20 @@ class ViewerEndpoints(PortalEndpoints):
                 "message.html",
                 auth=auth,
                 frame_src=self._frame_src() if frame else "",
-                msg=_entry(msg, mid),
+                msg=_entry(msg, sid),
                 want_html=want_html,
                 html_failed=want_html and msg.has_html and not frame,
                 frame_url=frame,
                 images_loaded=bool(view and view.images_loaded),
                 remote_images=view.remote_images if view else 0,
                 links=[render.defang(link) for link in (view.links if view else ())],
-                eml_url=f"/m/{mid}/eml",
+                eml_url=f"/m/{sid}/eml",
             )
 
         return await self._guard(request, mid, handler)
 
     async def thread(self, request: Request) -> Response:
-        mid = request.path_params["mid"]
+        sid = request.path_params["mid"]
 
         async def handler(auth: Auth, viewer: Viewer, mid: str) -> Response:
             viewer.resolve(mid)
@@ -300,10 +268,10 @@ class ViewerEndpoints(PortalEndpoints):
             for e in entries:
                 hit = result.hits[e.hit_index]
                 item = (
-                    _entry(e.message, e.summary_id)
+                    _entry(e.message, self._link(auth.user.id, e.summary_id))
                     if e.message is not None
                     else {
-                        "id": e.summary_id,
+                        "id": self._link(auth.user.id, e.summary_id),
                         "subject": hit.summary.subject,
                         "sender": _addresses(hit.summary.from_),
                         "date": _when(hit.summary.date or hit.summary.received),
@@ -325,17 +293,17 @@ class ViewerEndpoints(PortalEndpoints):
                 request,
                 "thread.html",
                 auth=auth,
-                mid=mid,
+                mid=sid,
                 items=items,
                 root_subject=result.root.subject,
                 notes=result.notes,
                 partial=bool(result.problems),
             )
 
-        return await self._guard(request, mid, handler)
+        return await self._guard(request, sid, handler)
 
     async def headers(self, request: Request) -> Response:
-        mid = request.path_params["mid"]
+        sid = request.path_params["mid"]
 
         async def handler(auth: Auth, viewer: Viewer, mid: str) -> Response:
             viewer.resolve(mid)
@@ -347,7 +315,7 @@ class ViewerEndpoints(PortalEndpoints):
                 request,
                 "headers.html",
                 auth=auth,
-                mid=mid,
+                mid=sid,
                 lines=[
                     {
                         "name": h.name,
@@ -359,17 +327,17 @@ class ViewerEndpoints(PortalEndpoints):
                 ],
             )
 
-        return await self._guard(request, mid, handler)
+        return await self._guard(request, sid, handler)
 
     # ------------------------------------------------------------------ the HTML document
 
     def _frame_src(self) -> str:
         return self.ps.content_origin or "'self'"
 
-    def _frame_url(self, auth: Auth, mid: str, images: bool) -> str:
+    def _frame_url(self, auth: Auth, mid: str, sid: str, images: bool) -> str:
         if self.ps.content_origin:
             return f"{self.ps.content_origin}/c/{self.tokens.issue(auth.user.id, mid, images)}"
-        return f"/m/{mid}/html" + ("?images=1" if images else "")
+        return f"/m/{sid}/html" + ("?images=1" if images else "")
 
     def _html_response(self, document: str, *, images: bool) -> Response:
         ancestor = self.public if self.ps.content_origin else "'self'"
@@ -391,9 +359,10 @@ class ViewerEndpoints(PortalEndpoints):
         if self.ps.content_origin:  # only the content origin serves mail HTML then
             return Response("Not found.\n", status_code=404, media_type="text/plain")
         auth = await self._auth(request)
-        if auth is None or self.pool is None or not _MESSAGE_ID.match(mid):
+        plain = self._open_id(auth.user.id, mid) if auth else None
+        if auth is None or self.pool is None or plain is None:
             return Response("Not found.\n", status_code=404, media_type="text/plain")
-        return await self._serve_html(auth.user.id, mid, images)
+        return await self._serve_html(auth.user.id, plain, images)
 
     async def content_frame(self, request: Request) -> Response:
         """The same document on the content origin, addressed by a signed short-lived token
@@ -405,7 +374,7 @@ class ViewerEndpoints(PortalEndpoints):
         if host != origin.split("://", 1)[1].lower():
             return Response("Not found.\n", status_code=404, media_type="text/plain")
         found = self.tokens.verify(request.path_params["token"])
-        if found is None or not _MESSAGE_ID.match(found[1]):
+        if found is None:
             return Response("Not found.\n", status_code=404, media_type="text/plain")
         return await self._serve_html(found[0], found[1], found[2])
 
@@ -449,14 +418,15 @@ class ViewerEndpoints(PortalEndpoints):
         auth = await self._auth(request)
         if auth is None:
             return self._to_signin(request)
-        if self.pool is None or not _MESSAGE_ID.match(mid):
-            return self._error(request, None, "messagegone")
         if wait := await self._hit(request, auth.user.id, "download"):
             return self._too_many(request, wait)
+        plain = self._open_id(auth.user.id, mid)
+        if self.pool is None or plain is None:
+            return self._error(request, None, "messagegone")
         stack = AsyncExitStack()
         try:
             viewer, _ctx = await self._open(auth, stack)
-            dl = await viewer.download(mid, section)
+            dl = await viewer.download(plain, section)
         except BaseException as e:
             await stack.aclose()  # also on cancellation: give the lease and the slot back
             if not isinstance(e, Exception):
@@ -530,4 +500,4 @@ def viewer_group(ps: PortalService) -> RouteGroup:
     return RouteGroup(routes)
 
 
-__all__ = ["ContentTokens", "ViewerEndpoints", "viewer_group"]
+__all__ = ["ViewerEndpoints", "viewer_group"]

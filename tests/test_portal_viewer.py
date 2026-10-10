@@ -9,24 +9,6 @@ from tests.oauth_util import operator
 from universal_email_mcp.errors import ConfigError
 from universal_email_mcp.operator import load_operator_config
 from universal_email_mcp.portal.pages import safe_next
-from universal_email_mcp.portal.viewer import ContentTokens
-
-
-def test_content_tokens_roundtrip_expire_and_resist_tampering():
-    now = [1000.0]
-    t = ContentTokens(b"k" * 32, ttl=60, clock=lambda: now[0])
-    tok = t.issue("u_abc", "m1.xyz", True)
-    assert t.verify(tok) == ("u_abc", "m1.xyz", True)
-    assert t.verify(t.issue("u_abc", "m1.xyz", False)) == ("u_abc", "m1.xyz", False)
-    # another key (another deployment or instance without the shared key) rejects it
-    assert ContentTokens(b"x" * 32, clock=lambda: now[0]).verify(tok) is None
-    body, mac = tok.split(".")
-    assert t.verify(body + "." + mac[:-2] + "AA") is None
-    assert t.verify(body[:-1] + "A." + mac) is None
-    for junk in ("", ".", "a.b", "....", "\x00", "e30.e30", body):
-        assert t.verify(junk) is None
-    now[0] += 61
-    assert t.verify(tok) is None
 
 
 def test_safe_next_allows_the_viewer_but_nothing_foreign():

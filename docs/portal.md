@@ -133,7 +133,9 @@ minutes).
 ## Message viewer
 
 Every message in a tool result of remote mode carries a link into the portal,
-`PUBLIC_URL/m/<message id>`, and every attachment and the `.eml` have one too
+`PUBLIC_URL/m/<id>` (the message id **sealed** for the user: authenticated encryption under a key of
+the store ring, bound to the signed-in user, short and URL-safe - the URL reveals no mailbox,
+folder or UID to anybody who reads request logs, and another user's link opens nothing), and every attachment and the `.eml` have one too
 (`/m/<id>/a/<part>`, `/m/<id>/eml`). The user clicks it in the chat and sees the mail in the
 browser without opening a mail client. The links contain **no token**: opening one needs a
 portal session (a signed-out visitor is sent to sign-in and comes back to the message), and
@@ -183,8 +185,10 @@ document comes from a separate route with its own CSP:
   the link targets, defanged (`hxxps[:]//...`) so they cannot be clicked there.
 
 With **`CONTENT_ORIGIN`** (recommended) the document is served from another host name instead:
-the iframe points to `CONTENT_ORIGIN/c/<token>`, where the token is a signed, two minute address
-(user, message, image choice) because that origin never sees the portal cookie. Even a sandbox
+the iframe points to `CONTENT_ORIGIN/c/<token>`, where the token is a sealed, two minute address
+(user, message, image choice; the expiry is also capped on the server) because that origin never
+sees the portal cookie. That host serves **only** `/c/*` and the health probes; every other path
+(sign-in, portal, OAuth, `/mcp`) answers 404 there. Even a sandbox
 escape then lacks the portal's origin. Without it the document is served from the portal's own
 origin at `/m/<id>/html` (still sandboxed by the frame attribute and by the response's own
 `sandbox` CSP). See [operator-env.md](operator-env.md).

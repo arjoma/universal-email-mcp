@@ -32,7 +32,7 @@ call); a changed or removed account takes effect on the next request too.
 * **Isolation.** A request only ever sees records of its own user (queried by `user_id` and
   checked again when the configuration is built); message ids and paging cursors name accounts
   and are resolved inside the caller's own view, cursors are signed with a per-user key derived
-  from `PSEUDONYM_KEY`. Another user's ids resolve to "unknown account" or to the caller's own
+  from the store key ring (never from `PSEUDONYM_KEY`). Another user's ids resolve to "unknown account" or to the caller's own
   mailbox of the same name, never to the other user's.
 * **Instructions per user.** The server instructions (handshake and `server/discover`) describe
   the tools of the grant and carry the folder map of the user's accounts, read with the same
@@ -200,8 +200,16 @@ expires on its own).
   `plain` method and implicit flow do not exist. Only public clients: a request with a
   `client_secret` or an `Authorization` header at `/token` is refused.
 * Tokens, codes and browser-session cookies are 256-bit random values; the store keeps only
-  keyed digests (HMAC under a key derived from the store key ring; looked up by id). Tokens never appear in logs or URLs
-  (the access log records the first path segment only).
+  keyed digests (HMAC under a key derived from the store key ring; looked up by id). Tokens never
+  appear in logs or URLs (the service's own access log records the route pattern, never a
+  path). **Platform request logs** (Cloud Run, the load balancer) do record full URLs: the
+  portal's viewer addresses (`/m/<id>`) and the content-origin addresses (`/c/<token>`) are
+  therefore opaque - the id is the message id sealed with AES-256-GCM under a key derived from the
+  store key ring and bound to the signed-in user, the content token seals user, message and
+  expiry the same way - so a log reader learns neither mailbox, folder, UID nor user id from them.
+  They are still *references* that identify one message to anybody who can replay them with a
+  valid session; exclude `/m/` and `/c/` request entries from the platform's request logs
+  ([deploy-gcp.md](deploy-gcp.md#10-logging-audit-events-and-alerting)).
 * Pages: `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self';
   frame-ancestors 'none'`, no scripts, no
   inline styles, `X-Frame-Options: DENY`, `Cache-Control: no-store`,

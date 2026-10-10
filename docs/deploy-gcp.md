@@ -307,6 +307,21 @@ Test a restore once into a scratch database before you rely on it.
   90 days), restrict access to it, and document the purpose (GDPR; in some countries works-council
   rules apply; not legal advice). `AUDIT_LOG_CLIENT_IP=true` (default off) adds a keyed
   pseudonym of the client's network to sign-in and rate-limit events.
+- **Exclude the viewer addresses from the platform request log.** Cloud Run and the load
+  balancer log every request with its full URL. The `/m/<id>` and `/c/<token>` addresses are
+  opaque (sealed with a key of the store ring), but they identify one message to anybody who
+  replays them with a valid session, and they show *which* messages a user opens. Keep them
+  out of the `_Default` bucket with an exclusion on the request log:
+
+  ```bash
+  gcloud logging sinks update _Default --project=PROJECT \
+    --add-exclusion='name=uem-viewer-urls,description=viewer addresses,filter=log_id("run.googleapis.com/requests") AND (httpRequest.requestUrl=~"^https://[^/]+/m/" OR httpRequest.requestUrl=~"^https://[^/]+/c/")'
+  ```
+
+  (A load balancer in front: the same filter with `log_id("requests")` and
+  `resource.type="http_load_balancer"`. The service's own `http_request` lines carry a route
+  pattern only and are not affected.) Do the same for any other sink or log bucket that receives
+  request logs.
 - Never set `UEM_LOG_LEVEL=DEBUG` in production.
 - **Alerting basics** (Monitoring):
   - Uptime check on `https://mail.example.org/ready` (alert if it fails from two regions).
