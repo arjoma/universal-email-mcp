@@ -44,7 +44,7 @@ from typing import Any
 
 from universal_email_mcp.config import PERMISSION_NAMES, Config, Downloads, Policy
 from universal_email_mcp.errors import AuthFailed, Busy, MailError, ReauthRequired
-from universal_email_mcp.jsonlog import log_event
+from universal_email_mcp.jsonlog import log_event, safe_trace
 from universal_email_mcp.models import (
     Account,
     CredentialRef,
@@ -642,8 +642,8 @@ class UserPool:
     async def _guard(coro: Awaitable[None]) -> None:
         try:
             await coro
-        except Exception:
-            log.warning("background task of the per-user service failed", exc_info=True)
+        except Exception as e:
+            log.warning("background task of the per-user service failed: %s", safe_trace(e))
 
     def _retire(self, ctx: UserContext) -> None:
         self._contexts.pop((ctx.user_id, ctx.grant_id), None)
@@ -698,8 +698,8 @@ class UserPool:
             await asyncio.sleep(interval)
             try:
                 await self.sweep()
-            except Exception:
-                log.exception("sweeping the per-user pool failed")
+            except Exception as e:
+                log.error("sweeping the per-user pool failed: %s", safe_trace(e))
 
     def start(self, interval: float = SWEEP_INTERVAL) -> None:
         if self._sweeper is None:

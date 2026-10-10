@@ -11,7 +11,9 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import sys
+import traceback
 from typing import Any, TextIO
 
 request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -19,6 +21,26 @@ request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 _MARK = "_uem_json"
+
+
+def safe_trace(exc: BaseException | None, depth: int = 8, chain: int = 4) -> str:
+    """A one-line account of an exception that is safe to log: class names, the error code of a
+    ``MailError`` and the innermost ``depth`` frames (file:line function) of each exception in the
+    chain - **never the message** and never local values. Messages and arguments of exceptions
+    from the mail path carry mail-derived text (addresses, folder names, server replies); an
+    ordinary traceback would copy them into the logs."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    e = exc
+    while e is not None and id(e) not in seen and len(parts) < chain:
+        seen.add(id(e))
+        code = getattr(e, "code", None)
+        label = type(e).__name__ + (f"[{code}]" if isinstance(code, str) else "")
+        frames = traceback.extract_tb(e.__traceback__)[-depth:]
+        where = " > ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in frames)
+        parts.append(f"{label} at {where}" if where else label)
+        e = e.__cause__ or e.__context__
+    return " <- ".join(parts) or "no exception"
 
 
 class JsonFormatter(logging.Formatter):
@@ -36,7 +58,8 @@ class JsonFormatter(logging.Formatter):
         if isinstance(fields, dict):
             payload.update(fields)  # pyright: ignore[reportUnknownArgumentType]
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            # class names and frames only: exception messages can hold mail-derived text
+            payload["exception"] = safe_trace(record.exc_info[1])
         return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
 
 

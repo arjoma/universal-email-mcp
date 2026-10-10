@@ -45,6 +45,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from universal_email_mcp import __version__, audit
 from universal_email_mcp.errors import Busy, RateLimited
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.oauth.bearer import Principal
 from universal_email_mcp.oauth.config import RateLimits
 from universal_email_mcp.server.app import (  # pyright: ignore[reportPrivateUsage]
@@ -244,8 +245,8 @@ class UserContextMiddleware:
             return
         try:
             ctx = await self.pool.lease(principal)
-        except Exception:
-            log.exception("could not build the per-user service")
+        except Exception as e:
+            log.error("could not build the per-user service: %s", safe_trace(e))
             await _send_json(send, 503, {"error": "temporarily_unavailable"})
             return
         token = user_context_var.set(ctx)

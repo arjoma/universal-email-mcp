@@ -43,7 +43,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from universal_email_mcp.jsonlog import log_event, request_id_var
+from universal_email_mcp.jsonlog import log_event, request_id_var, safe_trace
 
 log = logging.getLogger("universal_email_mcp.http")
 
@@ -178,8 +178,8 @@ class RequestContextMiddleware:
 
         try:
             await self.app(scope, receive, wrapped_send)
-        except Exception:
-            log.exception("unhandled error")
+        except Exception as e:
+            log.error("unhandled error: %s", safe_trace(e))
             if status == 0:
                 await _send_json(wrapped_send, 500, {"error": "internal_error", "request_id": rid})
         finally:
@@ -415,8 +415,8 @@ def health_group(ready_checks: dict[str, ReadinessCheck]) -> RouteGroup:
         for name, check in ready_checks.items():
             try:
                 results[name] = await check()
-            except Exception:
-                log.exception("readiness check %r raised", name)
+            except Exception as e:
+                log.error("readiness check %r raised: %s", name, safe_trace(e))
                 results[name] = False
         ok = all(results.values())
         return JSONResponse(

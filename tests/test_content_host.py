@@ -26,9 +26,7 @@ PATHS = (
 
 @pytest.fixture
 async def app():
-    op = operator(
-        allowed_hosts=("mcp.test", "content.test"), content_origin="https://content.test"
-    )
+    op = operator(allowed_hosts=("mcp.test", "content.test"), content_origin="https://content.test")
     return await make_app(op)
 
 

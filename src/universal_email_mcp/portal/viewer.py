@@ -52,6 +52,7 @@ from universal_email_mcp.errors import (
     TooLarge,
     UidValidityChanged,
 )
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.mail.htmlview import TooComplex, csp
 from universal_email_mcp.models import Message
 from universal_email_mcp.portal.i18n import TIME_FORMAT
@@ -163,7 +164,7 @@ class ViewerEndpoints(PortalEndpoints):
             else:
                 reason, status = "unavailable", 504 if isinstance(e, AccountTimeout) else 502
                 if not isinstance(e, MailError):
-                    log.error("message viewer failed", exc_info=e)
+                    log.error("message viewer failed: %s", safe_trace(e))
         return self.page(request, "error.html", status=status, csrf=False, reason=reason)
 
     async def _open(self, auth: Auth, stack: AsyncExitStack) -> tuple[Viewer, UserContext]:

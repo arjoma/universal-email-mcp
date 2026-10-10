@@ -35,6 +35,7 @@ from universal_email_mcp.errors import (
     TooLarge,
     UidValidityChanged,
 )
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.mail.mime import safe_mime_type
 from universal_email_mcp.models import MessageRef
 from universal_email_mcp.service.downloads import (
@@ -130,8 +131,8 @@ class DownloadApp:
             await self._handle(scope, receive, tracking_send)
         except DownloadAborted:
             raise
-        except Exception:
-            log.exception("download: unexpected error")
+        except Exception as e:
+            log.error("download: unexpected error: %s", safe_trace(e))
             if started:  # cannot send a second response: cut the connection
                 raise DownloadAborted("download aborted") from None
             await _plain(send, 500, "Internal error.")

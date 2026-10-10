@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
+from universal_email_mcp import audit
 from universal_email_mcp.config import Config, Limits
 from universal_email_mcp.errors import (
     AmbiguousFolder,
@@ -539,10 +540,18 @@ class MailService:
         out: dict[str, FolderMap | None] = {}
         for name, t in tasks.items():
             if t.cancelled():
-                log.warning("account %s: folder list not read within %g s", name, timeout)
+                log.warning(
+                    "account %s: folder list not read within %g s",
+                    audit.pseudonym("a", name),
+                    timeout,
+                )
                 out[name] = None
             elif (exc := t.exception()) is not None:
-                log.warning("account %s: folder list not read: %s", name, exc)
+                log.warning(
+                    "account %s: folder list not read: %s",
+                    audit.pseudonym("a", name),
+                    getattr(exc, "code", None) or type(exc).__name__,
+                )
                 out[name] = None
             else:
                 out[name] = t.result()

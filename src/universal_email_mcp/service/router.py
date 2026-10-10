@@ -20,12 +20,14 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from universal_email_mcp import audit
 from universal_email_mcp.bounded import run_daemon
 from universal_email_mcp.config import Config, resolve_password
 from universal_email_mcp.errors import (
@@ -38,6 +40,7 @@ from universal_email_mcp.errors import (
     ProtocolError,
     ServerUnreachable,
 )
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.mail.net import Deadline
 from universal_email_mcp.mail.pop3 import Pop3Session, Pop3State
@@ -128,14 +131,14 @@ def _close_quietly(session: Any) -> None:
     try:
         session.close()
     except Exception:  # noqa: BLE001 - best effort
-        log.debug("closing session failed", exc_info=True)
+        log.debug("closing session failed: %s", safe_trace(sys.exc_info()[1]))
 
 
 def _abort_quietly(session: Any) -> None:
     try:
         (getattr(session, "abort", None) or session.close)()
     except Exception:  # noqa: BLE001
-        log.debug("aborting session failed", exc_info=True)
+        log.debug("aborting session failed: %s", safe_trace(sys.exc_info()[1]))
 
 
 def _discard(session: Any) -> None:
@@ -366,7 +369,11 @@ class AccountRouter:
                         raise
                     if fresh or attempt == 2:
                         raise
-                    log.info("account %s: connection lost, reconnecting", account.name)
+                    log.info(
+                        "account %s: connection lost (%s), reconnecting",
+                        audit.pseudonym("a", account.name),
+                        type(e).__name__,
+                    )
                     continue
                 except MailError:
                     slot.last_used = self._clock()
@@ -374,7 +381,11 @@ class AccountRouter:
                 except Exception as e:
                     slot.session = None
                     _in_thread(_discard, session)
-                    log.exception("account %s: unexpected backend error", account.name)
+                    log.error(
+                        "account %s: unexpected backend error: %s",
+                        audit.pseudonym("a", account.name),
+                        safe_trace(e),
+                    )
                     raise ProtocolError(f"unexpected backend error: {type(e).__name__}") from e
                 slot.last_used = self._clock()
                 return result

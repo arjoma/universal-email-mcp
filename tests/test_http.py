@@ -130,9 +130,9 @@ async def test_errors_hide_the_stack_trace_and_carry_a_request_id(
     body = r.json()
     assert body["error"] == "internal_error" and body["request_id"] == r.headers["x-request-id"]
     assert "secret internal detail" not in r.text and "Traceback" not in r.text
-    assert any(
-        "secret internal detail" in (rec.exc_text or "") or rec.exc_info for rec in caplog.records
-    )
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "RuntimeError" in logged and "boom" in logged  # class and frame for the operator
+    assert "secret internal detail" not in logged  # never the message: it may hold mail text
 
 
 async def test_security_headers_and_no_cors(base: str):
