@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Client ID Metadata Documents are fetched from port 443 only (any port on a public host let an
+  unauthenticated visitor probe services), and downloads have an instance-wide limit in addition to
+  the per-network one: new `UEM_RATE_CLIENT_FETCH_GLOBAL` (default `120/1h`).
 - Client and application names on the consent page and in the portal drop **all** Unicode
   format characters (category `Cf`: Arabic letter mark, soft hyphen, Mongolian vowel separator,
   invisible operators, tag characters, annotation marks, zero-width joiner ...) and the invisible

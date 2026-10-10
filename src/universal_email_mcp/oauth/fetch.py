@@ -21,6 +21,7 @@ import socket
 import ssl
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -44,10 +45,15 @@ class FetchPolicy:
     ca_file: str | None = None
     """Extra trust anchor (tests with a self-signed CA); ``None`` = system store."""
     resolver: Resolver | None = None
+    ports: tuple[int, ...] | None = (443,)
+    """Ports a client metadata document may be fetched from (``None`` = any; tests only). The
+    host is named by an unauthenticated visitor: any other port would turn ``/authorize`` into
+    a port scanner / probe of services on public hosts."""
 
 
-def check_document_url(url: str) -> tuple[str, int, str]:
-    """Return ``(host, port, path+query)`` of an acceptable https URL, else raise."""
+def check_document_url(url: str, ports: Collection[int] | None = (443,)) -> tuple[str, int, str]:
+    """Return ``(host, port, path)`` of an acceptable https URL, else raise. Only the ports in
+    ``ports`` are acceptable (default 443; ``None`` = any)."""
     if not url or len(url) > 512 or any(not 0x21 <= ord(c) <= 0x7E for c in url):
         raise FetchError("the URL is empty, too long or contains unusual characters")
     try:
@@ -59,6 +65,8 @@ def check_document_url(url: str) -> tuple[str, int, str]:
         raise FetchError("the URL must use https")
     if parts.username is not None or parts.password is not None or "#" in url:
         raise FetchError("the URL must not contain credentials or a fragment")
+    if ports is not None and port not in ports:
+        raise FetchError("the URL must use the standard https port (443)")
     host = (parts.hostname or "").lower()
     if not host:
         raise FetchError("the URL has no host")
@@ -110,7 +118,7 @@ def _close_quietly(sock: socket.socket) -> None:
 def fetch_document(url: str, policy: FetchPolicy | None = None) -> bytes:
     """GET ``url`` and return the body (JSON content type, 200, at most ``max_bytes``)."""
     policy = policy or FetchPolicy()
-    host, port, path = check_document_url(url)
+    host, port, path = check_document_url(url, policy.ports)
     conn = _Connection(host, port, policy)
     deadline = time.monotonic() + policy.total_timeout
     try:

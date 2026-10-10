@@ -35,6 +35,7 @@ class Limiters:
     register_global: RateLimiter
     token_ip: RateLimiter
     client_fetch: RateLimiter
+    client_fetch_global: RateLimiter
     portal_user: RateLimiter
     portal_ip: RateLimiter
     test_user: RateLimiter
@@ -54,6 +55,7 @@ class Limiters:
             register_global=_limiter(r.register_global),
             token_ip=_limiter(r.token_ip),
             client_fetch=_limiter(r.client_fetch_ip),
+            client_fetch_global=_limiter(r.client_fetch_global),
             portal_user=_limiter(r.portal_user),
             portal_ip=_limiter(r.portal_ip),
             test_user=_limiter(r.test_user),

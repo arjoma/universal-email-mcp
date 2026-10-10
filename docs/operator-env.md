@@ -151,6 +151,7 @@ startup. There is deliberately no way to switch a limit off; raise it instead.
 | `UEM_RATE_REGISTER_GLOBAL` | `200/1h` | whole instance | Dynamic Client Registration, all callers together. |
 | `UEM_RATE_TOKEN_IP` | `300/1m` | network | `/token` and `/revoke`. |
 | `UEM_RATE_CLIENT_FETCH_IP` | `30/1m` | network | Downloads of Client ID Metadata Documents (outbound fetches triggered by `/authorize`). |
+| `UEM_RATE_CLIENT_FETCH_GLOBAL` | `120/1h` | whole instance | The same downloads, all networks together (each one that is not served from the cache also writes a client record). |
 | `UEM_RATE_PORTAL_USER` | `60/10m` | user | State-changing portal requests (every POST: accounts, identities, clients, re-authentication). |
 | `UEM_RATE_PORTAL_IP` | `120/10m` | network | The same, per network. |
 | `UEM_RATE_TEST_USER` | `10/10m` | user | Connection tests and tested logins when adding an account/identity (they open outbound connections). |
