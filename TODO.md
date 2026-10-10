@@ -10,8 +10,6 @@ from time to time (AGENTS.md, "Regular cleanup").
 - [ ] Dependabot does not read `cloudbuild.yaml` or the CI emulator image (digests are bumped by
       hand).
 
-- [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from
-      `limits.max_message_bytes`, which an operator may raise above that.
 - [ ] `ImapLoginVerifier` semaphore wait has no timeout (16 tarpits hold sign-ins up to
       `total_timeout`); the first write after a server-side idle drop now fails instead of
       reconnecting (could be softened with a NOOP probe before the first write).
