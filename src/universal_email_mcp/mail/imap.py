@@ -113,6 +113,17 @@ MAX_LITERAL_BYTES = 32 * 1024 * 1024
 most a few MiB; a bigger announcement is hostile or broken)."""
 MAX_UNTAGGED_BYTES = 64 * 1024 * 1024
 """Most untagged response data (literals and lines) kept for one command."""
+LITERAL_SLACK_BYTES = 1024 * 1024
+"""Room above ``max_message_bytes`` for the framing of a whole-message literal."""
+
+
+def literal_caps(max_message_bytes: int) -> tuple[int, int]:
+    """``(max_literal, max_untagged)`` for an operator's ``max_message_bytes``: never below
+    the defaults, but a message the operator allows must fit into one literal (plus slack),
+    and the untagged total keeps its room above that (twice the literal cap)."""
+    literal = max(MAX_LITERAL_BYTES, max(0, max_message_bytes) + LITERAL_SLACK_BYTES)
+    return literal, max(MAX_UNTAGGED_BYTES, 2 * literal)
+
 
 _HEADER_FIELDS = (
     "BODY.PEEK[HEADER.FIELDS ("
@@ -785,9 +796,11 @@ class ImapSession:
         *,
         net: NetPolicy | None = None,
         resolver: Resolver | None = None,
+        max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES,
     ) -> ImapSession:
         if account.kind != "imap":
             raise ValueError(f"account {account.name!r} is not an IMAP account")
+        max_literal, max_untagged = literal_caps(max_message_bytes)
         return cls.connect(
             account.endpoint,
             account.username,
@@ -798,6 +811,8 @@ class ImapSession:
             tls=account.tls,
             folder_roles=account.effective_folder_roles(),
             resolver=resolver,
+            max_literal=max_literal,
+            max_untagged=max_untagged,
         )
 
     def close(self) -> None:

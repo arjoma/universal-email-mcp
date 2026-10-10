@@ -81,7 +81,9 @@ def connect_imap(account: Account, config: Config) -> ImapSession:
     password = resolve_password(account)
     net = config.net_policy(account)
     with Deadline(net.total_timeout):  # connect + login are bounded in absolute time
-        return ImapSession.for_account(account, password, net=net)
+        return ImapSession.for_account(
+            account, password, net=net, max_message_bytes=config.limits.max_message_bytes
+        )
 
 
 DEFAULT_CONNECTORS: Mapping[AccountKind, Connector] = {"imap": connect_imap}

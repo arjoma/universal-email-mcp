@@ -95,3 +95,34 @@ def test_header_fetch_is_partial():
 
     assert f"<0.{MAX_HEADER_FETCH}>" in imap._HEADER_FIELDS  # pyright: ignore[reportPrivateUsage]
     assert f"<0.{MAX_HEADER_FETCH}>" in imap._RECIPIENT_FIELDS  # pyright: ignore[reportPrivateUsage]
+
+
+def test_literal_caps_follow_max_message_bytes():
+    from universal_email_mcp.mail.imap import LITERAL_SLACK_BYTES, literal_caps
+
+    mib = 1024 * 1024
+    assert literal_caps(10 * mib) == (MAX_LITERAL_BYTES, MAX_UNTAGGED_BYTES)  # default: unchanged
+    assert literal_caps(0) == (MAX_LITERAL_BYTES, MAX_UNTAGGED_BYTES)
+    assert literal_caps(-5) == (MAX_LITERAL_BYTES, MAX_UNTAGGED_BYTES)
+    literal, untagged = literal_caps(100 * mib)
+    assert literal == 100 * mib + LITERAL_SLACK_BYTES
+    assert untagged >= 2 * literal
+
+
+def test_router_passes_the_operators_message_cap_to_the_session(monkeypatch: pytest.MonkeyPatch):
+    from universal_email_mcp.service.router import connect_imap
+
+    from .fakes import config
+
+    seen: dict[str, int] = {}
+
+    def fake_connect(cls: object, *_a: object, **kw: int) -> str:
+        seen.update(max_literal=kw["max_literal"], max_untagged=kw["max_untagged"])
+        return "session"
+
+    monkeypatch.setattr(ImapSession, "connect", classmethod(fake_connect))
+    cfg = config("A", max_message_bytes=200 * 1024 * 1024)
+    monkeypatch.setattr("universal_email_mcp.service.router.resolve_password", lambda _a: "x")
+    assert connect_imap(cfg.accounts[0], cfg) == "session"  # pyright: ignore[reportUnnecessaryComparison]
+    assert seen["max_literal"] > 200 * 1024 * 1024
+    assert seen["max_untagged"] >= 2 * seen["max_literal"]

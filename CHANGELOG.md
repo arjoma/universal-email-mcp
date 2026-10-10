@@ -89,6 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- IMAP literal and untagged-data caps are derived from `limits.max_message_bytes` (never below
+  the 32 MiB / 64 MiB defaults), so an operator may raise the message cap above them.
 - Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a
   stable shape (`event`, `message`, `severity`, `ts`, `instance`, `request_id`, ...), written to
   **stdout** by `serve` (Cloud Logging reads `severity`) and to stderr by the local stdio server. A
