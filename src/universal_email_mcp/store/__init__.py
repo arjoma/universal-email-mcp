@@ -14,7 +14,6 @@ from universal_email_mcp.store.crypto import (
     Aad,
     CryptoError,
     KeyRing,
-    hash_token,
     new_token,
     tokens_equal,
 )
@@ -66,7 +65,6 @@ __all__ = [
     "Token",
     "TokenReuse",
     "User",
-    "hash_token",
     "new_token",
     "RotationReport",
     "rotate_keys",

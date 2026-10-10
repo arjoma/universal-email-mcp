@@ -200,7 +200,7 @@ expires on its own).
   `plain` method and implicit flow do not exist. Only public clients: a request with a
   `client_secret` or an `Authorization` header at `/token` is refused.
 * Tokens, codes and browser-session cookies are 256-bit random values; the store keeps only
-  SHA-256 digests (compared in constant time by lookup). Tokens never appear in logs or URLs
+  keyed digests (HMAC under a key derived from the store key ring; looked up by id). Tokens never appear in logs or URLs
   (the access log records the first path segment only).
 * Pages: `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self';
   frame-ancestors 'none'`, no scripts, no

@@ -63,7 +63,6 @@ from universal_email_mcp.store import (
     PortalSession,
     Token,
     User,
-    hash_token,
 )
 
 log = logging.getLogger(__name__)
@@ -676,7 +675,7 @@ class OAuthEndpoints:
             return oauth_error("invalid_request", "refresh_token is required")
         asked = values.get("scope", "").split()
         if asked:
-            old = await svc.store.get(Token, hash_token(raw))
+            old = await svc.store.get_by_secret(Token, raw)
             if old is not None and not set(asked) <= set(old.scope.split()):
                 return oauth_error("invalid_scope", "scope exceeds the original grant")
         try:
@@ -723,7 +722,7 @@ class OAuthEndpoints:
         raw, client_id = form.get("token"), form.get("client_id")
         if not isinstance(raw, str) or not raw or len(raw) > 200:
             return oauth_error("invalid_request", "token is required")
-        tok = await svc.store.get(Token, hash_token(raw))
+        tok = await svc.store.get_by_secret(Token, raw)
         # RFC 7009: unknown tokens are not an error; another client's token is left alone.
         if tok is not None and (not isinstance(client_id, str) or client_id == tok.client_id):
             await svc.store.revoke_token(raw)

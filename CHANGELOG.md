@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Store: a database writer without keys can no longer forge tokens or raise permissions. Record
+  ids of bearer secrets (access/refresh tokens, authorization codes, portal sessions) are now
+  `HMAC(derived key, secret)` instead of an unkeyed SHA-256, and every record carries a MAC over
+  its kind, id, owner, plain fields (scopes, permissions, `send`, redirect URIs, expiries ...) and
+  sealed blob, verified on every read; a mismatch is treated like a damaged record (the bearer
+  verifier answers 401). **Store format bump** (`uem-record-v2`): records written by an earlier
+  build are rejected; acceptable because nothing is deployed before 0.1.0. `rotate-keys` also
+  re-issues the MAC. Residual risk (rollback of a whole document from a backup) is documented
+  in `docs/stored-data.md`.
 - Store keys: a malformed `STORE_KEYS` / `STORE_ACTIVE_KEY` no longer echoes key material or ids
   in the startup error (a bare base64 key without `k1=` used to appear in the message); errors
   name the entry by position.

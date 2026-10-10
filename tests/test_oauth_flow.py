@@ -32,7 +32,7 @@ from universal_email_mcp.store import (
     MemoryBackend,
     SessionPolicy,
     Store,
-    hash_token,
+    Token,
 )
 
 
@@ -517,7 +517,7 @@ async def test_token_for_another_resource_is_refused_on_mcp(client, store):
 def test_tokens_are_stored_hashed(client, store):
     _, body = connect(client)
     raw = store.backend.raw("tokens")  # type: ignore[attr-defined]
-    assert hash_token(body["access_token"]) in raw
+    assert store.secret_id(Token, body["access_token"]) in raw
     assert body["access_token"] not in str(raw) and body["refresh_token"] not in str(raw)
 
 

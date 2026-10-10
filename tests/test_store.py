@@ -37,11 +37,11 @@ from universal_email_mcp.store import (
     TokenReuse,
     User,
     UserGone,
-    hash_token,
     rotate_keys,
 )
 from universal_email_mcp.store.backend import Op
 from universal_email_mcp.store.records import ALL_RECORDS, DELETE_ORDER, USER_OWNED, Record
+from universal_email_mcp.store.store import _mac_input  # pyright: ignore[reportPrivateUsage]
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 KEY1, KEY2 = bytes(range(32)), bytes(range(1, 33))
@@ -264,6 +264,7 @@ async def test_key_rotation(backend: Backend, clock: Clock) -> None:
     old = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
     await old.create(make(MailAccount))
     await old.create(make(User))
+    await old.create(make(Token, rid="t1"))  # no sealed part: only its MAC names k1
     new = Store(backend, KeyRing({"k1": KEY1, "k2": KEY2}), clock=clock)
     acc = await new.get(MailAccount, "r1")
     assert acc and acc.password == PASSWORD  # old blobs still open
@@ -277,14 +278,14 @@ async def test_key_rotation(backend: Backend, clock: Clock) -> None:
     assert doc and doc["_sealed"].startswith("e1.k2.")
     # ... and rotate_keys migrates the rest
     first = await rotate_keys(new)
-    assert first.resealed == {"users": 1, "accounts": 0, "identities": 0,
-                              "approvals": 0, "activity": 0}  # fmt: skip
+    assert first.resealed == {k.KIND: 0 for k in ALL_RECORDS} | {"users": 1, "tokens": 1}
     assert first.unreadable == {} and not first.dry_run
     again_run = await rotate_keys(new)
-    assert again_run.resealed == {k: 0 for k in ("users", "accounts", "identities", "approvals", "activity")}  # fmt: skip
+    assert again_run.resealed == {k.KIND: 0 for k in ALL_RECORDS}
     again = await only_k2.get(MailAccount, "r1")
     assert again and again.password == PASSWORD
     assert (await only_k2.get(User, "u_1")) is not None
+    assert (await only_k2.get(Token, "t1")) is not None  # MAC re-issued under k2
 
 
 # --- expiry -----------------------------------------------------------------------------
@@ -316,7 +317,7 @@ async def test_records_without_expiry_stay(store: Store, clock: Clock) -> None:
 async def test_portal_session(store: Store, clock: Clock) -> None:
     await with_users(store)
     raw, rec = await store.create_portal_session("u_1", timedelta(hours=1))
-    assert rec.id == hash_token(raw) and raw not in repr(
+    assert rec.id == store.secret_id(PortalSession, raw) and raw not in repr(
         await store.backend.get("portal_sessions", rec.id)
     )
     got = await store.get_portal_session(raw)
@@ -345,8 +346,8 @@ async def test_auth_code_single_use_and_expiry(store: Store, clock: Clock) -> No
     await with_users(store)
     args: dict[str, Any] = dict(user_id="u_1", client_id="c", grant_id="g", redirect_uri="https://c/cb", code_challenge="ch")  # fmt: skip
     raw = await store.issue_auth_code(**args)
-    assert (await store.backend.get("auth_codes", hash_token(raw))) is not None
-    assert raw not in repr(await store.backend.get("auth_codes", hash_token(raw)))
+    assert (await store.backend.get("auth_codes", store.secret_id(AuthCode, raw))) is not None
+    assert raw not in repr(await store.backend.get("auth_codes", store.secret_id(AuthCode, raw)))
     code = await store.redeem_auth_code(raw)
     assert code and code.code_challenge == "ch"
     with pytest.raises(CodeReplay):
@@ -441,7 +442,7 @@ async def test_token_issue_and_authenticate(store: Store, clock: Clock) -> None:
     # only digests are stored
     for raw in (t.access_token, t.refresh_token):
         assert await store.backend.get("tokens", raw) is None
-        doc = await store.backend.get("tokens", hash_token(raw))
+        doc = await store.backend.get("tokens", store.secret_id(Token, raw))
         assert doc and raw not in repr(doc)
     auth = await store.authenticate_access_token(t.access_token)
     assert auth
@@ -833,6 +834,7 @@ async def test_unknown_fields_survive_update(store: Store) -> None:
     sealed["future_secret"] = "S3CRET-FUTURE"
     doc["_sealed"] = store.keys.seal_json(sealed, aad)
     doc["future_flag"] = {"a": [1, 2]}
+    doc["_mac"] = store.keys.mac(_mac_input("accounts", "r1", "u_1", doc))  # as a newer instance
     await store.backend.commit([Op("replace", "accounts", "r1", doc, 1)])
 
     acc = await store.get(MailAccount, "r1")
@@ -1089,3 +1091,165 @@ async def test_a_write_racing_the_delete_leaves_no_orphan(
         pass
     assert [i async for i, _ in backend.scan(collection)] == []
     assert await backend.get("users", "u_1") is None
+
+
+# --- a database writer without keys cannot forge or change records (security review M1) -----
+
+
+async def raw_replace(store: Store, cls: type[Record], rec_id: str, **changes: Any) -> None:
+    """What somebody with write access to the database (but no key) can do: change plain
+    fields of a stored document, keeping its version, MAC and sealed blob."""
+    doc = dict(await store.backend.get(cls.KIND, rec_id) or {})
+    version = doc["_v"]
+    doc.update(changes)
+    await store.backend.commit([Op("replace", cls.KIND, rec_id, doc, version)])
+
+
+@pytest.mark.parametrize(
+    ("cls", "changes"),
+    [
+        (Token, {"scope": "mail.read mail.send"}),
+        (Token, {"expires_at": T0 + timedelta(days=3650)}),
+        (Grant, {"scope": "mail.read mail.delete mail.send"}),
+        (Grant, {"account_scopes": {"a1": "read organize delete drafts"}}),
+        (Grant, {"identity_ids": ["i_attacker"]}),
+        (MailAccount, {"permissions": ["read", "organize", "delete", "drafts"]}),
+        (Identity, {"send": True}),
+        (OAuthClient, {"redirect_uris": ["https://evil.example/cb"]}),
+        (PortalSession, {"user_id": "u_victim"}),
+        (PortalSession, {"expires_at": T0 + timedelta(days=3650)}),
+        (PortalSession, {"reauth_at": T0}),
+        (AuthCode, {"redirect_uri": "https://evil.example/cb"}),
+        (PendingApproval, {"status": "approved"}),
+    ],
+    ids=lambda v: v.__name__ if isinstance(v, type) else str(next(iter(v))),
+)
+async def test_changed_plain_field_is_rejected(
+    store: Store, cls: type[Record], changes: dict[str, Any]
+) -> None:
+    await store.create(make(User))
+    stored = await store.create(make(cls))
+    assert await store.get(cls, stored.id)
+    await raw_replace(store, cls, stored.id, **changes)
+    with pytest.raises(CryptoError):
+        await store.get(cls, stored.id)
+
+
+async def test_unauthenticated_and_foreign_records_are_rejected(store: Store) -> None:
+    await store.create(make(User))
+    mine = await store.create(make(Grant))
+    doc = dict(await store.backend.get("grants", mine.id) or {})
+    # no MAC at all
+    nomac = {k: v for k, v in doc.items() if k != "_mac"}
+    await store.backend.commit([Op("create", "grants", "g_nomac", nomac)])
+    # a MAC under a key the writer made up
+    other = KeyRing({"k1": b"x" * 32})
+    forged = {**doc, "scope": "mail.read mail.send"}
+    forged["_mac"] = other.mac(_mac_input("grants", "g_forged", "u_1", forged))
+    await store.backend.commit([Op("create", "grants", "g_forged", forged)])
+    # a genuine record copied to another id (MAC binds the id)
+    await store.backend.commit([Op("create", "grants", "g_copy", dict(doc))])
+    for rec_id in ("g_nomac", "g_forged", "g_copy"):
+        with pytest.raises(CryptoError):
+            await store.get(Grant, rec_id)
+    # a genuine record moved to another owner
+    moved = {**doc, "user_id": "u_2"}
+    await store.backend.commit([Op("create", "grants", "g_moved", moved)])
+    with pytest.raises(CryptoError):
+        await store.get(Grant, "g_moved")
+
+
+async def test_forged_token_ids_are_not_found(store: Store) -> None:
+    """The reviewer's proof: a token record written under the unkeyed SHA-256 of a chosen
+    token (or under any guessable id) is never found."""
+    import hashlib
+
+    await store.create(make(User))
+    grant = await store.create(make(Grant, rid="g_1"))
+    mine = "uem_at_attacker_chosen_token_value_1234567890"
+    doc = {
+        "user_id": "u_1", "grant_id": grant.id, "client_id": "c", "token_type": "access",
+        "resource": "", "scope": "mail.read mail.send", "consumed": False,
+        "created_at": T0, "expires_at": T0 + timedelta(days=3650), "_v": 1,
+    }  # fmt: skip
+    for forged_id in (hashlib.sha256(mine.encode()).hexdigest(), mine, "t1"):
+        await store.backend.commit([Op("create", "tokens", forged_id, dict(doc))])
+    assert await store.authenticate_access_token(mine) is None
+    # an id that is right (a writer who somehow learned it) still fails: no valid MAC
+    await store.backend.commit([Op("create", "tokens", store.secret_id(Token, mine), dict(doc))])
+    with pytest.raises(CryptoError):
+        await store.authenticate_access_token(mine)
+    # same for sessions and authorization codes
+    sess = "uem_ps_attacker_chosen_session_value_12345"
+    sdoc = {"user_id": "u_1", "created_at": T0, "last_seen": T0, "reauth_at": T0,
+            "expires_at": T0 + timedelta(days=3650), "_v": 1}  # fmt: skip
+    await store.backend.commit(
+        [Op("create", "portal_sessions", hashlib.sha256(sess.encode()).hexdigest(), sdoc)]
+    )
+    assert await store.get_portal_session(sess) is None
+
+
+async def test_secret_ids_are_keyed_per_purpose_and_follow_the_ring(
+    backend: Backend, clock: Clock
+) -> None:
+    old = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    await old.create(make(User))
+    raw, rec = await old.create_portal_session("u_1")
+    new = Store(backend, KeyRing({"k1": KEY1, "k2": KEY2}), clock=clock)
+    found = await new.get_portal_session(raw)  # issued under k1, still found with k2 active
+    assert found and found.id == rec.id
+    raw2, rec2 = await new.create_portal_session("u_1")
+    assert rec2.id != new.keys.secret_ids("session-id-v1", raw)[0]
+    assert (await old.get_portal_session(raw2)) is None  # k2 unknown to the old ring
+    assert len({rec.id, new.secret_id(Token, raw), new.secret_id(AuthCode, raw)}) == 3
+    await new.delete_portal_session(raw)
+    assert await new.get_portal_session(raw) is None
+
+
+async def test_rotation_remacs_records_with_plain_fields_only(
+    backend: Backend, clock: Clock
+) -> None:
+    old = Store(backend, KeyRing({"k1": KEY1}), clock=clock)
+    await old.create(make(User))
+    await old.create(make(Grant))
+    new = Store(backend, KeyRing({"k1": KEY1, "k2": KEY2}), clock=clock)
+    doc = await backend.get("grants", "r1")
+    assert doc and doc["_mac"].startswith("m1.k1.")
+    report = await rotate_keys(new)
+    assert report.resealed["grants"] == 1 and not report.unreadable
+    doc = await backend.get("grants", "r1")
+    assert doc and doc["_mac"].startswith("m1.k2.")
+    assert await Store(backend, KeyRing({"k2": KEY2}), clock=clock).get(Grant, "r1")
+
+
+async def test_bearer_verifier_refuses_forged_and_changed_records(store: Store) -> None:
+    """The reviewer's end-to-end proof (dbwriter.py): forged token, escalated grant."""
+    from universal_email_mcp.oauth.bearer import StoreTokenVerifier
+    from universal_email_mcp.oauth.config import OAuthConfig
+
+    verifier = StoreTokenVerifier(store, OAuthConfig(issuer="https://mcp.example.org"))
+    resource = "https://mcp.example.org/mcp"
+    await store.create(make(User))
+    grant = await store.create_grant(
+        user_id="u_1", client_id="c", account_ids=["a_1"], account_scopes={"a_1": "read"},
+        scope="mail.read",
+    )  # fmt: skip
+    issued = await store.issue_tokens(grant, resource=resource)
+    principal = await verifier(issued.access_token)
+    assert principal and principal.scopes == ("mail.read",)
+
+    mine = "uem_at_attacker_chosen_token_value_1234567890"
+    import hashlib
+
+    forged = {
+        "user_id": "u_1", "grant_id": grant.id, "client_id": "c", "token_type": "access",
+        "resource": resource, "scope": "mail.read mail.send", "consumed": False,
+        "created_at": T0, "expires_at": T0 + timedelta(days=3650), "_v": 1,
+    }  # fmt: skip
+    await store.backend.commit(
+        [Op("create", "tokens", hashlib.sha256(mine.encode()).hexdigest(), forged)]
+    )
+    assert await verifier(mine) is None
+
+    await raw_replace(store, Grant, grant.id, scope="mail.read mail.send")
+    assert await verifier(issued.access_token) is None  # fails closed, no 500

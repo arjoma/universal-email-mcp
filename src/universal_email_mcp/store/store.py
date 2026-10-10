@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 import secrets
 import types
@@ -29,7 +30,7 @@ from universal_email_mcp.store.backend import (
     Op,
     StoreConflict,
 )
-from universal_email_mcp.store.crypto import Aad, CryptoError, KeyRing, hash_token, new_token
+from universal_email_mcp.store.crypto import Aad, CryptoError, KeyRing, new_token
 from universal_email_mcp.store.records import (
     ALL_RECORDS,
     DELETE_ORDER,
@@ -48,6 +49,14 @@ from universal_email_mcp.store.records import (
 R = TypeVar("R", bound=Record)
 
 SEALED_KEY = "_sealed"
+MAC_KEY = "_mac"
+"""Authentication tag of a whole record (kind, id, owner, plain fields, sealed blob)."""
+SECRET_ID_PURPOSE: dict[type[Record], str] = {
+    PortalSession: "session-id-v1",
+    AuthCode: "authcode-id-v1",
+    Token: "token-id-v1",
+}
+"""Records looked up by a bearer secret: their id is ``HMAC(derive(purpose), secret)``."""
 UNREADABLE = (CryptoError, KeyError, TypeError, ValueError)
 """What reading a damaged record can raise (crypto failure, missing or wrongly typed field,
 bad JSON)."""
@@ -186,17 +195,21 @@ class Store:
             sealed.setdefault(k, v)
         if sealed:
             doc[SEALED_KEY] = self.keys.seal_json(sealed, self._aad(cls, rec.owner, rec.id))
+        doc[MAC_KEY] = self.keys.mac(_mac_input(cls.KIND, rec.id, rec.owner, doc))
         doc[VERSION_KEY] = version
         return doc
 
     def decode(self, cls: type[R], rec_id: str, doc: Doc) -> R:
+        owner = rec_id if cls is User else str(doc.get("user_id", ""))
+        # First the MAC over everything that is stored in the clear: a record somebody changed
+        # in the database is as good as damaged and never trusted.
+        self.keys.check_mac(doc.get(MAC_KEY, ""), _mac_input(cls.KIND, rec_id, owner, doc))
         values: dict[str, Any] = {
-            k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY)
+            k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY, MAC_KEY)
         }
         if cls.SEALED or SEALED_KEY in doc:
             if not isinstance(doc.get(SEALED_KEY), str):
                 raise CryptoError("record has no sealed data")
-            owner = rec_id if cls is User else str(doc.get("user_id", ""))
             sealed = self.keys.open_json(doc[SEALED_KEY], self._aad(cls, owner, rec_id))
         else:
             sealed = {}
@@ -213,6 +226,20 @@ class Store:
             extra_sealed={k: v for k, v in sealed.items() if k not in known},
             **{k: v for k, v in values.items() if k in known},
         )
+
+    # -- records addressed by a bearer secret ------------------------------------------
+
+    def secret_id(self, cls: type[Record], raw: str) -> str:
+        """The id a new record of ``cls`` gets for the bearer secret ``raw`` (active key)."""
+        return self.keys.secret_ids(SECRET_ID_PURPOSE[cls], raw)[0]
+
+    async def get_by_secret(self, cls: type[R], raw: str) -> R | None:
+        """The live record whose id belongs to ``raw`` under any key of the ring."""
+        for rec_id in self.keys.secret_ids(SECRET_ID_PURPOSE[cls], raw):
+            rec = await self.get(cls, rec_id)
+            if rec is not None:
+                return rec
+        return None
 
     def _expired(self, doc: Doc) -> bool:
         exp = doc.get("expires_at")
@@ -323,7 +350,7 @@ class Store:
         the password was just typed, so the session counts as re-authenticated."""
         raw, now = new_token("uem_ps"), self.now()
         rec = PortalSession(
-            id=hash_token(raw),
+            id=self.secret_id(PortalSession, raw),
             user_id=user_id,
             created_at=now,
             last_seen=now,
@@ -350,7 +377,7 @@ class Store:
         return current
 
     async def get_portal_session(self, raw: str) -> PortalSession | None:
-        return await self.get(PortalSession, hash_token(raw))
+        return await self.get_by_secret(PortalSession, raw)
 
     async def authenticate_portal_session(
         self, raw: str, *, idle_timeout: timedelta
@@ -373,7 +400,9 @@ class Store:
         return rec
 
     async def delete_portal_session(self, raw: str) -> None:
-        await self.delete(PortalSession, hash_token(raw))
+        rec = await self.get_by_secret(PortalSession, raw)
+        if rec is not None:
+            await self.delete(PortalSession, rec.id)
 
     # -- oauth clients ----------------------------------------------------------------
 
@@ -416,7 +445,7 @@ class Store:
         raw = new_token("uem_ac")
         await self.create_owned(
             AuthCode(
-                id=hash_token(raw),
+                id=self.secret_id(AuthCode, raw),
                 user_id=user_id,
                 client_id=client_id,
                 grant_id=grant_id,
@@ -436,7 +465,7 @@ class Store:
         racing another redeem) revokes the grant with the tokens issued from the code and
         raises :class:`CodeReplay` (RFC 6749 section 4.1.2).
         """
-        cur = await self.get(AuthCode, hash_token(raw))
+        cur = await self.get_by_secret(AuthCode, raw)
         if cur is None:
             return None
         if cur.consumed:
@@ -501,7 +530,7 @@ class Store:
         ops: list[Op] = []
         for raw, kind, exp in ((raw_a, "access", access_exp), (raw_r, "refresh", refresh_exp)):
             tok = Token(
-                id=hash_token(raw),
+                id=self.secret_id(Token, raw),
                 user_id=grant.user_id,
                 grant_id=grant.id,
                 client_id=client_id,
@@ -555,7 +584,7 @@ class Store:
         """
         grant_id = ""
         for _ in range(3):
-            old = await self.get(Token, hash_token(raw))
+            old = await self.get_by_secret(Token, raw)
             if old is None or old.token_type != "refresh" or old.client_id != client_id:
                 raise InvalidToken("unknown or expired refresh token")
             grant = await self.get(Grant, old.grant_id)
@@ -585,7 +614,7 @@ class Store:
 
     async def authenticate_access_token(self, raw: str) -> tuple[Token, Grant] | None:
         """The live access token and its grant, or None. Touches ``last_used`` rarely."""
-        tok = await self.get(Token, hash_token(raw))
+        tok = await self.get_by_secret(Token, raw)
         if tok is None or tok.token_type != "access":
             return None
         grant = await self.get(Grant, tok.grant_id)
@@ -609,7 +638,7 @@ class Store:
 
     async def revoke_token(self, raw: str) -> None:
         """RFC 7009: revoking a refresh token ends the grant, an access token only itself."""
-        tok = await self.get(Token, hash_token(raw))
+        tok = await self.get_by_secret(Token, raw)
         if tok is None:
             return
         if tok.token_type == "refresh":
@@ -871,6 +900,34 @@ class Store:
     async def _commit_chunks(self, ops: list[Op]) -> None:
         for i in range(0, len(ops), _BATCH):
             await self.backend.commit(ops[i : i + _BATCH])
+
+
+def _canonical(value: Any) -> Any:
+    """JSON-able, backend independent form of a stored value (datetimes in UTC to the
+    microsecond, whatever subclass the database client returns)."""
+    if isinstance(value, datetime):
+        utc = value.astimezone(UTC)
+        return {"\u0000dt": f"{utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond:06d}Z"}
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in cast("dict[str, Any]", value).items()}
+    if isinstance(value, tuple | list):
+        return [_canonical(v) for v in cast("Sequence[Any]", value)]
+    return value
+
+
+def _mac_input(kind: str, rec_id: str, owner: str, doc: Doc) -> bytes:
+    """What the record MAC covers: kind, id, owner, every stored field except the version
+    and the MAC itself (the sealed blob included, so plain fields and the secrets they belong
+    to cannot be mixed from two versions of a record). Unambiguous: one JSON array of fixed
+    arity, strings escaped (``ensure_ascii``), object keys sorted; a datetime is a one-key
+    object so it cannot be confused with a string."""
+    fields = {k: _canonical(v) for k, v in doc.items() if k not in (VERSION_KEY, MAC_KEY)}
+    return json.dumps(
+        ["uem-record-v2", kind, rec_id, owner, fields],
+        separators=(",", ":"),
+        sort_keys=True,
+        ensure_ascii=True,
+    ).encode("ascii")
 
 
 def _when(rec: Record) -> datetime:
