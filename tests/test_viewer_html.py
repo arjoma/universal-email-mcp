@@ -50,8 +50,9 @@ async def test_a_slow_sanitiser_ends_as_too_complex_and_does_not_block_the_loop(
     monkeypatch: pytest.MonkeyPatch,
 ):
     release = threading.Event()
-    monkeypatch.setattr(viewer_mod, "HTML_VIEW_SECONDS", 0.2)
+    monkeypatch.setattr(viewer_mod, "HTML_VIEW_SECONDS", 0.3)
     monkeypatch.setattr("universal_email_mcp.bounded.GRACE", 0.1)
+    monkeypatch.setattr(viewer_mod, "GRACE", 0.1)
     monkeypatch.setattr(
         viewer_mod, "build_html_view", lambda raw, *, remote_images=False: release.wait(10)
     )
@@ -64,7 +65,7 @@ async def test_a_slow_sanitiser_ends_as_too_complex_and_does_not_block_the_loop(
 
 async def test_too_many_sanitisations_at_once_answer_busy(monkeypatch: pytest.MonkeyPatch):
     release = threading.Event()
-    monkeypatch.setattr(viewer_mod, "_html_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(viewer_mod, "_html_slots", threading.BoundedSemaphore(1))
     monkeypatch.setattr(viewer_mod, "HTML_VIEW_QUEUE_SECONDS", 0.1)
     monkeypatch.setattr(
         viewer_mod, "build_html_view", lambda raw, *, remote_images=False: release.wait(5)
@@ -75,3 +76,23 @@ async def test_too_many_sanitisations_at_once_answer_busy(monkeypatch: pytest.Mo
         await make_viewer().html("m", remote_images=False)
     release.set()
     await first
+
+
+async def test_a_stuck_sanitiser_keeps_its_slot_until_it_ends(monkeypatch: pytest.MonkeyPatch):
+    release = threading.Event()
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(viewer_mod, "_html_slots", slots)
+    monkeypatch.setattr(viewer_mod, "HTML_VIEW_SECONDS", 0.3)
+    monkeypatch.setattr(viewer_mod, "HTML_VIEW_QUEUE_SECONDS", 0.1)
+    monkeypatch.setattr("universal_email_mcp.bounded.GRACE", 0.1)
+    monkeypatch.setattr(viewer_mod, "GRACE", 0.1)
+    monkeypatch.setattr(
+        viewer_mod, "build_html_view", lambda raw, *, remote_images=False: release.wait(10)
+    )
+    with pytest.raises(TooComplex):
+        await make_viewer().html("m", remote_images=False)
+    with pytest.raises(Busy):  # the abandoned thread still holds the only slot
+        await make_viewer().html("m", remote_images=False)
+    release.set()
+    await asyncio.sleep(0.2)
+    assert slots.acquire(blocking=False)

@@ -147,9 +147,9 @@ class ImapLoginVerifier:
 
 __all__ = [
     "Address",
-    "bounded_slot",
     "AddressError",
     "AuthFailed",
+    "bounded_slot",
     "ImapLoginVerifier",
     "LoginVerifier",
     "Pseudonyms",
