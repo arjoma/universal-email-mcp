@@ -22,9 +22,10 @@ from dataclasses import dataclass
 from email import policy
 from email.parser import BytesHeaderParser
 
-from universal_email_mcp.errors import AttachmentNotFound, TooLarge
+from universal_email_mcp.bounded import run_deadline
+from universal_email_mcp.errors import AttachmentNotFound, Busy, TooLarge
 from universal_email_mcp.mail.bodystructure import SECTION_RE
-from universal_email_mcp.mail.htmlview import HtmlView, build_html_view
+from universal_email_mcp.mail.htmlview import HtmlView, TooComplex, build_html_view
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.mail.mime import fix_surrogates, safe_mime_type, sanitize_line
 from universal_email_mcp.models import Message, MessageRef
@@ -35,6 +36,13 @@ HEADER_BYTES = 256 * 1024
 MAX_HEADER_LINES = 400
 MAX_HEADER_VALUE = 4000
 THREAD_BODIES = 25
+HTML_VIEW_WORKERS = 4
+"""Most HTML sanitisations running at once, instance-wide (each on a thread of its own)."""
+HTML_VIEW_SECONDS = 10.0
+"""Longest a sanitisation may take; longer counts as "too complex"."""
+HTML_VIEW_QUEUE_SECONDS = 5.0
+"""Longest a request waits for a free sanitiser before it is answered as busy."""
+_html_slots = asyncio.Semaphore(HTML_VIEW_WORKERS)
 """Messages of a conversation whose text is read for the thread page."""
 
 _SPACES = re.compile(r"\s+")
@@ -137,7 +145,21 @@ class Viewer:
             return session.fetch_raw_message(ref, max_bytes=cap)[1]
 
         raw = await self._router.run_one(account, lambda a: self._router.call(a, fn))
-        return await asyncio.to_thread(build_html_view, raw, remote_images=remote_images)
+        # CPU only, but a pathological message must not occupy asyncio's default executor
+        # (shared with everything else): own daemon thread, a few at a time, a time limit.
+        try:
+            await asyncio.wait_for(_html_slots.acquire(), HTML_VIEW_QUEUE_SECONDS)
+        except TimeoutError:
+            raise Busy("too many messages are being prepared for display") from None
+        try:
+            return await run_deadline(
+                lambda: build_html_view(raw, remote_images=remote_images),
+                seconds=HTML_VIEW_SECONDS,
+            )
+        except TimeoutError:
+            raise TooComplex("the HTML took too long to sanitise") from None
+        finally:
+            _html_slots.release()
 
     # ------------------------------------------------------------ thread
 

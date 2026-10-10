@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The viewer's HTML sanitiser no longer runs on asyncio's default executor: own daemon threads
+  (at most 4 at a time, instance-wide), 10 seconds per message (longer counts as too complex),
+  and a request that finds no free worker for 5 seconds is answered as busy.
 - IMAP literal and untagged-data caps are derived from `limits.max_message_bytes` (never below
   the 32 MiB / 64 MiB defaults), so an operator may raise the message cap above them.
 - Audit events: one pipeline for local and remote mode (`docs/audit.md`). Lines are JSON with a
