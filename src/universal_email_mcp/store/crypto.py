@@ -78,10 +78,13 @@ class KeyRing:
     def __init__(self, keys: Mapping[str, bytes], active: str | None = None) -> None:
         if not keys:
             raise ConfigError("the store key ring is empty", hint="Set STORE_KEYS.")
-        for key_id, key in keys.items():
+        for position, (key_id, key) in enumerate(keys.items(), 1):
+            # Error messages name the entry by position (and the id only once it has the
+            # shape of an id): a mistyped entry may be the key material itself.
             if not _KEY_ID_RE.match(key_id):
                 raise ConfigError(
-                    f"invalid store key id {key_id!r} (expected k1, k2, ...; no leading zeros)"
+                    f"store key entry {position} has an invalid id (expected k1, k2, ...; "
+                    "no leading zeros)"
                 )
             if len(key) != KEY_BYTES:
                 raise ConfigError(f"store key {key_id} must be exactly {KEY_BYTES} bytes")
@@ -89,7 +92,10 @@ class KeyRing:
         self._raw = dict(keys)
         self.active = active or max(keys, key=_key_number)
         if self.active not in keys:
-            raise ConfigError(f"active store key {self.active!r} is not in the key ring")
+            raise ConfigError(
+                "STORE_ACTIVE_KEY does not name a key of the ring",
+                hint=f"The ring holds: {', '.join(self.key_ids)}.",
+            )
 
     def __repr__(self) -> str:
         return f"KeyRing(keys={list(self.key_ids)}, active={self.active!r})"
@@ -107,20 +113,31 @@ class KeyRing:
     def parse(cls, text: str, active: str | None = None) -> KeyRing:
         """Parse ``k1=<base64>,k2=<base64>`` (commas or newlines; ``#`` comment lines)."""
         keys: dict[str, bytes] = {}
+        position = 0
         for raw in re.split(r"[,\n]", text):
             item = raw.strip()
             if not item or item.startswith("#"):
                 continue
+            position += 1
             name, sep, b64 = item.partition("=")
             key_id = name.strip()
+            # Nothing of the entry is echoed (a bare key without "k1=" would put the key
+            # itself into the log): errors name its position only.
             if not sep:
-                raise ConfigError("store keys must look like k1=<base64 of 32 bytes>")
+                raise ConfigError(
+                    f"store key entry {position} must look like k1=<base64 of 32 bytes>"
+                )
+            if not _KEY_ID_RE.match(key_id):
+                raise ConfigError(
+                    f"store key entry {position} has an invalid id (expected k1, k2, ...; "
+                    "no leading zeros)"
+                )
             try:
                 key = base64.b64decode(b64.strip(), validate=True)
             except (binascii.Error, ValueError):
-                raise ConfigError(f"store key {key_id[:12]} is not valid base64") from None
+                raise ConfigError(f"store key entry {position} is not valid base64") from None
             if key_id in keys:
-                raise ConfigError(f"duplicate store key id {key_id[:12]}")
+                raise ConfigError(f"store key entry {position} repeats the id of an earlier entry")
             keys[key_id] = key
         return cls(keys, active)
 
@@ -169,7 +186,8 @@ class KeyRing:
         key_id = self.key_id_of(blob)
         aead = self._aead.get(key_id)
         if aead is None:
-            raise CryptoError(f"blob was sealed with unknown key {key_id[:12]!r}")
+            known = key_id if _KEY_ID_RE.match(key_id) else "an invalid id"
+            raise CryptoError(f"blob was sealed with a key that is not in the ring ({known})")
         try:
             raw = unb64u(blob.split(".")[2])
         except (binascii.Error, ValueError):
