@@ -53,6 +53,11 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## IMAP and mail parsing
 
+- [ ] `net._lookup` starts a resolver thread even for IP-literal hosts, and a lookup timeout does
+      not set `Deadline.expired`.
+- [ ] The HTML sanitiser (`build_html_view`) cannot be interrupted: the viewer's caller gives up
+      after 10 s, but the thread keeps one of the 4 slots until it ends. A step or time budget
+      inside the sanitiser would bound it for real.
 - [ ] Threads: the earliest INTERNALDATE decides which claimant of a shared Message-ID owns it
       (`_owners`); a forgery that arrived first (or was APPENDed with an old date) wins. Members
       that share a Message-ID with a kept mail but differ are moved with a conversation if they
@@ -146,6 +151,9 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Remote: OAuth and per-user service
 
+- [ ] `signin.py` waits for `login_slots` with the default `SLOT_WAIT`, not the verifier's
+      `slot_wait`; `clean_text` drops category Cn, which depends on the running Python's Unicode
+      version (a newly assigned character may be dropped on an older Python).
 - [ ] Refresh-token reuse is strict: a second use of a rotated token (also two concurrent
       refreshes) revokes the grant; a short reuse interval may be needed once real clients are seen.
 - [ ] `/token` refresh grant is limited per network only (not per client or grant); `/mcp` requests
@@ -233,6 +241,10 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Store
 
+- [ ] Review leftovers (pre-release WP): `Store.unreadable` counts skipped records but nothing
+      reports it (metric or `/ready` detail); `UNREADABLE` includes `TypeError`/`ValueError`/
+      `KeyError`, so a bug in `decode` is skipped with a warning instead of failing loudly; the
+      record MAC reads the backend's `namespace` via `getattr` (make it part of the backend protocol).
 - [ ] Expired records can still be `update`d; transactions read one by one (no `get_all`); a
       pseudonym-key change needs a user-id migration. `Store.create_owned` guards the writes of
       requests in flight (activity, approvals, send claims, grants, codes, sessions); the portal's
