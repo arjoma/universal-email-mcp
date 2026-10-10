@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from universal_email_mcp.bounded import run_deadline
-from universal_email_mcp.errors import AuthFailed, ConfigError, MailError, ServerUnreachable
+from universal_email_mcp.errors import AuthFailed, Busy, ConfigError, MailError, ServerUnreachable
 from universal_email_mcp.mail.imap import ImapSession
 from universal_email_mcp.mail.net import NetPolicy, Resolver
 from universal_email_mcp.models import ServerProfile, TlsSettings
@@ -23,6 +25,22 @@ from universal_email_mcp.presets import normalize_hostname
 MAX_ADDRESS = 254
 MIN_PSEUDONYM_KEY_BYTES = 32
 MAX_CONCURRENT_CHECKS = 16
+SLOT_WAIT = 5.0
+"""Longest a sign-in waits for a free login check before it is answered as busy."""
+
+
+@asynccontextmanager
+async def bounded_slot(slots: asyncio.Semaphore, wait: float = SLOT_WAIT) -> AsyncIterator[None]:
+    """Hold one slot of ``slots``; raises :class:`Busy` if none is free within ``wait`` seconds
+    (tarpitting servers must not park every later sign-in until the long deadline)."""
+    try:
+        await asyncio.wait_for(slots.acquire(), wait)
+    except TimeoutError:
+        raise Busy("too many sign-in checks are running") from None
+    try:
+        yield
+    finally:
+        slots.release()
 
 
 class AddressError(ValueError):
@@ -96,6 +114,7 @@ class ImapLoginVerifier:
     net: NetPolicy
     tls: TlsSettings = TlsSettings()
     resolver: Resolver | None = None
+    slot_wait: float = SLOT_WAIT
     _slots: asyncio.Semaphore = field(
         default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_CHECKS), repr=False, compare=False
     )
@@ -118,9 +137,9 @@ class ImapLoginVerifier:
             session.close()
 
         # Own daemon thread under an absolute deadline (never the shared default executor),
-        # and at most a few checks at a time.
+        # and at most a few checks at a time (a wait for a free slot ends in :class:`Busy`).
         try:
-            async with self._slots:
+            async with bounded_slot(self._slots, self.slot_wait):
                 await run_deadline(attempt, seconds=self.net.total_timeout, expired_as_timeout=True)
         except TimeoutError:
             raise ServerUnreachable("the mail server did not answer in time") from None
@@ -128,6 +147,7 @@ class ImapLoginVerifier:
 
 __all__ = [
     "Address",
+    "bounded_slot",
     "AddressError",
     "AuthFailed",
     "ImapLoginVerifier",

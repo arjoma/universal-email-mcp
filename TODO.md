@@ -10,9 +10,8 @@ from time to time (AGENTS.md, "Regular cleanup").
 - [ ] Dependabot does not read `cloudbuild.yaml` or the CI emulator image (digests are bumped by
       hand).
 
-- [ ] `ImapLoginVerifier` semaphore wait has no timeout (16 tarpits hold sign-ins up to
-      `total_timeout`); the first write after a server-side idle drop now fails instead of
-      reconnecting (could be softened with a NOOP probe before the first write).
+- [ ] The first IMAP write after a server-side idle drop fails instead of reconnecting (could be
+      softened with a NOOP probe before the first write).
 - [ ] `oauth/fetch.py` docstring still says "call it through asyncio.to_thread".
 - [ ] `build_html_view` (viewer) still runs on asyncio's default executor. It is CPU only
       and has no network I/O, but a pathological message can occupy a worker; give it a

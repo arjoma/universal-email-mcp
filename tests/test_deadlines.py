@@ -321,3 +321,27 @@ async def test_a_slow_submission_neither_holds_the_sender_lock_nor_hides_from_th
     release.set()
     await first
     assert calls == ["me@example.org"]  # the refused one never reached the server
+
+
+async def test_sign_in_check_waiting_for_a_slot_gives_up_as_busy():
+    from universal_email_mcp.errors import Busy
+    from universal_email_mcp.oauth.identity import bounded_slot
+
+    net = NetPolicy(allow_private=True, total_timeout=5.0)
+    verifier = ImapLoginVerifier(net, slot_wait=0.2)
+    for _ in range(16):  # every slot held, like 16 tarpitted sign-ins
+        await verifier._slots.acquire()  # pyright: ignore[reportPrivateUsage]
+    profile = SimpleNamespace(imap=Endpoint("localhost", 1, "tls"))
+    t0 = time.monotonic()
+    with pytest.raises(Busy):
+        await verifier.verify(
+            Address("u@x.example", "u@x.example", "x.example"), "p", cast(Any, profile)
+        )
+    assert time.monotonic() - t0 < 2
+    sem = asyncio.Semaphore(1)
+    async with bounded_slot(sem, 0.1):
+        with pytest.raises(Busy):
+            async with bounded_slot(sem, 0.1):
+                pass
+    async with bounded_slot(sem, 0.1):  # the slot came back
+        pass

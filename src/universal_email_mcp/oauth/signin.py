@@ -18,7 +18,7 @@ from starlette.requests import Request
 from universal_email_mcp.errors import AuthFailed, MailError
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.models import ServerProfile
-from universal_email_mcp.oauth.identity import Address, AddressError, parse_address
+from universal_email_mcp.oauth.identity import Address, AddressError, bounded_slot, parse_address
 from universal_email_mcp.oauth.ratelimit import ip_group
 from universal_email_mcp.oauth.service import OAuthService
 from universal_email_mcp.portal.ops import ensure_primary
@@ -68,7 +68,7 @@ async def _verify(
     svc: OAuthService, address: Address, password: str, profile: ServerProfile, user_id: str
 ) -> str:
     try:
-        async with svc.login_slots:
+        async with bounded_slot(svc.login_slots):
             await asyncio.wait_for(svc.login.verify(address, password, profile), LOGIN_TIMEOUT)
     except AuthFailed:
         return BAD_CREDENTIALS
