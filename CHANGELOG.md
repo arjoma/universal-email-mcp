@@ -549,6 +549,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A single damaged or tampered record no longer makes a listing (`Store.list_for_user`, so
+  the portal pages and the activity list) fail: it is skipped, counted and logged without
+  content.
 - A connection that broke while a write (flag change, move, append, folder creation) was in
   flight is no longer retried on a new connection, which could have applied it twice (an
   APPEND duplicated the message); the error says to check the result first. The move fallback

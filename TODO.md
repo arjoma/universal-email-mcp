@@ -7,10 +7,8 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
-- [ ] Review leftovers (store/web WP): a single
-      damaged record makes `list_for_user` raise (portal 500) instead of being skipped and
-      reported; Dependabot does not read
-      `cloudbuild.yaml` or the CI emulator image (digests are bumped by hand).
+- [ ] Dependabot does not read `cloudbuild.yaml` or the CI emulator image (digests are bumped by
+      hand).
 
 - [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from
       `limits.max_message_bytes`, which an operator may raise above that.
