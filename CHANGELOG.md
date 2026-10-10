@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Store keys: a malformed `STORE_KEYS` / `STORE_ACTIVE_KEY` no longer echoes key material or ids
+  in the startup error (a bare base64 key without `k1=` used to appear in the message); errors
+  name the entry by position.
+
 ### Added
 
 - German translation of the whole end-user UI (portal, sign-in, consent, message viewer,

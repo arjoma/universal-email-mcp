@@ -145,3 +145,46 @@ def test_tokens() -> None:
     h = hash_token(t)
     assert len(h) == 64 and t not in h and h == hash_token(t)
     assert tokens_equal(t, t) and not tokens_equal(t, t + "x")
+
+
+# --- error messages never echo key material or ids (security review M3) ---------------------
+
+
+def test_bare_base64_key_is_not_echoed() -> None:
+    secret = base64.b64encode(bytes(range(32))).decode()
+    with pytest.raises(ConfigError) as e:
+        KeyRing.from_env({"STORE_KEYS": secret})
+    shown = f"{e.value.message} {e.value.hint}"
+    assert secret.rstrip("=") not in shown
+    assert "entry 1" in shown
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "k1=" + base64.b64encode(bytes(range(32))).decode() + ",SECRETSECRETSECRETSECRET=xx",
+        "SECRETSECRETSECRETSECRET=" + base64.b64encode(bytes(range(32))).decode(),
+        "k1=SECRETSECRETSECRETSECRET!!",
+        "k1=" + base64.b64encode(bytes(range(32))).decode() + "\nk1=Zm9v",
+    ],
+)
+def test_parse_errors_name_the_position_only(text: str) -> None:
+    with pytest.raises(ConfigError) as e:
+        KeyRing.parse(text)
+    assert "SECRET" not in f"{e.value.message} {e.value.hint}"
+    assert "entry" in e.value.message
+
+
+def test_wrong_active_key_id_is_not_echoed() -> None:
+    wrong = "k1=" + base64.b64encode(bytes(range(32))).decode()
+    with pytest.raises(ConfigError) as e:
+        KeyRing.from_env({"STORE_KEYS": wrong, "STORE_ACTIVE_KEY": "PASTEDKEYMATERIAL"})
+    assert "PASTEDKEYMATERIAL" not in f"{e.value.message} {e.value.hint}"
+
+
+def test_key_id_of_a_foreign_blob_is_not_echoed() -> None:
+    r = ring()
+    blob = swap(r.seal(b"x", AAD), 1, "SECRETSHAPEDTHING")
+    with pytest.raises(CryptoError) as e:
+        r.open(blob, AAD)
+    assert "SECRETSHAPEDTHING" not in e.value.message
