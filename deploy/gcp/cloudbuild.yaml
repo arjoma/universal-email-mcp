@@ -11,6 +11,16 @@
 # No secret appears here. The service reads its keys from Secret Manager (see
 # service.yaml); this build only needs the secret *names* to exist (bootstrap.sh).
 # Run it as the dedicated build service account bootstrap.sh creates (_BUILD_SA).
+#
+# Builder images are pinned by digest (the tag is in the comment). Update them deliberately:
+#   gcr.io/cloud-builders/docker             latest  (amd64 only)
+#   gcr.io/google.com/cloudsdktool/cloud-sdk slim
+# Dependabot does not read this file: look the digests up with
+# `podman manifest inspect IMAGE:TAG` / the registry API when you bump them.
+#
+# Substitutions never become shell text: each step passes them as environment variables
+# (`env:`) and the script only expands those, so a value with quotes, `$` or backticks
+# cannot change what the script does.
 
 substitutions:
   _REGION: europe-west1
@@ -43,23 +53,31 @@ options:
 
 steps:
   - id: build-push
-    name: gcr.io/cloud-builders/docker
+    name: gcr.io/cloud-builders/docker@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e  # tag: latest
     entrypoint: bash
+    env:
+      - REGION=${_REGION}
+      - PROJECT_ID=${PROJECT_ID}
+      - REPO=${_REPO}
+      - IMAGE_NAME=${_IMAGE}
+      - EXTRAS=${_EXTRAS}
+      - REVISION=${COMMIT_SHA}
+      - BUILD_ID=${BUILD_ID}
     args:
       - -ceu
       - |
-        image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}"
+        image="$${REGION}-docker.pkg.dev/$${PROJECT_ID}/$${REPO}/$${IMAGE_NAME}"
         docker build \
-          --build-arg EXTRAS="${_EXTRAS}" \
-          --build-arg REVISION="${COMMIT_SHA}" \
-          --tag "$${image}:${BUILD_ID}" .
-        docker push "$${image}:${BUILD_ID}"
+          --build-arg EXTRAS="$${EXTRAS}" \
+          --build-arg REVISION="$${REVISION}" \
+          --tag "$${image}:$${BUILD_ID}" .
+        docker push "$${image}:$${BUILD_ID}"
         # Deploy by digest: what was built is what runs, whatever happens to the tag.
-        docker inspect --format '{{index .RepoDigests 0}}' "$${image}:${BUILD_ID}" \
+        docker inspect --format '{{index .RepoDigests 0}}' "$${image}:$${BUILD_ID}" \
           > /workspace/image.txt
 
   - id: deploy
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk@sha256:c70885ba9f0450ea9987b1c5dc1ab80acc768bac2fe783962dc98a64ea74c806  # tag: slim
     entrypoint: bash
     env:
       - SERVICE=${_SERVICE}
@@ -78,9 +96,10 @@ steps:
       - TRUSTED_PROXY_HOPS=${_TRUSTED_PROXY_HOPS}
       - NETWORK=${_NETWORK}
       - SUBNET=${_SUBNET}
+      - REGION=${_REGION}
     args:
       - -ceu
       - |
         IMAGE="$$(cat /workspace/image.txt)" deploy/gcp/render.sh /workspace/service.rendered.yaml
         gcloud run services replace /workspace/service.rendered.yaml \
-          --project "${PROJECT_ID}" --region "${_REGION}"
+          --project "$${PROJECT_ID}" --region "$${REGION}"

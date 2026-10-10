@@ -14,7 +14,8 @@
 # deliberately (`podman manifest inspect python:3.12-slim`, or let Dependabot do it).
 
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS build
-COPY --from=ghcr.io/astral-sh/uv:0.11.18 /uv /usr/local/bin/uv
+# uv 0.11.18, pinned by digest (the multi-arch index); Dependabot's docker ecosystem bumps it
+COPY --from=ghcr.io/astral-sh/uv:0.11.18@sha256:78bc42400d77b0678ba95765305c826652ed5431f399257271dda681d0318f03 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 ARG EXTRAS=""

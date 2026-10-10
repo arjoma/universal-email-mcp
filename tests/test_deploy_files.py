@@ -89,6 +89,43 @@ def test_cloudbuild_yaml() -> None:
     assert build["substitutions"]["_EXTRAS"] == "gcp"
 
 
+def test_render_rejects_line_breaks() -> None:
+    for bad in ("a\nb", "a\rb", "x\n"):
+        env = {**os.environ, **RENDER_ENV, "MAIL_SERVERS": bad}
+        done = subprocess.run(
+            [str(GCP / "render.sh")], env=env, capture_output=True, text=True, check=False
+        )
+        assert done.returncode != 0 and "line break" in done.stderr
+
+
+def test_cloudbuild_images_are_pinned_and_substitutions_stay_out_of_scripts() -> None:
+    build = yaml.safe_load((GCP / "cloudbuild.yaml").read_text())
+    for step in build["steps"]:
+        assert re.search(r"@sha256:[0-9a-f]{64}$", step["name"]), step["name"]
+        script = step["args"][-1]
+        # user supplied substitutions reach the script as environment variables only
+        assert not re.search(r"\$\{_[A-Z_]+\}", script), step["id"]
+
+
+def test_images_everywhere_are_pinned_by_digest() -> None:
+    docker = (ROOT / "Dockerfile").read_text()
+    assert all(
+        "@sha256:" in ln
+        for ln in docker.splitlines()
+        if ln.startswith(("FROM", "COPY --from")) and "--from=build" not in ln
+    )
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    emulator = (ROOT / "tests" / "firestore_emulator.py").read_text()
+    pin = re.search(r"google-cloud-cli:emulators@sha256:[0-9a-f]{64}", ci)
+    assert pin and pin.group(0) in emulator  # the two places name the same image
+
+
+def test_build_account_run_admin_is_narrowed_to_the_service() -> None:
+    script = (GCP / "bootstrap.sh").read_text()
+    assert "run services add-iam-policy-binding" in script
+    assert "projects remove-iam-policy-binding" in script
+
+
 @pytest.mark.parametrize("script", sorted(p.name for p in GCP.glob("*.sh")))
 def test_shell_syntax(script: str) -> None:
     done = subprocess.run(["bash", "-n", str(GCP / script)], capture_output=True, check=False)

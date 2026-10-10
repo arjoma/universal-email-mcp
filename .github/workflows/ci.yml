@@ -67,7 +67,9 @@ jobs:
 
       - name: Start Firestore emulator
         run: |
-          docker run -d --name firestore -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+          # google-cloud-cli:emulators, pinned by digest (same as tests/firestore_emulator.py)
+          docker run -d --name firestore -p 8080:8080 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators@sha256:be2f0e582a94c9e06e7a384fe2b3b39d590eeb8da65a110eda991598c100fe80 \
             gcloud emulators firestore start --host-port=0.0.0.0:8080
           for i in $(seq 1 60); do curl -fs http://127.0.0.1:8080/ >/dev/null && exit 0; sleep 2; done
           docker logs firestore; exit 1

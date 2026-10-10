@@ -17,6 +17,8 @@
 #   FIRESTORE_DATABASE   default: (default)
 #   FIRESTORE_PREFIX     collection name prefix (must match the service), default empty
 #   REPO                 Artifact Registry repository, default universal-email-mcp
+#   SERVICE              Cloud Run service name, default universal-email-mcp (run.admin of the
+#                        build account is narrowed to it once it exists)
 #   RUNTIME_SA, BUILD_SA service account names, default uem-runtime / uem-build
 #   STORE_KEYS_SECRET, PSEUDONYM_KEY_SECRET   secret names, default uem-store-keys /
 #                        uem-pseudonym-key (must match deploy/gcp/service.yaml)
@@ -29,6 +31,7 @@ FIRESTORE_LOCATION="${FIRESTORE_LOCATION:-$REGION}"
 FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-(default)}"
 FIRESTORE_PREFIX="${FIRESTORE_PREFIX:-}"
 REPO="${REPO:-universal-email-mcp}"
+SERVICE="${SERVICE:-universal-email-mcp}"
 RUNTIME_SA="${RUNTIME_SA:-uem-runtime}"
 BUILD_SA="${BUILD_SA:-uem-build}"
 STORE_KEYS_SECRET="${STORE_KEYS_SECRET:-uem-store-keys}"
@@ -138,9 +141,29 @@ done
 
 say "IAM: build service account (${build_email})"
 # run.admin (not developer): services replace with the invoker-iam-disabled annotation
-# needs run.services.setIamPolicy. Tighten with a condition once the service exists.
-g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
-  --role roles/run.admin --condition=None
+# needs run.services.setIamPolicy. run.admin can set the service account of a service and
+# so, with serviceAccountUser on the runtime account, deploy code that runs with its
+# access to Firestore and the two secrets: whoever may submit builds as this account (or
+# push to the repository it builds from) has that power. See docs/deploy-gcp.md.
+# Project level binding only until the service exists; as soon as it does, the role is bound
+# on that one service and the project level binding is removed (rerun this script after the
+# first deploy). IAM conditions on Cloud Run resources are not documented as supported, so
+# the service level binding is the way to scope it.
+if q run services describe "$SERVICE" --region "$REGION"; then
+  g run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
+    --member "serviceAccount:${build_email}" --role roles/run.admin
+  if q projects get-iam-policy "$PROJECT_ID" \
+    --flatten bindings --filter "bindings.role=roles/run.admin AND bindings.members:serviceAccount:${build_email}" \
+    --format 'value(bindings.role)'; then
+    g projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
+      --role roles/run.admin --condition=None || true
+  fi
+else
+  echo "    service ${SERVICE} does not exist yet: run.admin is bound on the project for the first deploy;"
+  echo "    run this script again afterwards to narrow it to the service"
+  g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
+    --role roles/run.admin --condition=None
+fi
 g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
   --role roles/logging.logWriter --condition=None
 g iam service-accounts add-iam-policy-binding "$runtime_email" \

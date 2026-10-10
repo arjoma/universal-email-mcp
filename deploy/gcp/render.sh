@@ -6,7 +6,7 @@
 #   SERVICE=uem IMAGE=... RUNTIME_SA=... PROJECT_ID=... PUBLIC_URL=... LOGIN_DOMAINS=... \
 #     deploy/gcp/render.sh > /tmp/service.yaml
 #
-# Values must not contain newlines, double quotes or backslashes. Secrets never pass through here.
+# Values must not contain newlines (or carriage returns), double quotes or backslashes. Secrets never pass through here.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +35,7 @@ for name in SERVICE IMAGE RUNTIME_SA PROJECT_ID PUBLIC_URL LOGIN_DOMAINS INGRESS
   # Values land in double-quoted YAML scalars.
   case "$value" in
     *\"* | *\\*) echo "render.sh: $name contains a quote or backslash" >&2; exit 1 ;;
+    *$'\n'* | *$'\r'*) echo "render.sh: $name contains a line break" >&2; exit 1 ;;
   esac
   out="${out//__${name}__/${value}}"
 done
