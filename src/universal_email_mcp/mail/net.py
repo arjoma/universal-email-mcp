@@ -23,6 +23,7 @@ import os
 import socket
 import ssl
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
@@ -108,6 +109,37 @@ def system_resolver(host: str, port: int) -> list[str]:
     return out
 
 
+def _lookup(resolver: Resolver, host: str, port: int) -> list[str]:
+    """Run the resolver. Inside a :class:`Deadline` it runs on a daemon thread of its own and
+    the caller gives up when the deadline is over: ``getaddrinfo`` cannot be interrupted, and
+    a hostile authoritative name server could otherwise hold the worker for the libc
+    resolver's own (much longer) timeouts. The abandoned lookup thread ends by itself."""
+    deadline = _current_deadline.get()
+    if deadline is None:
+        return list(resolver(host, port))
+    budget = deadline.remaining()
+    if budget <= 0:
+        raise TimeoutError("deadline exceeded")
+    outcome: list[list[str] | BaseException] = []
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            outcome.append(list(resolver(host, port)))
+        except BaseException as e:  # noqa: BLE001 - handed to the waiting thread
+            outcome.append(e)
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="uem-resolver", daemon=True).start()
+    if not done.wait(budget):
+        raise TimeoutError("name lookup did not finish before the deadline")
+    result = outcome[0]
+    if isinstance(result, BaseException):
+        raise result
+    return result
+
+
 def resolve_checked(
     host: str, port: int, policy: NetPolicy, resolver: Resolver | None = None
 ) -> list[IPAddress]:
@@ -118,7 +150,7 @@ def resolve_checked(
         allowed = ", ".join(str(p) for p in sorted(policy.allowed_ports))
         raise AddressNotAllowed(f"port {port} is not allowed", hint=f"Allowed ports: {allowed}.")
     try:
-        raw = list((resolver or system_resolver)(host, port))
+        raw = _lookup(resolver or system_resolver, host, port)
     except (OSError, UnicodeError) as e:
         raise ServerUnreachable(
             f"cannot resolve host {host!r}", hint="Check the host name spelling and DNS."
@@ -164,8 +196,14 @@ class Deadline:
         self._token: contextvars.Token[Deadline | None] | None = None
         self.expired = False
         self._done = False
+        self._started = time.monotonic()
+
+    def remaining(self) -> float:
+        """Seconds left (0 once the time is up)."""
+        return max(0.0, self._seconds - (time.monotonic() - self._started))
 
     def __enter__(self) -> Deadline:
+        self._started = time.monotonic()
         self._token = _current_deadline.set(self)
         timer = threading.Timer(self._seconds, self.expire)
         timer.daemon = True

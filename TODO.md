@@ -12,9 +12,6 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 - [ ] The first IMAP write after a server-side idle drop fails instead of reconnecting (could be
       softened with a NOOP probe before the first write).
-- [ ] `getaddrinfo` in `net.resolve_checked` is not covered by the `Deadline` (the libc
-      resolver timeouts apply; a hostile authoritative DNS server can stall one worker thread
-      for that long). `run_deadline` abandons the thread after `GRACE`.
 - [ ] Run `deploy/gcp` against a real project once (see Deployment) and correct the docs.
 - [ ] Try SMTP against a real server and fill `ServerProfile.smtp_saves_sent`; check the
       archive scheme of the united-domains hoster with `probe` (see Send, IMAP).
