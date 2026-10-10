@@ -95,3 +95,12 @@ def test_old_unsealed_token_shape_is_refused() -> None:
     payload = json.dumps(["u", "m", 1, 2**40]).encode()
     old = b64u(payload) + "." + b64u(b"\x00" * 16)
     assert ContentTokens([K1]).verify(old) is None
+
+
+def test_nan_expiry_is_refused_and_tokens_have_one_spelling() -> None:
+    box = SealBox([K1])
+    t = ContentTokens([K1])
+    nan = box.seal(b'["u","m",0,NaN]', b"content")
+    assert t.verify(nan) is None
+    tok = t.issue("u", "m", False)
+    assert t.verify(tok) is not None and t.verify(tok + "=") is None
