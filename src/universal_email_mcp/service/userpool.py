@@ -370,16 +370,19 @@ class UserPool:
         self._tasks: set[asyncio.Task[None]] = set()
         # Keys of the store ring, never the pseudonym key (which an analyst of the logs may
         # hold): whoever can sign cursors or open viewer links must hold the store keys.
-        self._cursor_secret = store.keys.derive("cursor-v1")[0]
+        self._cursor_secrets = store.keys.derive("cursor-v1")  # active first
         self.viewer_ids = ViewerIds(store.keys.derive("viewer-id-v1"))
         self._sweeper: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------ contexts
 
-    def _cursor_key(self, user_id: str) -> bytes:
-        return hmac.new(
-            self._cursor_secret, b"uem-cursor-v1\0" + user_id.encode(), hashlib.sha256
-        ).digest()
+    def _cursor_keys(self, user_id: str) -> list[bytes]:
+        """Per-user cursor keys, one per ring key, active first (sign with the first, verify
+        with all: cursors survive a key rotation while the old key stays in the ring)."""
+        return [
+            hmac.new(secret, b"uem-cursor-v1\0" + user_id.encode(), hashlib.sha256).digest()
+            for secret in self._cursor_secrets
+        ]
 
     def _build(
         self,
@@ -403,6 +406,7 @@ class UserPool:
         )
         base = self.op.public_url
         user_id = principal.user_id
+        cursor_keys = self._cursor_keys(user_id)
 
         def link_id(message_id: str) -> str:
             return self.viewer_ids.seal(user_id, message_id)
@@ -410,7 +414,7 @@ class UserPool:
         service = MailService(
             config,
             router=router,
-            cursors=CursorCodec(self._cursor_key(principal.user_id)),
+            cursors=CursorCodec(cursor_keys[0], extra_keys=cursor_keys[1:]),
             viewer_base=base,
             link_id=link_id,
             download_links=PortalLinks(base, link_id) if base else None,

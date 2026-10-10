@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Paging cursors are verified under every ring key (signed with the active one), so they
+  survive a key rotation while the old key is in the ring.
 - Client names: the combining grapheme joiner, variation selectors, private-use and unassigned
   code points are dropped as well; a name that cleans to blank falls back to the host of the
   client id (CIMD).

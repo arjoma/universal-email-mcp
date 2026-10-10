@@ -746,3 +746,19 @@ async def test_startup_folder_map_failure_logs_pseudonym_and_class_only(caplog: 
     assert "victim" not in text and "Mandanten" not in text
     assert audit.pseudonym("a", name) in text
     audit.reset()
+
+
+def test_cursor_survives_key_rotation_and_refuses_unknown_keys():
+    cur = Cursor(tool="t", query="q")
+    old = CursorCodec(b"o" * 32)
+    new = CursorCodec(b"n" * 32, extra_keys=[b"o" * 32])
+    assert new.decode(old.encode(cur), tool="t", query="q") == cur  # old key still in the ring
+    assert new.decode(new.encode(cur), tool="t", query="q") == cur
+    # signing uses the active key only: a codec that lost the old key cannot read new cursors
+    # of the old codec, and an unrelated key is refused
+    with pytest.raises(InvalidCursor):
+        CursorCodec(b"n" * 32).decode(old.encode(cur), tool="t", query="q")
+    with pytest.raises(InvalidCursor):
+        new.decode(CursorCodec(b"z" * 32).encode(cur), tool="t", query="q")
+    with pytest.raises(InvalidCursor):
+        old.decode(new.encode(cur), tool="t", query="q")
