@@ -35,6 +35,13 @@ HOSTILE_SUBJECT = (
 HOSTILE_NAME = "Evil [click](https://evil.example/x)"
 
 
+def same_day_as_seed() -> None:
+    """Tests of day windows (``today``, the 7-day contacts overview) expect the mail seeded
+    relative to ``NOW``; a run that crosses midnight after seeding skips them."""
+    if datetime.now().astimezone().date() != NOW.date():
+        pytest.skip("the day changed since the mailbox was seeded")
+
+
 def ago(days: float, hour: int = 10) -> datetime:
     return (NOW - timedelta(days=days)).replace(hour=hour, minute=0, second=0)
 
@@ -285,6 +292,7 @@ async def test_list_folders_overview_and_drill_down(seeded: Seeded):
 
 
 async def test_find_messages_today_across_accounts(seeded: Seeded):
+    same_day_as_seed()
     async with connect(seeded.config()) as client:
         md, data = await call(client, "find_messages", window="today")
         assert subjects(data) == ["Heute: Kaffee?"]
@@ -441,6 +449,7 @@ async def test_get_message_thread_spans_inbox_and_sent(seeded: Seeded):
 
 
 async def test_find_contacts(seeded: Seeded):
+    same_day_as_seed()
     async with connect(seeded.config()) as client:
         md, data = await call(client, "find_contacts")
         assert data["mode"] == "overview" and data["days"] == 7 and "query=" in md
@@ -469,6 +478,7 @@ async def test_find_contacts(seeded: Seeded):
 async def test_partial_failure_reported_for_imap_and_pop3(
     seeded: Seeded, monkeypatch: pytest.MonkeyPatch
 ):
+    same_day_as_seed()
     monkeypatch.setenv("UEM_IT_WRONG", "not-the-password")
     cfg = seeded.config(
         {
