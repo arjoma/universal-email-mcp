@@ -163,6 +163,8 @@ class Store:
         self.backend = backend
         self.keys = keys
         self.policy = policy or SessionPolicy()
+        ns = getattr(backend, "namespace", "")
+        self._namespace: str = ns if isinstance(ns, str) else ""
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def __repr__(self) -> str:
@@ -195,7 +197,7 @@ class Store:
             sealed.setdefault(k, v)
         if sealed:
             doc[SEALED_KEY] = self.keys.seal_json(sealed, self._aad(cls, rec.owner, rec.id))
-        doc[MAC_KEY] = self.keys.mac(_mac_input(cls.KIND, rec.id, rec.owner, doc))
+        doc[MAC_KEY] = self.keys.mac(_mac_input(cls.KIND, rec.id, rec.owner, doc, self._namespace))
         doc[VERSION_KEY] = version
         return doc
 
@@ -203,7 +205,9 @@ class Store:
         owner = rec_id if cls is User else str(doc.get("user_id", ""))
         # First the MAC over everything that is stored in the clear: a record somebody changed
         # in the database is as good as damaged and never trusted.
-        self.keys.check_mac(doc.get(MAC_KEY, ""), _mac_input(cls.KIND, rec_id, owner, doc))
+        self.keys.check_mac(
+            doc.get(MAC_KEY, ""), _mac_input(cls.KIND, rec_id, owner, doc, self._namespace)
+        )
         values: dict[str, Any] = {
             k: v for k, v in doc.items() if k not in (SEALED_KEY, VERSION_KEY, MAC_KEY)
         }
@@ -915,15 +919,16 @@ def _canonical(value: Any) -> Any:
     return value
 
 
-def _mac_input(kind: str, rec_id: str, owner: str, doc: Doc) -> bytes:
-    """What the record MAC covers: kind, id, owner, every stored field except the version
-    and the MAC itself (the sealed blob included, so plain fields and the secrets they belong
+def _mac_input(kind: str, rec_id: str, owner: str, doc: Doc, namespace: str = "") -> bytes:
+    """What the record MAC covers: the backend's namespace (the Firestore collection prefix:
+    a record copied into another deployment's collections fails), kind, id, owner, every
+    stored field except the version and the MAC itself (the sealed blob included, so plain fields and the secrets they belong
     to cannot be mixed from two versions of a record). Unambiguous: one JSON array of fixed
     arity, strings escaped (``ensure_ascii``), object keys sorted; a datetime is a one-key
     object so it cannot be confused with a string."""
     fields = {k: _canonical(v) for k, v in doc.items() if k not in (VERSION_KEY, MAC_KEY)}
     return json.dumps(
-        ["uem-record-v2", kind, rec_id, owner, fields],
+        ["uem-record-v3", namespace, kind, rec_id, owner, fields],
         separators=(",", ":"),
         sort_keys=True,
         ensure_ascii=True,

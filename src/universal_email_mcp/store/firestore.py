@@ -65,6 +65,11 @@ class FirestoreBackend:
         self._client: Any = client or firestore.AsyncClient(**kwargs)
         self._prefix = prefix
 
+    @property
+    def namespace(self) -> str:
+        """The collection prefix; the store binds it into every record MAC."""
+        return self._prefix
+
     def _col(self, collection: str) -> Any:
         return self._client.collection(self._prefix + collection)
 

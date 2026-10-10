@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import uuid
@@ -834,7 +835,9 @@ async def test_unknown_fields_survive_update(store: Store) -> None:
     sealed["future_secret"] = "S3CRET-FUTURE"
     doc["_sealed"] = store.keys.seal_json(sealed, aad)
     doc["future_flag"] = {"a": [1, 2]}
-    doc["_mac"] = store.keys.mac(_mac_input("accounts", "r1", "u_1", doc))  # as a newer instance
+    doc["_mac"] = store.keys.mac(
+        _mac_input("accounts", "r1", "u_1", doc, getattr(store.backend, "namespace", ""))
+    )  # as a newer instance
     await store.backend.commit([Op("replace", "accounts", "r1", doc, 1)])
 
     acc = await store.get(MailAccount, "r1")
@@ -1145,7 +1148,9 @@ async def test_unauthenticated_and_foreign_records_are_rejected(store: Store) ->
     # a MAC under a key the writer made up
     other = KeyRing({"k1": b"x" * 32})
     forged = {**doc, "scope": "mail.read mail.send"}
-    forged["_mac"] = other.mac(_mac_input("grants", "g_forged", "u_1", forged))
+    forged["_mac"] = other.mac(
+        _mac_input("grants", "g_forged", "u_1", forged, getattr(store.backend, "namespace", ""))
+    )
     await store.backend.commit([Op("create", "grants", "g_forged", forged)])
     # a genuine record copied to another id (MAC binds the id)
     await store.backend.commit([Op("create", "grants", "g_copy", dict(doc))])
@@ -1253,3 +1258,34 @@ async def test_bearer_verifier_refuses_forged_and_changed_records(store: Store) 
 
     await raw_replace(store, Grant, grant.id, scope="mail.read mail.send")
     assert await verifier(issued.access_token) is None  # fails closed, no 500
+
+
+# --- MAC scope: namespace, user_id stays plain ------------------------------------------
+
+
+class _Namespaced(MemoryBackend):
+    def __init__(self, namespace: str) -> None:
+        super().__init__()
+        self.namespace = namespace
+
+
+async def test_record_mac_binds_the_collection_prefix(clock: Clock) -> None:
+    a = Store(_Namespaced("uem1_"), KeyRing({"k1": KEY1}), clock=clock)
+    b = Store(_Namespaced("uem2_"), KeyRing({"k1": KEY1}), clock=clock)
+    await a.create(make(User, "u_1"))
+    doc = await a.backend.get("users", "u_1")
+    assert doc is not None
+    assert (await a.get(User, "u_1")) is not None
+    # the same genuine document, copied into another deployment's collections
+    await b.backend.commit([Op("create", "users", "u_1", dict(doc))])
+    with pytest.raises(CryptoError):
+        await b.get(User, "u_1")
+
+
+def test_user_id_is_never_sealed() -> None:
+    """The record MAC and the sealed blob's AAD take the owner from the plain ``user_id`` field
+    (``Store.decode``); a record class that seals it would break that and the ``find`` by owner."""
+    for cls in ALL_RECORDS:
+        names = {f.name for f in dataclasses.fields(cls)}
+        if "user_id" in names:
+            assert "user_id" not in cls.SEALED, cls.__name__

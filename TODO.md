@@ -7,9 +7,9 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 ## Before 0.1.0 (security or correctness)
 
-- [ ] Review leftovers (store/web WP): the record MAC does not cover `_v` or the collection prefix; a single
+- [ ] Review leftovers (store/web WP): a single
       damaged record makes `list_for_user` raise (portal 500) instead of being skipped and
-      reported; the record MAC assumes `user_id` stays a plain field; Dependabot does not read
+      reported; Dependabot does not read
       `cloudbuild.yaml` or the CI emulator image (digests are bumped by hand).
 
 - [ ] IMAP literal/untagged caps (`MAX_LITERAL_BYTES` 32 MiB) are fixed; derive them from

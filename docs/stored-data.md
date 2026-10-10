@@ -123,18 +123,28 @@ an old ring key ends the sessions and tokens issued under it.
 ### Record MAC: plain fields are authenticated
 
 Every record carries `_mac = m1.<key id>.<base64url(HMAC-SHA256(derive("record-mac-v1"), input))>`.
-The input is one JSON array `["uem-record-v2", kind, record id, owner user id, {all stored
-fields except _v and _mac, with the sealed blob}]` (sorted keys, ASCII-escaped, datetimes as
-UTC microseconds in a tagged object, tuples as lists). It covers the fields that decide what a
+The input is one JSON array `["uem-record-v3", namespace, kind, record id, owner user id, {all
+stored fields except _v and _mac, with the sealed blob}]` (`namespace` is the Firestore
+collection prefix, `FIRESTORE_PREFIX`, empty for the memory backend); sorted keys,
+ASCII-escaped, datetimes as UTC microseconds in a tagged object, tuples as lists. It covers the fields that decide what a
 caller may do and that are *not* sealed: scopes, per-account permissions, `send` flags,
 redirect URIs, owners, expiries, session `reauth_at` and so on. On every read the tag is
 verified (constant time) **before** anything else; a record without a valid tag is treated like
 a damaged one (`CryptoError`, the same path as a wrong key): it is never trusted, the bearer
 verifier answers 401, and `rotate-keys` and the GDPR export report it as unreadable. A record is
-bound to its id and owner, so a genuine record copied to another id or user fails too. Unknown
+bound to its id, owner and namespace, so a genuine record copied to another id, user or
+deployment (collection prefix) fails too; **changing `FIRESTORE_PREFIX` of a deployment that
+holds data therefore invalidates every record** (move data with an export/import, not by
+renaming collections). Unknown
 fields written by a newer instance are included in the input (a rolling deploy keeps working).
 
-The store format is "2" (`uem-record-v2`): records written by an earlier build have no `_mac`
+`_v` is deliberately **not** covered: it is only the optimistic-concurrency counter that makes
+a write fail when the record changed meanwhile, not an authorization field. Changing it can
+at most cause a spurious conflict or let a stale writer overwrite a newer genuine version,
+which an attacker with database write access can do by replacing the document anyway
+(see rollback below); binding it would not stop that.
+
+The store format is "3" (`uem-record-v3`): records written by an earlier build have no `_mac`
 and are rejected. This is acceptable before 0.1.0 because nothing is deployed yet; from 0.1.0 on a
 format change needs a migration.
 
