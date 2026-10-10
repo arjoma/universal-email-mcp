@@ -43,6 +43,7 @@ from universal_email_mcp.models import (
     ServerProfile,
     TlsMode,
     TlsSettings,
+    account_key,
 )
 from universal_email_mcp.presets import normalize_hostname, resolve_server_entry
 
@@ -552,11 +553,15 @@ def _parse_account(c: _Ctx, t: dict[str, Any], i: int) -> Account:
         smtp=endpoints["smtp"],
         folder_roles=dict(base.folder_roles),
     )
+    username = c.req_str(t, "username", w)
+    endpoint = server.imap if kind == "imap" else server.pop3
     return Account(
         name=name,
         kind=cast(AccountKind, kind),
-        username=c.req_str(t, "username", w),
+        username=username,
         server=server,
+        # the mailbox, not its name: host and login (stable while the user renames the entry)
+        key=account_key(f"{kind}\0{(endpoint.host if endpoint else '').lower()}\0{username}"),
         credential=credential,
         permissions=perms,
         tls=TlsSettings(

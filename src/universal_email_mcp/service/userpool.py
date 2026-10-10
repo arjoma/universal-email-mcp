@@ -54,6 +54,7 @@ from universal_email_mcp.models import (
     Permissions,
     ServerProfile,
     TlsSettings,
+    account_key,
 )
 from universal_email_mcp.oauth.bearer import Principal
 from universal_email_mcp.oauth.config import SCOPE_READ, SCOPE_SEND, permission_of
@@ -154,6 +155,7 @@ def _account(rec: MailAccount, name: str, perms: Permissions, tls: TlsSettings) 
         credential=CredentialRef("inline", name, rec.password),
         permissions=perms,
         tls=tls,
+        key=account_key(rec.id),
         public_only=not rec.preset,
     )
 

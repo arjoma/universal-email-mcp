@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Message ids carry a stable key of their mailbox (id format `m2.` / `p2.`, 8 extra
+  characters): store record id in remote mode, a hash of kind, host and login in local mode. An id
+  issued for one mailbox is refused (`INVALID_REF`, "search again") when the account name now
+  belongs to another one - removed and added again, or the positional `Account N` names - for
+  reads, drafts, sends, moves and flag changes; renaming an account keeps its ids valid. The
+  former `m1.`/`p1.` ids and local download links (`d1.`) stop working.
 - Deployment: the `uv` image, the Cloud Build builder images and the Firestore emulator image are
   pinned by digest (tag in a comment). `docs/deploy-gcp.md` no longer claims that the build account
   cannot reach the data (`run.admin` plus `serviceAccountUser` on the runtime account lets a

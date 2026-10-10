@@ -39,6 +39,7 @@ from imapclient.imap_utf7 import encode as utf7_encode
 
 from universal_email_mcp.config import Config
 from universal_email_mcp.errors import (
+    WRONG_MAILBOX,
     InvalidArgument,
     InvalidRef,
     MailError,
@@ -232,6 +233,9 @@ class Organizer:
             out.account = ref.account
             if isinstance(acc, MailError):
                 out.fail(acc)
+                continue
+            if ref.key != acc.key:  # an id of a former mailbox of this name changes nothing
+                out.fail(InvalidRef(WRONG_MAILBOX))
                 continue
             out.folder = decode_folder_name(ref.folder)
             by_account[acc.name].append((out, ref))
@@ -699,7 +703,7 @@ class Organizer:
                 if new_uid is not None and res.dest_uidvalidity is not None:
                     try:
                         out.new_id = MessageRef(
-                            ref.account, res.dest, res.dest_uidvalidity, new_uid
+                            ref.account, res.dest, res.dest_uidvalidity, new_uid, key=ref.key
                         ).encode()
                     except InvalidRef:
                         pass

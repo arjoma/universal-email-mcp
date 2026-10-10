@@ -59,6 +59,7 @@ from email.parser import BytesHeaderParser
 from typing import Final
 
 from universal_email_mcp.errors import (
+    WRONG_MAILBOX,
     AttachmentNotFound,
     AuthFailed,
     FolderNotFound,
@@ -488,9 +489,11 @@ class Pop3Session:
         account_name: str,
         state: Pop3State,
         clock: Callable[[], float] = time.monotonic,
+        account_key: str = "",
     ) -> None:
         self._opener = opener
         self.account_name = account_name
+        self.account_key = account_key
         self.state = state
         self._clock = clock
         self._wire: _Wire | None = None
@@ -513,6 +516,7 @@ class Pop3Session:
         password: str,
         *,
         account_name: str = "",
+        account_key: str = "",
         net: NetPolicy | None = None,
         tls: TlsSettings | None = None,
         state: Pop3State | None = None,
@@ -527,7 +531,12 @@ class Pop3Session:
         def opener() -> tuple[_Wire, tuple[str, ...]]:
             return _open(endpoint, username, password, net_, tls_, resolver)
 
-        session = cls(opener, account_name=account_name, state=state or Pop3State())
+        session = cls(
+            opener,
+            account_name=account_name,
+            state=state or Pop3State(),
+            account_key=account_key,
+        )
         session._reopen()
         return session
 
@@ -548,6 +557,7 @@ class Pop3Session:
             account.username,
             password,
             account_name=account.name,
+            account_key=account.key,
             net=net,
             tls=account.tls,
             state=state,
@@ -777,6 +787,7 @@ class Pop3Session:
             POP3_UIDVALIDITY,
             self.state.uid_of[uidl],
             uidl,
+            self.account_key,
         )
         summary = summary_from_headers(ref, header_block, self._size.get(uidl))
         self.state.store(uidl, summary)
@@ -843,6 +854,7 @@ class Pop3Session:
         uids = sorted((self.state.uid_of[u] for u in newest), reverse=True)
         return SearchResult(
             account=self.account_name,
+            account_key=self.account_key,
             folder=POP3_FOLDER,
             uidvalidity=POP3_UIDVALIDITY,
             uids=tuple(uids),
@@ -874,13 +886,21 @@ class Pop3Session:
             POP3_UIDVALIDITY,
             tuple(sorted(uids, reverse=True)),
             "uid",
+            account_key=self.account_key,
         )
 
     def search_recipients(
         self, folder: str, addresses: Sequence[str], *, since: date | None = None
     ) -> SearchResult:
         self._check_folder(folder)
-        return SearchResult(self.account_name, POP3_FOLDER, POP3_UIDVALIDITY, (), "uid")
+        return SearchResult(
+            self.account_name,
+            POP3_FOLDER,
+            POP3_UIDVALIDITY,
+            (),
+            "uid",
+            account_key=self.account_key,
+        )
 
     def fetch_recipients(
         self, folder: str, uids: Sequence[int], *, uidvalidity: int | None = None
@@ -955,6 +975,8 @@ class Pop3Session:
         the mailbox (a snapshot that predates it is refreshed once)."""
         if self.account_name and ref.account != self.account_name:
             raise InvalidRef("message reference belongs to a different account")
+        if ref.key != self.account_key:
+            raise InvalidRef(WRONG_MAILBOX)
         uidl = ref.uidl
         if uidl is None:
             raise InvalidRef("not a POP3 message id")
@@ -1000,7 +1022,7 @@ class Pop3Session:
         truncated = partial or cut
         parsed = parse_message(raw)
         summary = summary_from_headers(
-            MessageRef(ref.account, POP3_FOLDER, POP3_UIDVALIDITY, ref.uid, uidl),
+            MessageRef(ref.account, POP3_FOLDER, POP3_UIDVALIDITY, ref.uid, uidl, ref.key),
             raw,
             size or len(raw),
         )

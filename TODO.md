@@ -13,12 +13,6 @@ from time to time (AGENTS.md, "Regular cleanup").
       `total_timeout`); the first write after a server-side idle drop now fails instead of
       reconnecting (could be softened with a NOOP probe before the first write).
 - [ ] `oauth/fetch.py` docstring still says "call it through asyncio.to_thread".
-- [ ] Message ids name the account only by its name (`MessageRef.account`): an account that is
-      deleted and re-added under the same name (or the positional `Account N` names of the
-      per-user config) lets a stale id address another mailbox; UIDVALIDITY is the only
-      guard. Add a stable account key (store record id, or a short hash of host + user) to
-      the ref, encode it in the id and compare it in `ensure_ref_matches`. Touches every
-      `MessageRef(...)` constructor, hence not done in the network WP.
 - [ ] `build_html_view` (viewer) still runs on asyncio's default executor. It is CPU only
       and has no network I/O, but a pathological message can occupy a worker; give it a
       bounded executor of its own.

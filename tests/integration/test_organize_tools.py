@@ -378,8 +378,8 @@ async def test_batch_cap_refuses_before_changing_anything(env: Env):
         assert r.is_error
 
 
-def forge(account: str, folder: str, validity: int, uid: int) -> str:
-    return MessageRef(account, folder, validity, uid).encode()
+def forge(account: str, folder: str, validity: int, uid: int, key: str = "") -> str:
+    return MessageRef(account, folder, validity, uid, key=key).encode()
 
 
 async def test_forged_and_stale_ids_fail_per_message(env: Env):
@@ -389,13 +389,19 @@ async def test_forged_and_stale_ids_fail_per_message(env: Env):
         sent_ref = MessageRef.decode((await ids(c, "Work", "Sent"))["Antwort"])
         other_ref = MessageRef.decode((await ids(c, "Other"))["Angebot"])
         bad = {
-            "stale UIDVALIDITY": forge("Work", ref.folder, ref.uidvalidity + 1, ref.uid),
-            "unknown uid": forge("Work", ref.folder, ref.uidvalidity, 9999),
-            "unknown account": forge("Nobody", ref.folder, ref.uidvalidity, ref.uid),
-            "other case of account": forge("work", ref.folder, ref.uidvalidity, ref.uid),
-            "folder gone": forge("Work", "Gibt es nicht", 1, 1),
-            "other account's folder state": forge("Work", "INBOX", other_ref.uidvalidity + 7, 1),
-            "wrong folder": forge("Work", sent_ref.folder, ref.uidvalidity, ref.uid),
+            "stale UIDVALIDITY": forge(
+                "Work", ref.folder, ref.uidvalidity + 1, ref.uid, key=ref.key
+            ),
+            "unknown uid": forge("Work", ref.folder, ref.uidvalidity, 9999, key=ref.key),
+            "unknown account": forge("Nobody", ref.folder, ref.uidvalidity, ref.uid, key=ref.key),
+            "other case of account": forge(
+                "work", ref.folder, ref.uidvalidity, ref.uid, key=ref.key
+            ),
+            "folder gone": forge("Work", "Gibt es nicht", 1, 1, key=ref.key),
+            "other account's folder state": forge(
+                "Work", "INBOX", other_ref.uidvalidity + 7, 1, key=ref.key
+            ),
+            "wrong folder": forge("Work", sent_ref.folder, ref.uidvalidity, ref.uid, key=ref.key),
             "garbage": "m1.@@@@",
             "wrong prefix": "x" + got["Angebot"],
         }

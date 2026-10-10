@@ -46,6 +46,7 @@ from imapclient.imapclient import SocketTimeout
 from imapclient.response_parser import parse_message_list
 
 from universal_email_mcp.errors import (
+    WRONG_MAILBOX,
     AttachmentNotFound,
     AuthFailed,
     FolderNotFound,
@@ -275,6 +276,8 @@ class SearchResult:
     order: Literal["arrival", "uid"]
     exact: bool = True
     notes: tuple[str, ...] = ()
+    account_key: str = ""
+    """The mailbox's stable key (carried into the refs and so into message ids)."""
 
     @property
     def total(self) -> int:
@@ -282,7 +285,7 @@ class SearchResult:
 
     def refs(self, start: int = 0, stop: int | None = None) -> list[MessageRef]:
         return [
-            MessageRef(self.account, self.folder, self.uidvalidity, uid)
+            MessageRef(self.account, self.folder, self.uidvalidity, uid, key=self.account_key)
             for uid in self.uids[start:stop]
         ]
 
@@ -637,9 +640,11 @@ class ImapSession:
         account_name: str,
         login_info: LoginInfo,
         folder_roles: Mapping[FolderRole, str] | None = None,
+        account_key: str = "",
     ) -> None:
         self._client = client
         self.account_name = account_name
+        self.account_key = account_key
         self.login_info = login_info
         self._folder_role_overrides: dict[FolderRole, str] = dict(folder_roles or {})
         self._folders: list[FolderInfo] | None = None
@@ -661,6 +666,7 @@ class ImapSession:
         password: str,
         *,
         account_name: str = "",
+        account_key: str = "",
         net: NetPolicy | None = None,
         tls: TlsSettings | None = None,
         folder_roles: Mapping[FolderRole, str] | None = None,
@@ -763,7 +769,13 @@ class ImapSession:
             auth_mechanism=mechanism,
             notes=tuple(notes),
         )
-        return cls(client, account_name=account_name, login_info=info, folder_roles=folder_roles)
+        return cls(
+            client,
+            account_name=account_name,
+            login_info=info,
+            folder_roles=folder_roles,
+            account_key=account_key,
+        )
 
     @classmethod
     def for_account(
@@ -781,6 +793,7 @@ class ImapSession:
             account.username,
             password,
             account_name=account.name,
+            account_key=account.key,
             net=net,
             tls=account.tls,
             folder_roles=account.effective_folder_roles(),
@@ -1081,7 +1094,9 @@ class ImapSession:
         notes: list[str] = []
         exact = True
         if exists == 0:
-            return SearchResult(self.account_name, wire, uidvalidity, (), "uid")
+            return SearchResult(
+                self.account_name, wire, uidvalidity, (), "uid", account_key=self.account_key
+            )
 
         text_items = criteria.text_items()
         needs_utf8 = any(not v.isascii() for _k, v in text_items)
@@ -1110,6 +1125,7 @@ class ImapSession:
 
         return SearchResult(
             account=self.account_name,
+            account_key=self.account_key,
             folder=wire,
             uidvalidity=uidvalidity,
             uids=tuple(uids),
@@ -1158,7 +1174,9 @@ class ImapSession:
         wire, uidvalidity, exists = self._examine(folder)
         ids = [c for c in (_clean_search_value(m) for m in message_ids) if c][:MAX_RELATED_IDS]
         if exists == 0 or not ids:
-            return SearchResult(self.account_name, wire, uidvalidity, (), "uid")
+            return SearchResult(
+                self.account_name, wire, uidvalidity, (), "uid", account_key=self.account_key
+            )
         keys: list[list[bytes]] = []
         for mid in ids:
             for header in (b"Message-ID", b"In-Reply-To", b"References"):
@@ -1170,6 +1188,7 @@ class ImapSession:
         uids, order = self._search_call(args, "UTF-8" if needs_utf8 else None)
         return SearchResult(
             account=self.account_name,
+            account_key=self.account_key,
             folder=wire,
             uidvalidity=uidvalidity,
             uids=tuple(uids),
@@ -1186,7 +1205,9 @@ class ImapSession:
         wire, uidvalidity, exists = self._examine(folder)
         values = [v for v in (_clean_search_value(a) for a in addresses) if v][:MAX_RELATED_IDS]
         if exists == 0 or not values:
-            return SearchResult(self.account_name, wire, uidvalidity, (), "uid")
+            return SearchResult(
+                self.account_name, wire, uidvalidity, (), "uid", account_key=self.account_key
+            )
         keys: list[list[bytes]] = []
         for v in values:
             keys += [[b"TO", _astring(v)], [b"CC", _astring(v)]]
@@ -1200,6 +1221,7 @@ class ImapSession:
         uids, order = self._search_call(args, charset)
         return SearchResult(
             account=self.account_name,
+            account_key=self.account_key,
             folder=wire,
             uidvalidity=uidvalidity,
             uids=tuple(uids),
@@ -1313,7 +1335,7 @@ class ImapSession:
             fields = fetched.get(uid)
             if fields is None:
                 continue
-            ref = MessageRef(self.account_name or "-", wire, uidvalidity, uid)
+            ref = MessageRef(self.account_name or "-", wire, uidvalidity, uid, key=self.account_key)
             try:
                 headers = parse_header_block(_header_bytes(fields))
                 out.append(_summary(ref, fields, headers))
@@ -1383,7 +1405,7 @@ class ImapSession:
         server_leaves = leaves(fields.get(b"BODYSTRUCTURE"))
         attachments, att_notes = attachments_for(parsed, server_leaves, truncated=truncated)
         summary = _summary(
-            MessageRef(ref.account, wire, current, ref.uid),
+            MessageRef(ref.account, wire, current, ref.uid, key=ref.key),
             fields,
             parsed.headers,
             has_attachments=any(not a.inline for a in attachments),
@@ -1406,6 +1428,8 @@ class ImapSession:
         Returns ``(wire_name, uidvalidity)``."""
         if self.account_name and ref.account != self.account_name:
             raise InvalidRef("message reference belongs to a different account")
+        if ref.key != self.account_key:
+            raise InvalidRef(WRONG_MAILBOX)
         wire, current, _exists = self._examine(ref.folder)
         if ref.uidvalidity != current:
             raise UidValidityChanged(f"UIDVALIDITY of {decode_folder_name(wire)!r} changed")

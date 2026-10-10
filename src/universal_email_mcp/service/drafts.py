@@ -238,6 +238,7 @@ class Drafter:
             raise NotPermitted("POP3 accounts are read-only: that is not a draft id")
         if old_ref is not None:
             store = self._account(old_ref.account, "drafts")
+            ensure_ref_matches(old_ref, store)
             if account and account.casefold() != store.name.casefold():
                 raise InvalidArgument("the draft belongs to another account than 'account'")
         orig_ref_id = reply_to_id or forward_id
@@ -436,7 +437,9 @@ class Drafter:
             self.index.invalidate(session.account_name, drafts.name)
             new_id: str | None = None
             if res.uid is not None and res.uidvalidity is not None:
-                new_id = MessageRef(acc.name, res.folder, res.uidvalidity, res.uid).encode()
+                new_id = MessageRef(
+                    acc.name, res.folder, res.uidvalidity, res.uid, key=acc.key
+                ).encode()
             replaced: Replaced = "none"
             note = ""
             if old is not None:
