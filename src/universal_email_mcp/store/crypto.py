@@ -14,9 +14,18 @@ in :mod:`universal_email_mcp.store.rotation` rewrites every record eagerly so th
 removed afterwards. Key material comes from the environment or secret mounts
 (see :meth:`KeyRing.from_env`) and never appears in ``repr`` or error messages.
 
-**Tokens.** Bearer tokens are 256-bit random strings (``secrets``); the store keeps only their
-SHA-256 digest, which is sufficient because the input is high-entropy (no salt or slow hash
-needed). Comparisons use ``hmac.compare_digest``.
+**Tokens.** Bearer tokens are 256-bit random strings (``secrets``); the store keeps no copy,
+only a record id ``HMAC-SHA256(derived key, token)`` (:meth:`KeyRing.secret_ids`; one derived
+key per record kind and ring key). The key matters: with an unkeyed digest anybody who can
+write documents to the database could mint a token by writing a record under ``SHA-256(token)``.
+Comparisons use ``hmac.compare_digest``.
+
+**Record MAC.** Every record carries ``_mac``: ``HMAC-SHA256`` under a derived key over a
+canonical encoding of its kind, id, owner, plain fields and sealed blob (see
+:meth:`KeyRing.mac` and ``Store.encode``). Plain fields (scopes, permissions, redirect URIs,
+expiries ...) therefore cannot be changed by someone who can write to the database but holds no
+key. Not covered (a MAC cannot): replacing a whole document with an older, genuine copy of
+itself (rollback from a backup).
 """
 
 from __future__ import annotations
@@ -43,6 +52,8 @@ from universal_email_mcp.errors import ConfigError, MailError
 FORMAT = "e1"
 KEY_BYTES = 32
 _NONCE_BYTES = 12
+_MAC_FORMAT = "m1"
+_MAC_PURPOSE = "record-mac-v1"
 _KEY_ID_RE = re.compile(r"^k[1-9][0-9]{0,5}$")
 
 
@@ -171,6 +182,45 @@ class KeyRing:
         label = b"uem-derive\0" + purpose.encode()
         return [hmac.new(self._raw[k], label, hashlib.sha256).digest() for k in ids]
 
+    def derive_for(self, purpose: str, key_id: str) -> bytes:
+        """The :meth:`derive` secret of one named ring key (``KeyError`` if not in the ring)."""
+        label = b"uem-derive\0" + purpose.encode()
+        return hmac.new(self._raw[key_id], label, hashlib.sha256).digest()
+
+    def secret_ids(self, purpose: str, secret: str) -> list[str]:
+        """The record ids a bearer secret can have, active key first: ``HMAC-SHA256`` of the
+        secret under the key derived for ``purpose`` (e.g. ``"token-id-v1"``), one per ring
+        key. New records use the first, lookups try them all, so rotation keeps tokens valid
+        as long as the ring key that issued them is in the ring."""
+        return [
+            hmac.new(key, secret.encode(), hashlib.sha256).hexdigest()
+            for key in self.derive(purpose)
+        ]
+
+    def mac(self, data: bytes) -> str:
+        """``m1.<key id>.<base64url tag>`` over ``data`` with the active key's MAC key."""
+        tag = hmac.new(self.derive_for(_MAC_PURPOSE, self.active), data, hashlib.sha256).digest()
+        return f"{_MAC_FORMAT}.{self.active}.{b64u(tag)}"
+
+    def mac_key_id(self, tag: str) -> str:
+        parts = tag.split(".") if isinstance(tag, str) else []
+        if len(parts) != 3 or parts[0] != _MAC_FORMAT:
+            raise CryptoError("record is not authenticated")
+        return parts[1]
+
+    def check_mac(self, tag: str, data: bytes) -> None:
+        """Raise :class:`CryptoError` unless ``tag`` is a valid MAC of ``data`` (constant time)."""
+        key_id = self.mac_key_id(tag)
+        if key_id not in self._raw:
+            raise CryptoError("record was authenticated with a key that is not in the ring")
+        want = hmac.new(self.derive_for(_MAC_PURPOSE, key_id), data, hashlib.sha256).digest()
+        try:
+            have = unb64u(tag.split(".")[2])
+        except (binascii.Error, ValueError):
+            raise CryptoError("record failed authentication") from None
+        if not hmac.compare_digest(want, have):
+            raise CryptoError("record failed authentication (changed outside the service)")
+
     def seal(self, plaintext: bytes, aad: Aad) -> str:
         nonce = os.urandom(_NONCE_BYTES)
         ct = self._aead[self.active].encrypt(nonce, plaintext, aad.encode(self.active))
@@ -217,11 +267,6 @@ class KeyRing:
 def new_token(prefix: str) -> str:
     """A fresh 256-bit token, e.g. ``uem_at_<43 url-safe chars>``."""
     return f"{prefix}_{secrets.token_urlsafe(32)}"
-
-
-def hash_token(token: str) -> str:
-    """The SHA-256 hex digest that identifies a token in the store."""
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def tokens_equal(a: str, b: str) -> bool:

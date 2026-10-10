@@ -38,7 +38,7 @@ names, attachment names or search terms. Details and lifetimes per record: [stor
 | Sender identities: addresses, display name, signature | store, sealed | signature text can contain names, phone numbers |
 | Account and permission settings, preset, timestamps | store, plain | account names are chosen by the user |
 | Connected applications (grants): client name and id, granted accounts and scopes, times | store | the client name comes from the client, not verified for self-registered clients |
-| Tokens, sign-in sessions, authorisation codes | store, only SHA-256 digests | not readable as secrets |
+| Tokens, sign-in sessions, authorisation codes | store, only keyed digests (HMAC) as ids | not readable as secrets |
 | Pending send approvals: identity, grant, status, content hash, draft reference | store | the draft itself stays in the user's own Drafts folder |
 | **Activity feed**: event, tool, account, outcome, counts, time | store, sealed, per user | no content; shown to the user as "Activity" |
 | OAuth client records (URL/registration, name, redirect URIs) | store | not personal data in general |
@@ -171,7 +171,7 @@ own organisational measures):
   identity data and activity are sealed with AES-256-GCM under a versioned key ring; the
   associated data binds a blob to its user, record kind and id, so it cannot be moved to another
   record. Key rotation without downtime is supported. The store holds no mail content.
-* **Tokens and sessions**: random 256-bit values, only SHA-256 digests stored; refresh-token
+* **Tokens and sessions**: random 256-bit values, only keyed digests (HMAC) stored; refresh-token
   rotation with replay detection (a reused token revokes the whole grant); short access-token
   lifetime (1 hour); audience binding to the resource (RFC 8707); PKCE S256 for every client.
 * **Pseudonymisation**: user ids and all identifiers in logs are keyed HMACs; the activity feed

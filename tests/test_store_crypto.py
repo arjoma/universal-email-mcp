@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from universal_email_mcp.errors import ConfigError
-from universal_email_mcp.store import Aad, CryptoError, KeyRing, hash_token, new_token, tokens_equal
+from universal_email_mcp.store import Aad, CryptoError, KeyRing, new_token, tokens_equal
 
 AAD = Aad("u_1", "accounts", "acc1", "sealed")
 
@@ -142,8 +142,10 @@ def test_duplicate_key_id() -> None:
 def test_tokens() -> None:
     t = new_token("uem_at")
     assert t.startswith("uem_at_") and len(t) > 40 and t != new_token("uem_at")
-    h = hash_token(t)
-    assert len(h) == 64 and t not in h and h == hash_token(t)
+    h = ring().secret_ids("token-id-v1", t)[0]
+    assert len(h) == 64 and t not in h and h == ring().secret_ids("token-id-v1", t)[0]
+    assert h != ring().secret_ids("authcode-id-v1", t)[0]  # one purpose, one id space
+    assert h != ring(k1=bytes(32)).secret_ids("token-id-v1", t)[0]  # keyed
     assert tokens_equal(t, t) and not tokens_equal(t, t + "x")
 
 

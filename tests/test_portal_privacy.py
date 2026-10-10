@@ -26,7 +26,6 @@ from universal_email_mcp.store import (
     Store,
     Token,
     User,
-    hash_token,
 )
 
 PSEUDO = Pseudonyms(b"p" * 32)
@@ -197,9 +196,9 @@ async def test_export_has_all_own_records_and_no_secrets(alice, store, clock):
     # nothing secret anywhere in the raw body
     secrets = [
         PASSWORD, WORK_PASSWORD, "smtp-secret-pw", "DRAFT-REF-SECRET", "HASH-OF-MAIL",
-        "marker-hash", session_cookie, csrf, hash_token(session_cookie),
-        tokens["access_token"], tokens["refresh_token"], hash_token(tokens["access_token"]),
-        hash_token(tokens["refresh_token"]), "_sealed", "e1.k1", "password", "b\"k\"",
+        "marker-hash", session_cookie, csrf, store.secret_id(PortalSession, session_cookie),
+        tokens["access_token"], tokens["refresh_token"], store.secret_id(Token, tokens["access_token"]),
+        store.secret_id(Token, tokens["refresh_token"]), "_sealed", "e1.k1", "password", "b\"k\"",
         "k" * 32, "auth_failed_mark", "draft_ref", "content_hash", ALICE,
     ]  # fmt: skip
     for secret in secrets:

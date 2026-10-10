@@ -14,8 +14,8 @@ correspondents, folder names, attachment names or search terms.
 
 Firestore layout: one top-level collection per record kind (optional name prefix so several
 instances can share a project), document id = SHA-256 of kind and record id (record ids can be attacker-chosen URLs; the real id is in `_id`). Fields:
-the plain record fields, `_v` (version), `expires_at` (timestamp) and `_sealed` (encrypted
-blob). Enable TTL deletion once per collection:
+the plain record fields, `_v` (version), `expires_at` (timestamp), `_sealed` (encrypted
+blob) and `_mac` (authentication tag of the whole record, see below). Enable TTL deletion once per collection:
 
 ```bash
 for c in portal_sessions oauth_clients auth_codes grants tokens approvals activity; do
@@ -34,11 +34,11 @@ single-field equality (`user_id`, `grant_id`), no composite index is needed.
 | user (`users`) | pseudonym id, default identity, created | primary address, settings (ids of the sign-in mailbox account) | until deleted |
 | account (`accounts`) | name, protocol, permissions, preset, `auth_failed_at` (set by the MCP side when the server rejected the login) | host, port, TLS, login name, **password**, `auth_failed_mark` (digest of the failed login; the flag only holds while it matches) | until removed |
 | identity (`identities`) | copies account (drafts, sent), SMTP source account, send allowed, default flag | SMTP host/port/TLS, addresses, display name, signature, SMTP login and **password** | until removed |
-| portal session (`portal_sessions`) | user, times, id = SHA-256 of the cookie | - | 12 h (configurable) |
+| portal session (`portal_sessions`) | user, times, id = keyed digest of the cookie | - | 12 h (configurable) |
 | OAuth client (`oauth_clients`) | CIMD URL / DCR id, name, redirect URIs | - | 30 days unused (extended on use) |
-| authorization code (`auth_codes`) | client, grant, PKCE challenge, id = SHA-256 of the code | - | 1 minute, single use |
+| authorization code (`auth_codes`) | client, grant, PKCE challenge, id = keyed digest of the code | - | 1 minute, single use |
 | grant (`grants`) | user, client, granted account and identity ids, times | - | sliding refresh lifetime (30 days), absolute max 90 days; both configurable, 0 = unlimited |
-| token (`tokens`) | id = SHA-256 of the token, type, grant, resource, expiry | - | access 1 h, refresh as grant |
+| token (`tokens`) | id = keyed digest of the token, type, grant, resource, expiry | - | access 1 h, refresh as grant |
 | pending approval (`approvals`) | user, grant, identity, content hash (SHA-256 of the message without Message-ID/Date), status | draft reference | `UEM_APPROVAL_TTL`, 10 minutes by default |
 | send marker (`approvals`, status `sent`, id `s_...`) | user, content hash | - | 10 minutes (replay guard of a send in flight) |
 | activity (`activity`) | user, time | event, grant id, tool, account id, label (name of a removed account), outcome, counts | 30 days |
@@ -106,8 +106,44 @@ e1.k2.<base64url(nonce || ciphertext || tag)>
 
 The associated data is `[format, key id, user id, record kind, record id, "_sealed"]`: a blob
 copied to another record, user or field (or relabelled with another key id or format) fails
-authentication. Tokens are 256-bit random strings; only their SHA-256 digest is stored
-(sufficient for high-entropy input, no salt needed) and compared in constant time.
+authentication.
+
+### Bearer secrets: keyed record ids
+
+Tokens, authorization codes and portal-session cookies are 256-bit random strings and are never
+stored. The record id is `HMAC-SHA256(derive("<purpose>-id-v1"), secret)` (hex), with the
+purposes `token`, `authcode` and `session` and `derive(purpose)` = `HMAC-SHA256(ring key,
+"uem-derive\0" + purpose)` (one derived key per ring key, never the ring key itself). An unkeyed
+digest would let anybody who can *write* to the database (without any key) mint a token by
+creating a record under the SHA-256 of a value of their choice; with the keyed id they cannot
+compute an id at all. New records use the active key, a lookup tries the ids of every ring key,
+so rotation keeps sessions valid. The ids cannot be re-keyed (the secret is not stored): removing
+an old ring key ends the sessions and tokens issued under it.
+
+### Record MAC: plain fields are authenticated
+
+Every record carries `_mac = m1.<key id>.<base64url(HMAC-SHA256(derive("record-mac-v1"), input))>`.
+The input is one JSON array `["uem-record-v2", kind, record id, owner user id, {all stored
+fields except _v and _mac, with the sealed blob}]` (sorted keys, ASCII-escaped, datetimes as
+UTC microseconds in a tagged object, tuples as lists). It covers the fields that decide what a
+caller may do and that are *not* sealed: scopes, per-account permissions, `send` flags,
+redirect URIs, owners, expiries, session `reauth_at` and so on. On every read the tag is
+verified (constant time) **before** anything else; a record without a valid tag is treated like
+a damaged one (`CryptoError`, the same path as a wrong key): it is never trusted, the bearer
+verifier answers 401, and `rotate-keys` and the GDPR export report it as unreadable. A record is
+bound to its id and owner, so a genuine record copied to another id or user fails too. Unknown
+fields written by a newer instance are included in the input (a rolling deploy keeps working).
+
+The store format is "2" (`uem-record-v2`): records written by an earlier build have no `_mac`
+and are rejected. This is acceptable before 0.1.0 because nothing is deployed yet; from 0.1.0 on a
+format change needs a migration.
+
+**Residual risk: rollback.** A MAC cannot tell a record from an older, genuine copy of itself.
+Someone who can write to the database and has an old backup or export can restore a whole
+document (an account with its former permissions, a grant that was narrowed or revoked, a
+deleted token). Deleting a document is likewise not detectable by the service. Mitigations are
+operational: restrict who may write to Firestore (IAM, see [deploy-gcp.md](deploy-gcp.md)), audit
+the Firestore data-access logs, and keep access and refresh tokens short-lived.
 
 ### Key ring
 
@@ -135,11 +171,16 @@ Generate a key: `python -c "import base64,os;print(base64.b64encode(os.urandom(3
    without ids or content is logged and the exit status is 3. Keep the old key until that is
    resolved. The GDPR export (`Store.export_user`) treats such records the same way: it lists
    them as `{"unreadable": true}` instead of failing.
+   Re-sealing includes re-issuing the record MAC under the active key, also for records that
+   have no sealed part (grants, tokens, sessions ...).
 3. Remove `k1` from the ring. Losing a key makes the blobs sealed with it unreadable: keep
-   the ring in Secret Manager with versions.
+   the ring in Secret Manager with versions. Sessions, access and refresh tokens issued under
+   `k1` stop working (their ids are keyed by `k1`); wait for their lifetimes (12 h sessions,
+   30-day refresh tokens) to pass if you do not want to sign anyone out.
 
 Server settings are sealed so that someone with write access to the database cannot repoint
-an account at another host. Rollback of a record to an older blob of itself is not prevented.
+an account at another host; the record MAC (above) protects the plain fields. Rollback of a
+record to an older, genuine copy of itself is not prevented.
 With a name `prefix`, the TTL loop above needs the prefixed collection names. `touch_client`
 must be called by the caller to extend an OAuth client.
 

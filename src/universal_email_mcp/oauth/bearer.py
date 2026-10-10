@@ -1,6 +1,6 @@
 """Bearer verification for ``/mcp`` in OAuth mode.
 
-Access tokens are opaque; the store keeps only their SHA-256 digest. A token is accepted when
+Access tokens are opaque; the store keeps only a keyed digest (HMAC) as record id. A token is accepted when
 it is a live (unexpired) access token, its grant still exists, and it was issued for **this**
 resource (RFC 8707: the audience is the MCP endpoint, a token minted for another server is
 refused). Nothing about a refused token is logged except the reason.
@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from universal_email_mcp.jsonlog import log_event
 from universal_email_mcp.oauth.config import OAuthConfig
 from universal_email_mcp.store import Grant, Store
+from universal_email_mcp.store.store import UNREADABLE
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,13 @@ class StoreTokenVerifier:
     async def __call__(self, raw: str) -> Principal | None:
         if not 20 <= len(raw) <= 200:
             return None
-        found = await self._store.authenticate_access_token(raw)
+        try:
+            found = await self._store.authenticate_access_token(raw)
+        except UNREADABLE:
+            # A record that fails its authentication was changed outside the service (or
+            # damaged): the token is refused like an unknown one, and the operator sees why.
+            log_event(log, logging.WARNING, "token record is unreadable", event="bearer")
+            return None
         if found is None:
             return None
         token, grant = found
