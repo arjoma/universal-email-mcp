@@ -24,6 +24,7 @@ import pytest
 from mcp import Client
 from mcp.types import ElicitResult
 
+from tests.fakes import ref_key
 from tests.smtp_sink import SmtpSink
 from universal_email_mcp.audit import LOGGER_NAME
 from universal_email_mcp.config import Config, parse_config
@@ -574,7 +575,9 @@ def _draft(env: Env, raw: bytes, flags: tuple[bytes, ...] = (b"\\Draft",)) -> st
         c.logout()
     from universal_email_mcp.models import MessageRef
 
-    return MessageRef("Work", "Drafts", validity, uid).encode()
+    return MessageRef(
+        "Work", "Drafts", validity, uid, key=ref_key(env.server.host, env.work.user)
+    ).encode()
 
 
 def _appenduid(c: Any, res: Any) -> tuple[int, int]:

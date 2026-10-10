@@ -25,7 +25,7 @@ from tests.portal_util import Browser
 from universal_email_mcp.config import Settings
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.mail.pop3 import Pop3Session
-from universal_email_mcp.models import Endpoint, MessageRef, ServerProfile, TlsSettings
+from universal_email_mcp.models import Endpoint, MessageRef, ServerProfile, TlsSettings, account_key
 from universal_email_mcp.oauth.app import build_oauth_app
 from universal_email_mcp.oauth.identity import ImapLoginVerifier, Pseudonyms
 from universal_email_mcp.portal.connect import LiveTester
@@ -57,6 +57,18 @@ class Env:
     def uid(self, address: str) -> str:
         return Pseudonyms(b"p" * 32).user_id(address)
 
+    def account_key_of(self, address: str, index: int = 0) -> str:
+        """The key of the user's ``index``-th account (oldest first), as the service derives it
+        from the store record."""
+        raw = self.store.backend.raw("accounts")  # type: ignore[attr-defined]
+        if not any(d["user_id"] == self.uid(address) for d in raw.values()):
+            self.browser(address).client.close()  # signing in creates the account "Main"
+        raw = self.store.backend.raw("accounts")  # type: ignore[attr-defined]
+        mine = sorted(
+            (d["created_at"], i) for i, d in raw.items() if d["user_id"] == self.uid(address)
+        )
+        return account_key(mine[index][1])
+
     def mailbox(self, address: str) -> Mailbox:
         return Mailbox(self.server, address)
 
@@ -71,7 +83,13 @@ class Env:
         s = mb.session()
         try:
             res = s.search("INBOX")
-            return MessageRef("Main", res.folder, res.uidvalidity, max(res.uids))
+            return MessageRef(
+                "Main",
+                res.folder,
+                res.uidvalidity,
+                max(res.uids),
+                key=self.account_key_of(address),
+            )
         finally:
             s.close()
 
@@ -419,7 +437,7 @@ async def test_another_users_message_id_is_a_404_everywhere(env: Env):
             assert r.status_code == 404, (path, r.status_code)
             assert secret not in r.text and r.content != BLOB
         # an id naming an account mallory does not have
-        other = m.link(MessageRef("Alices Private", "INBOX", ref.uidvalidity, ref.uid))
+        other = m.link(MessageRef("Alices Private", "INBOX", ref.uidvalidity, ref.uid, key=ref.key))
         for path in (f"/m/{other}", f"/m/{other}/eml", f"/m/{other}/a/2"):
             r = m.get(path)
             assert r.status_code == 404 and secret not in r.text
@@ -537,6 +555,7 @@ async def test_pop3_accounts_can_be_viewed_too(env: Env):
             addr,
             env.server.password,
             account_name="Pop",
+            account_key=env.account_key_of(addr, 1),
             net=NetPolicy(allow_private=True, connect_timeout=10, read_timeout=30),
             tls=TlsSettings(verify=False),
         )

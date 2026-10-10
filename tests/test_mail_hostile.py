@@ -124,6 +124,7 @@ def test_imap_summaries_guard(monkeypatch):
 
     session = imap.ImapSession.__new__(imap.ImapSession)
     session.account_name = "Work"
+    session.account_key = ""
     fields = {1: {b"FLAGS": (b"\\Seen",), b"RFC822.SIZE": 12}, 2: {b"RFC822.SIZE": 5}}
     monkeypatch.setattr(session, "_fetch_raw", lambda _u, _i: fields, raising=False)
 

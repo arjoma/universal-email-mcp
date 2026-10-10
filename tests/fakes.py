@@ -38,7 +38,13 @@ def summary(
 ) -> MessageSummary:
     when = BASE + timedelta(hours=uid)
     return MessageSummary(
-        ref=MessageRef(account, folder, uidvalidity, uid),
+        ref=MessageRef(
+            account,
+            folder,
+            uidvalidity,
+            uid,
+            key=ref_key("imap.example.org", f"{account.lower()}@example.org"),
+        ),
         date=when,
         received=when,
         from_=(Address(sender, f"{sender.lower() or 'x'}@example.org"),),
@@ -270,3 +276,11 @@ class Connector:
         s.closed = False
         s.aborted.clear()
         return s
+
+
+def ref_key(host: str, username: str, kind: str = "imap") -> str:
+    """The account key a config-loaded account gets (``config.parse_config``): what a message id
+    for that mailbox has to carry."""
+    from universal_email_mcp.models import account_key
+
+    return account_key(f"{kind}\0{host.lower()}\0{username}")

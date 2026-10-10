@@ -31,6 +31,7 @@ from universal_email_mcp import audit
 from universal_email_mcp.bounded import run_daemon
 from universal_email_mcp.config import Config, resolve_password
 from universal_email_mcp.errors import (
+    WRONG_MAILBOX,
     AccountTimeout,
     ConfigError,
     InvalidRef,
@@ -87,9 +88,14 @@ DEFAULT_CONNECTORS: Mapping[AccountKind, Connector] = {"imap": connect_imap}
 
 
 def ensure_ref_matches(ref: MessageRef, account: Account) -> None:
-    """A POP3 id belongs to a POP3 account and an IMAP id to an IMAP account."""
+    """A POP3 id belongs to a POP3 account and an IMAP id to an IMAP account, and the id must
+    have been issued for *this* mailbox: account names are chosen by the user and can be
+    reused for another mailbox (remove and add again, positional names), so the key carried
+    in the id has to be the account's own."""
     if ref.is_pop3 != (account.kind == "pop3"):
         raise InvalidRef("the message id does not match the kind of its account")
+    if ref.key != account.key:
+        raise InvalidRef(WRONG_MAILBOX)
 
 
 @dataclass(frozen=True, slots=True)

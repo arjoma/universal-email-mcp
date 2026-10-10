@@ -494,3 +494,27 @@ async def test_cursors_are_signed_with_the_store_ring_not_the_pseudonym_key():
     with pytest.raises(InvalidCursor):
         ctx.service.cursors.decode(forged, tool="find_messages", query="q")
     await h.pool.aclose()
+
+
+async def test_a_re_added_account_gets_a_new_key_so_old_ids_are_refused():
+    """Network L7: remove an account and add another one with the same name: ids of the
+    first mailbox must not open the second."""
+    from universal_email_mcp.errors import InvalidRef
+    from universal_email_mcp.models import MessageRef
+
+    h = Harness(PoolSettings(), [0.0])
+    first = await h.store.create(record("alice", "Mine"))
+    ctx = await h.pool.acquire(principal("alice", {first.id: "read"}))
+    key = ctx.router.account("Mine").key
+    assert key
+    old_id = MessageRef("Mine", "INBOX", 7, 3, key=key).encode()
+    assert ctx.service.resolve(old_id)[0].key == key
+    h.pool.release(ctx)
+
+    await h.store.delete(MailAccount, first.id)
+    second = await h.store.create(record("alice", "Mine"))
+    ctx2 = await h.pool.acquire(principal("alice", {second.id: "read"}))
+    assert ctx2.router.account("Mine").key not in ("", key)
+    with pytest.raises(InvalidRef):
+        ctx2.service.resolve(old_id)
+    await h.pool.aclose()

@@ -21,7 +21,7 @@ WEIRD_FOLDERS = [
 def test_ref_roundtrip(folder: str):
     ref = MessageRef("Work account", folder, 1234567890, 4294967295)
     encoded = ref.encode()
-    assert encoded.startswith("m1.")
+    assert encoded.startswith("m2.")
     assert all(c.isalnum() or c in "-_." for c in encoded)  # URL-safe, no padding
     assert MessageRef.decode(encoded) == ref
     assert ref.id == encoded

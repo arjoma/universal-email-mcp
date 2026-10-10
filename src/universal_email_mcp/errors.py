@@ -111,6 +111,15 @@ class InvalidRef(MailError):
     default_hint = "Use a message id exactly as returned by a list or search result."
 
 
+WRONG_MAILBOX = (
+    "this message id belongs to a different mailbox than the account that has this name now "
+    "(the account was removed and added again, or points to another login); "
+    "search again to get current ids"
+)
+"""Why an id whose account key does not match is refused (message ids carry the key of the
+mailbox they were issued for, ``models.account_key``)."""
+
+
 class NotPermitted(MailError):
     code = "NOT_PERMITTED"
     default_hint = "The account's permissions or the policy do not allow this."

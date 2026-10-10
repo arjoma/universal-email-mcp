@@ -32,7 +32,7 @@ REF = MessageRef("Work", "INBOX/Ümläut", 77, 1234)
 def test_token_roundtrip():
     t = DownloadTokens()
     token = t.issue(REF, "2.1")
-    assert token.startswith("d1.") and all(c.isalnum() or c in "-_." for c in token)
+    assert token.startswith("d2.") and all(c.isalnum() or c in "-_." for c in token)
     assert t.verify(token) == (REF, "2.1")
 
 
@@ -44,14 +44,14 @@ def test_token_tampering_is_rejected():
     flipped = body[:5] + ("A" if body[5] != "A" else "B") + body[6:]
     bad_mac = ("A" if mac[3] != "A" else "B").join((mac[:3], mac[4:]))
     for bad in (
-        f"d1.{flipped}.{mac}",
-        f"d1.{body}.{bad_mac}",
-        f"d1.{body}.",
-        f"d1.{body}",
-        "d1.",
+        f"d2.{flipped}.{mac}",
+        f"d2.{body}.{bad_mac}",
+        f"d2.{body}.",
+        f"d2.{body}",
+        "d2.",
         "",
         "x" * 10_000,
-        "d2." + token[3:],
+        "d1." + token[3:],
     ):
         with pytest.raises(LinkInvalid):
             t.verify(bad)

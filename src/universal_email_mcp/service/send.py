@@ -83,7 +83,7 @@ from universal_email_mcp.service.recipients import (
     RecipientChecker,
     count_by_class,
 )
-from universal_email_mcp.service.router import AccountRouter
+from universal_email_mcp.service.router import AccountRouter, ensure_ref_matches
 from universal_email_mcp.service.trust import SentToIndex
 
 log = logging.getLogger(__name__)
@@ -636,6 +636,7 @@ class Sender:
         if ref.is_pop3:
             raise NotPermitted("POP3 accounts are read-only: that is not a draft id")
         acc = self.drafter.account_for(ref.account, "drafts")
+        ensure_ref_matches(ref, acc)
         max_bytes = self.config.limits.max_send_bytes
 
         def fn(session: ImapSession) -> bytes:

@@ -36,7 +36,7 @@ from universal_email_mcp.service.router import AccountRouter
 CHUNK_BYTES = 256 * 1024
 """Encoded bytes read from the server per request."""
 
-_PREFIX = "d1."
+_PREFIX = "d2."
 _MAX_LEN = 4096
 _MAC_LEN = 16
 
@@ -66,7 +66,7 @@ class DownloadTokens:
 
     def issue(self, ref: MessageRef, section: str) -> str:
         exp = int(self._clock() + self._ttl)
-        data = [ref.account, ref.folder, ref.uidvalidity, ref.uid, section, exp]
+        data = [ref.account, ref.key, ref.folder, ref.uidvalidity, ref.uid, section, exp]
         payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return _PREFIX + b64u(payload) + "." + b64u(self._mac(payload))
 
@@ -84,10 +84,10 @@ class DownloadTokens:
         if not hmac.compare_digest(mac_bytes, self._mac(payload)):
             raise LinkInvalid
         try:
-            account, folder, uidvalidity, uid, section, exp = cast(
+            account, key, folder, uidvalidity, uid, section, exp = cast(
                 list[Any], json.loads(payload.decode("utf-8"))
             )
-            ref = MessageRef(str(account), str(folder), int(uidvalidity), int(uid))
+            ref = MessageRef(str(account), str(folder), int(uidvalidity), int(uid), key=str(key))
             if not isinstance(section, str):
                 raise TypeError("section")
             expires = float(exp)

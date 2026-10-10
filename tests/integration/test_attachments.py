@@ -20,6 +20,7 @@ import pytest
 from mcp import Client
 from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
+from tests.fakes import ref_key
 from tests.integration.conftest import DATA, ImapServer, Mailbox
 from universal_email_mcp.config import Config, parse_config
 from universal_email_mcp.models import MessageRef
@@ -185,7 +186,9 @@ def box(imap_server: ImapServer) -> Iterator[Box]:
         uidvalidity = int(c.select_folder("INBOX")[b"UIDVALIDITY"])
         for name, uid in zip(_messages(), sorted(info), strict=True):
             uids[name] = uid
-            refs[name] = MessageRef("Work", "INBOX", uidvalidity, uid).encode()
+            refs[name] = MessageRef(
+                "Work", "INBOX", uidvalidity, uid, key=ref_key(imap_server.host, mb.user)
+            ).encode()
     finally:
         c.logout()
     with pytest.MonkeyPatch.context() as mp:
@@ -479,9 +482,13 @@ async def test_forged_message_ids(box: Box):
     async with connect(box.config()) as c:
         assert await fail(c, "get_attachment", id="nonsense", attachment="2") == "INVALID_REF"
         ref = MessageRef.decode(box.refs["normal"])
-        gone = MessageRef(ref.account, ref.folder, ref.uidvalidity, ref.uid + 9999).encode()
+        gone = MessageRef(
+            ref.account, ref.folder, ref.uidvalidity, ref.uid + 9999, key=ref.key
+        ).encode()
         assert await fail(c, "get_attachment", id=gone, attachment="2") == "MESSAGE_NOT_FOUND"
-        stale = MessageRef(ref.account, ref.folder, ref.uidvalidity + 1, ref.uid).encode()
+        stale = MessageRef(
+            ref.account, ref.folder, ref.uidvalidity + 1, ref.uid, key=ref.key
+        ).encode()
         assert await fail(c, "get_attachment", id=stale, attachment="2") == "UIDVALIDITY_CHANGED"
         other = MessageRef("Nobody", ref.folder, ref.uidvalidity, ref.uid).encode()
         assert await fail(c, "get_attachment", id=other, attachment="2") == "INVALID_REF"

@@ -23,6 +23,7 @@ import pytest
 from mcp import Client, StdioServerParameters
 from mcp.types import TextContent
 
+from tests.fakes import ref_key
 from tests.integration.conftest import ImapServer, Mailbox
 from universal_email_mcp.config import Config, Downloads, parse_config
 from universal_email_mcp.mail.imap import ImapSession
@@ -85,7 +86,13 @@ class Box:
     uids: dict[str, int]
 
     def ref(self, name: str, *, uidvalidity: int | None = None, uid: int | None = None):
-        return MessageRef("Work", "INBOX", uidvalidity or self.uidvalidity, uid or self.uids[name])
+        return MessageRef(
+            "Work",
+            "INBOX",
+            uidvalidity or self.uidvalidity,
+            uid or self.uids[name],
+            key=ref_key(self.server.host, self.mb.user),
+        )
 
     def config(self, **downloads: Any) -> Config:
         base = parse_config(

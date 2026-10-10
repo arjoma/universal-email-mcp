@@ -7,6 +7,7 @@ directly usable as structured tool output. Datetimes are timezone-aware.
 from __future__ import annotations
 
 import binascii
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -118,6 +119,8 @@ class Account:
     archive_scheme: ArchiveScheme = "auto"
     """How ``move_messages(to="archive")`` files mail: ``auto`` detects it from the
     archive folder's children (empty archive: flat)."""
+    key: str = ""
+    """Stable key of this mailbox (:func:`account_key`); carried in every message id."""
     public_only: bool = False
     """Connect to public addresses only, whatever ``allow_private_networks`` says: set for
     accounts whose host a user typed in (remote free entry), never for operator-listed
@@ -183,8 +186,10 @@ class FolderInfo:
 
 # --------------------------------------------------------------------------- messages
 
-_REF_PREFIX = "m1."
-_POP3_REF_PREFIX = "p1."
+_REF_PREFIX = "m2."
+_POP3_REF_PREFIX = "p2."
+_KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+MAX_ACCOUNT_KEY = 16
 _MAX_REF_LEN = 4096
 _MAX_U32 = 2**32 - 1
 _MAX_UIDL = 70
@@ -221,9 +226,16 @@ class MessageRef:
     uidvalidity: int
     uid: int
     uidl: str | None = None
+    key: str = ""
+    """Stable key of the mailbox behind ``account`` (:func:`account_key`): the name is chosen
+    by the user and can be reused for another mailbox (remove and add again, positional
+    names), so an id is only honoured for the account whose key it carries. ``""`` only where
+    no key exists (tests, probes)."""
 
     def __post_init__(self) -> None:
         _validate_ref_fields(self.account, self.folder, self.uidvalidity, self.uid, self.uidl)
+        if len(self.key) > MAX_ACCOUNT_KEY or any(c not in _KEY_CHARS for c in self.key):
+            raise InvalidRef("invalid account key in message reference")
 
     @property
     def is_pop3(self) -> bool:
@@ -231,8 +243,8 @@ class MessageRef:
 
     def _identity(self) -> tuple[object, ...]:
         if self.uidl is not None:
-            return (self.account, self.uidl)
-        return (self.account, self.folder, self.uidvalidity, self.uid)
+            return (self.account, self.key, self.uidl)
+        return (self.account, self.key, self.folder, self.uidvalidity, self.uid)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, MessageRef) and self._identity() == other._identity()
@@ -242,11 +254,11 @@ class MessageRef:
 
     def encode(self) -> str:
         if self.uidl is not None:
-            prefix, fields = _POP3_REF_PREFIX, [self.account, self.uidl]
+            prefix, fields = _POP3_REF_PREFIX, [self.account, self.key, self.uidl]
         else:
             prefix, fields = (
                 _REF_PREFIX,
-                [self.account, self.folder, self.uidvalidity, self.uid],
+                [self.account, self.key, self.folder, self.uidvalidity, self.uid],
             )
         payload = json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return prefix + b64u(payload)
@@ -277,30 +289,39 @@ class MessageRef:
             raise InvalidRef("message id is corrupted") from e
         ref: MessageRef
         if prefix == _POP3_REF_PREFIX:
-            if not (isinstance(data, list) and len(data) == 2):  # pyright: ignore[reportUnknownArgumentType]
+            if not (isinstance(data, list) and len(data) == 3):  # pyright: ignore[reportUnknownArgumentType]
                 raise InvalidRef("message id has an unexpected structure")
-            account, uidl = data  # pyright: ignore[reportUnknownVariableType]
-            if not (type(account) is str and type(uidl) is str):
+            account, key, uidl = data  # pyright: ignore[reportUnknownVariableType]
+            if not (type(account) is str and type(key) is str and type(uidl) is str):
                 raise InvalidRef("message id has an unexpected structure")
-            ref = cls(account, POP3_FOLDER, POP3_UIDVALIDITY, 0, uidl)
+            ref = cls(account, POP3_FOLDER, POP3_UIDVALIDITY, 0, uidl, key)
         else:
-            if not (isinstance(data, list) and len(data) == 4):  # pyright: ignore[reportUnknownArgumentType]
+            if not (isinstance(data, list) and len(data) == 5):  # pyright: ignore[reportUnknownArgumentType]
                 raise InvalidRef("message id has an unexpected structure")
-            account, folder, uidvalidity, uid = data  # pyright: ignore[reportUnknownVariableType]
+            account, key, folder, uidvalidity, uid = data  # pyright: ignore[reportUnknownVariableType]
             if not (
                 type(account) is str
+                and type(key) is str
                 and type(folder) is str
                 and type(uidvalidity) is int
                 and type(uid) is int
             ):
                 raise InvalidRef("message id has an unexpected structure")
-            ref = cls(account, folder, uidvalidity, uid)
+            ref = cls(account, folder, uidvalidity, uid, None, key)
         if ref.encode() != ref_id:  # one canonical id per message
             raise InvalidRef("message id is not in canonical form")
         return ref
 
 
 _B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def account_key(identity: str) -> str:
+    """The short stable key of a mailbox, from something that identifies it and does not
+    change when the user renames it: the store record id (remote mode) or
+    ``host\0username`` (local mode). 8 URL-safe characters of a SHA-256."""
+    digest = hashlib.sha256(b"uem-account-key-v1\0" + identity.encode("utf-8")).digest()
+    return b64u(digest[:6])
 
 
 def _validate_ref_fields(

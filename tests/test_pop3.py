@@ -61,11 +61,11 @@ def tops(srv: ScriptedPop3Server) -> list[str]:
 
 def test_pop3_ref_roundtrip_and_distinct_from_imap():
     ref = MessageRef("Acc", "INBOX", 1, 17, "abc.DEF-1")
-    assert ref.encode().startswith("p1.") and ref.is_pop3
+    assert ref.encode().startswith("p2.") and ref.is_pop3
     back = MessageRef.decode(ref.encode())
     assert back == ref and back.uid == 0 and hash(back) == hash(ref)  # uid is not identity
     imap = MessageRef("Acc", "INBOX", 1, 17)
-    assert imap.encode().startswith("m1.") and imap != ref and not imap.is_pop3
+    assert imap.encode().startswith("m2.") and imap != ref and not imap.is_pop3
     assert MessageRef("Acc", "INBOX", 1, 17) == MessageRef("Acc", "INBOX", 1, 17)
 
 

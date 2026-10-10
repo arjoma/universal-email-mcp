@@ -202,7 +202,7 @@ async def test_tools_end_to_end_on_pop3():
                 "Invoice 2026-17",
             ]
             assert all(m["unread"] is None for m in data["messages"])
-            assert all(m["id"].startswith("p1.") for m in data["messages"])
+            assert all(m["id"].startswith("p2.") for m in data["messages"])
             _md, data = await call(c, "find_messages", window="this_week")
             assert isinstance(data["messages"], list)
 

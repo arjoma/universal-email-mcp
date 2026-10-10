@@ -31,7 +31,8 @@ call); a changed or removed account takes effect on the next request too.
   on the second, and a client that calls a tool it was never shown gets "unknown tool".
 * **Isolation.** A request only ever sees records of its own user (queried by `user_id` and
   checked again when the configuration is built); message ids and paging cursors name accounts
-  and are resolved inside the caller's own view, cursors are signed with a per-user key derived
+  (by the user's name plus a stable key of the mailbox, so a removed and re-added account of the
+  same name does not inherit old ids) and are resolved inside the caller's own view, cursors are signed with a per-user key derived
   from the store key ring (never from `PSEUDONYM_KEY`). Another user's ids resolve to "unknown account" or to the caller's own
   mailbox of the same name, never to the other user's.
 * **Instructions per user.** The server instructions (handshake and `server/discover`) describe

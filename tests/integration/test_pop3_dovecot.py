@@ -297,8 +297,8 @@ async def test_mixed_imap_and_pop3_fanout(box: Box, monkeypatch: pytest.MonkeyPa
         assert accounts == ["Imap", "Pop"] and not data["problems"]
         by = {m["account"]: m for m in data["messages"]}
         assert by["Imap"]["unread"] is False  # seeded \Seen
-        assert by["Pop"]["unread"] is None and by["Pop"]["id"].startswith("p1.")
-        assert by["Imap"]["id"].startswith("m1.")
+        assert by["Pop"]["unread"] is None and by["Pop"]["id"].startswith("p2.")
+        assert by["Imap"]["id"].startswith("m2.")
 
         md, info = await call(c, "account_info")
         pop = next(a for a in info["accounts"] if a["name"] == "Pop")
@@ -344,5 +344,5 @@ async def test_reply_draft_to_a_pop3_message_is_stored_on_imap(
         _md, data = await call(c, "find_messages", subject="Ihre Rechnung", accounts=["Pop"])
         pid = data["messages"][0]["id"]
         _md, out = await call(c, "save_draft", reply_to_id=pid, body="Danke!")
-        assert out["id"].startswith("m1.")  # the draft lives in the IMAP account
+        assert out["id"].startswith("m2.")  # the draft lives in the IMAP account
         assert out["account"] == "Imap"
