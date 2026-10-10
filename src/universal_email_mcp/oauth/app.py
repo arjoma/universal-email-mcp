@@ -12,6 +12,7 @@ from starlette.applications import Starlette
 
 from universal_email_mcp import audit
 from universal_email_mcp.config import Policy
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.mail.net import NetPolicy
 from universal_email_mcp.models import TlsSettings
 from universal_email_mcp.oauth.bearer import StoreTokenVerifier
@@ -220,5 +221,5 @@ async def _purge_loop(store: Store) -> None:
         await asyncio.sleep(PURGE_INTERVAL)
         try:
             await store.purge_expired()
-        except Exception:
-            log.exception("purging expired records failed")
+        except Exception as e:
+            log.error("purging expired records failed: %s", safe_trace(e))

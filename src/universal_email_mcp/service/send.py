@@ -56,6 +56,7 @@ from universal_email_mcp.errors import (
     SendOutcomeUnknown,
     TooLarge,
 )
+from universal_email_mcp.jsonlog import safe_trace
 from universal_email_mcp.mail import smtp
 from universal_email_mcp.mail.compose import FORWARD_MARKER, OriginInfo, origin_info, quote_block
 from universal_email_mcp.mail.imap import ANSWERED_FLAGS, ImapSession
@@ -1002,16 +1003,16 @@ class Sender:
         if self.remote is not None and claimed:
             try:
                 await self.remote.release(claimed)
-            except Exception:  # noqa: BLE001 - the marker expires on its own
-                log.warning("could not release the send marker", exc_info=True)
+            except Exception as e:  # noqa: BLE001 - the marker expires on its own
+                log.warning("could not release the send marker: %s", safe_trace(e))
 
     async def _record_remote(self) -> None:
         """Count the send for the shared rate limit; a failure never undoes a delivery."""
         assert self.remote is not None
         try:
             await self.remote.record_send()
-        except Exception:  # noqa: BLE001
-            log.warning("could not record the send for the rate limit", exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not record the send for the rate limit: %s", safe_trace(e))
 
     # ------------------------------------------------------------ after the send
 

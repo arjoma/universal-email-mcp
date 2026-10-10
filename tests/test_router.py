@@ -269,3 +269,76 @@ async def test_a_read_that_never_wrote_is_still_retried_on_a_new_connection():
     conn.sessions["A"].fail_next = True
     assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
     assert conn.connects == ["A", "A"]
+
+
+# --- operational logs carry no account names and no exception text (security review L3) -------
+
+HOSTILE_ACCOUNT = "ceo@victim-corp.example"
+LEAK = "alice.secret@mail-victim.example"
+
+
+async def test_logs_carry_the_account_pseudonym_and_no_exception_text(caplog):
+    import logging
+
+    from universal_email_mcp import audit
+
+    audit.reset()
+    audit.configure(key=b"k" * 32)
+    caplog.set_level(logging.DEBUG)
+    router, conn = _router(HOSTILE_ACCOUNT)
+    acc = router.account(HOSTILE_ACCOUNT)
+
+    def boom(_s: object) -> None:
+        raise ValueError(f"cannot parse address {LEAK} in folder Mandanten/Müller")
+
+    with pytest.raises(ProtocolError) as err:
+        await router.call(acc, boom)
+    assert LEAK not in str(err.value)  # the client-facing error is already class-only
+    # a dropped reused connection is logged and retried
+    assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
+    conn.sessions[HOSTILE_ACCOUNT].fail_next = True
+    assert await router.call(acc, lambda s: s.search("INBOX").total) == 2
+
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    text += "\n".join(f"{r.exc_text}" for r in caplog.records)
+    assert text.strip()
+    assert HOSTILE_ACCOUNT not in text and "victim-corp" not in text
+    assert LEAK not in text and "Mandanten" not in text
+    assert audit.pseudonym("a", HOSTILE_ACCOUNT) in text  # correlatable via the audit pseudonym
+    assert "ValueError" in text  # class name and frames, no message
+    audit.reset()
+
+
+def test_safe_trace_has_classes_codes_and_frames_but_no_messages():
+    from universal_email_mcp.jsonlog import safe_trace
+
+    def inner() -> None:
+        raise ServerUnreachable(f"cannot reach {LEAK}")
+
+    text = ""
+    try:
+        try:
+            inner()
+        except ServerUnreachable as e:
+            raise KeyError(LEAK) from e
+    except KeyError as outer:
+        text = safe_trace(outer)
+    assert LEAK not in text
+    assert "KeyError" in text and "ServerUnreachable[" in text and "inner" in text
+    assert safe_trace(None) == "no exception"
+
+
+def test_json_formatter_never_prints_exception_messages():
+    import json
+    import logging
+    import sys
+
+    from universal_email_mcp.jsonlog import JsonFormatter
+
+    try:
+        raise ValueError(f"bad header from {LEAK}")
+    except ValueError:
+        record = logging.LogRecord("x", logging.ERROR, __file__, 1, "failed", (), sys.exc_info())
+    line = JsonFormatter().format(record)
+    assert LEAK not in line
+    assert "ValueError" in json.loads(line)["exception"]

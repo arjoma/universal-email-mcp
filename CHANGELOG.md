@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Operational (non-audit) logs no longer carry account names or raw exception text from the mail
+  path: they log the account pseudonym (the audit one, `a_...`) and exception class or error
+  code. Tracebacks are reduced everywhere (JSON log formatter, access-log errors, background
+  tasks) to class names, error codes and `file:line function` frames - never the exception message,
+  which can hold addresses, folder names or server replies (`jsonlog.safe_trace`).
 - With `CONTENT_ORIGIN`, the content host serves only `/c/*` and the health probes; every other
   path (portal sign-in, OAuth endpoints, `/mcp`, viewer pages) answers 404 there, so the host that
   renders untrusted mail HTML offers no phishing surface.

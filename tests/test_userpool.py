@@ -460,7 +460,9 @@ async def test_mcp_contexts_carry_portal_links():
     ref = MessageRef("Mine", "INBOX", 7, 3)
     base = h.op.public_url
     sealed = h.pool.viewer_ids.seal("alice", ref.encode())
-    assert ref.encode() not in (ctx.service.viewer_url(ref) or "")  # opaque: no folder, no uid in the URL
+    assert ref.encode() not in (
+        ctx.service.viewer_url(ref) or ""
+    )  # opaque: no folder, no uid in the URL
     assert ctx.service.viewer_url(ref) == f"{base}/m/{sealed}"
     assert ctx.service.attachment_url(ref, "2.1") == f"{base}/m/{sealed}/a/2.1"
     assert ctx.service.message_url(ref) == f"{base}/m/{sealed}/eml"

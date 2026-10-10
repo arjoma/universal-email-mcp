@@ -723,3 +723,26 @@ def test_sender_warning_unit():
     assert sender_warning("田中 太郎", "tanaka@example.jp") is None
     assert sender_warning("Хор Море", "post@море.рф") is None  # real words, no Latin
     assert sender_warning("Anna", "anna@exаmple.com") == "mixed scripts"  # noqa: RUF001
+
+
+async def test_startup_folder_map_failure_logs_pseudonym_and_class_only(caplog: Any):
+    import logging
+
+    from universal_email_mcp import audit
+
+    audit.reset()
+    audit.configure(key=b"k" * 32)
+    caplog.set_level(logging.DEBUG)
+    name = "ceo@victim-corp.example"
+    session = FakeSession(name, {"INBOX": [1]})
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise ValueError("cannot decode folder Mandanten/alice.secret@mail-victim.example")
+
+    session.list_folders = boom  # type: ignore[method-assign]
+    svc, _ = _service(**{name: session})
+    assert await svc.startup_folder_maps() == {name: None}
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "victim" not in text and "Mandanten" not in text
+    assert audit.pseudonym("a", name) in text
+    audit.reset()
