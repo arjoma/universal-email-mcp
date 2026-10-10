@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Deployment: the `uv` image, the Cloud Build builder images and the Firestore emulator image are
+  pinned by digest (tag in a comment). `docs/deploy-gcp.md` no longer claims that the build account
+  cannot reach the data (`run.admin` plus `serviceAccountUser` on the runtime account lets a
+  build deploy code that runs as it) and says who may submit builds; `bootstrap.sh` binds
+  `run.admin` on the one Cloud Run service once it exists and drops the project binding.
+  `render.sh` rejects line breaks in values, Cloud Build substitutions reach the scripts as
+  environment variables only, and the guide documents mounted secret files
+  (`STORE_KEYS_FILE`, `PSEUDONYM_KEY_FILE`).
 - Client ID Metadata Documents are fetched from port 443 only (any port on a public host let an
   unauthenticated visitor probe services), and downloads have an instance-wide limit in addition to
   the per-network one: new `UEM_RATE_CLIENT_FETCH_GLOBAL` (default `120/1h`).

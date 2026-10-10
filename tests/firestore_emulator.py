@@ -17,7 +17,8 @@ from contextlib import contextmanager
 
 from tests.dovecot import ContainerError, container_runtime, run_runtime
 
-EMULATOR_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"
+# the ``emulators`` tag, pinned by digest (same as .github/workflows/ci.yml)
+EMULATOR_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators@sha256:be2f0e582a94c9e06e7a384fe2b3b39d590eeb8da65a110eda991598c100fe80"
 PORT = 8080
 
 

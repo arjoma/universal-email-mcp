@@ -51,7 +51,13 @@ What it does (each step first checks whether the thing exists, so it can be re-r
    | Account | Roles | Why |
    |---|---|---|
    | runtime `uem-runtime` | `roles/datastore.user` (project; the project should hold only this database) and `roles/secretmanager.secretAccessor` **on the two secrets only** | The service reads and writes Firestore and reads its two keys. It cannot create secrets, read other secrets, delete the database or touch anything else. Logging needs no role (Cloud Run writes the container's output). |
-   | build `uem-build` | `roles/run.admin`, `roles/logging.logWriter` (project), `roles/iam.serviceAccountUser` on the runtime account, `roles/artifactregistry.writer` on the one repository, `roles/storage.objectViewer` on the source bucket | Builds, pushes and deploys; it cannot read secrets or Firestore. |
+   | build `uem-build` | `roles/run.admin`, `roles/logging.logWriter` (project), `roles/iam.serviceAccountUser` on the runtime account, `roles/artifactregistry.writer` on the one repository, `roles/storage.objectViewer` on the source bucket | Builds, pushes and deploys. It has no direct access to secrets or Firestore, **but it is not isolated from them**: `run.admin` lets it deploy a revision, and with `serviceAccountUser` on the runtime account that revision runs *as* the runtime account, i.e. with access to Firestore and both secrets. Treat "may submit builds as `uem-build`" (and "may push to the repository the build reads") as equivalent to access to the data: give it to nobody who should not read the store. |
+
+   `bootstrap.sh` first binds `run.admin` on the project (a service cannot be created without
+   it); **run it again after the first deploy**: it then binds the role on the one Cloud Run
+   service only and removes the project binding. (IAM conditions are not documented for Cloud Run
+   resources, so the service level binding is the supported way to narrow it; the residual risk
+   above remains for that service. `DRY_RUN=1` shows the commands.)
 
 3. Creates the Artifact Registry repository, a private source bucket for Cloud Build
    (public access prevention on) and the Firestore database in **native mode** with delete
@@ -323,6 +329,13 @@ Test a restore once into a scratch database before you rely on it.
   pattern only and are not affected.) Do the same for any other sink or log bucket that receives
   request logs.
 - Never set `UEM_LOG_LEVEL=DEBUG` in production.
+- **Secrets as files instead of environment variables** (optional hardening): variables are
+  inherited by every child process, appear in `/proc/<pid>/environ` and in crash dumps; a
+  mounted secret is a file the process reads once. The server supports it
+  (`STORE_KEYS_FILE`, `PSEUDONYM_KEY_FILE`): mount both secrets as volumes (Cloud Run:
+  `--set-secrets "/secrets/store-keys=uem-store-keys:latest"`) and set
+  `STORE_KEYS_FILE=/secrets/store-keys`, removing `STORE_KEYS` (exactly one of the two may be set).
+  The shipped `service.yaml` uses environment references for simplicity.
 - **Alerting basics** (Monitoring):
   - Uptime check on `https://mail.example.org/ready` (alert if it fails from two regions).
   - Cloud Run `request_count` with `response_code_class=5xx` above a small threshold, and
@@ -440,8 +453,13 @@ roll back only within releases that did not change the store. For a cautious rol
 deploy with `--no-traffic --tag canary`, test the tagged URL that Cloud Run prints (`canary---...run.app`)
 (add its host to `ALLOWED_HOSTS`) and then shift traffic.
 
-The image base is pinned by digest in the `Dockerfile`; update the pin and rebuild
-regularly (CI scans the image with Trivy and fails on fixed high/critical findings).
+Everything the build pulls is pinned by digest, with the tag in a comment: the Python base
+image and the `uv` image in the `Dockerfile` (Dependabot's docker ecosystem proposes new
+digests), the two Cloud Build builder images in `deploy/gcp/cloudbuild.yaml`, and the Firestore
+emulator image in `.github/workflows/ci.yml` and `tests/firestore_emulator.py` (Dependabot does
+not read those: bump them by hand, `podman manifest inspect IMAGE:TAG` shows the digest). Update
+the pins and rebuild regularly (CI scans the image with Trivy and fails on fixed high/critical
+findings).
 
 ## 12. Cost notes
 
