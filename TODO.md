@@ -12,9 +12,6 @@ from time to time (AGENTS.md, "Regular cleanup").
 
 - [ ] The first IMAP write after a server-side idle drop fails instead of reconnecting (could be
       softened with a NOOP probe before the first write).
-- [ ] `build_html_view` (viewer) still runs on asyncio's default executor. It is CPU only
-      and has no network I/O, but a pathological message can occupy a worker; give it a
-      bounded executor of its own.
 - [ ] `getaddrinfo` in `net.resolve_checked` is not covered by the `Deadline` (the libc
       resolver timeouts apply; a hostile authoritative DNS server can stall one worker thread
       for that long). `run_deadline` abandons the thread after `GRACE`.
