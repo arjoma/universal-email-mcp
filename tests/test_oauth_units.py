@@ -159,3 +159,30 @@ def test_pseudonyms_are_stable_keyed_and_short():
     assert "alice" not in uid and "alice" not in repr(p) and len(short_id(uid)) == 14
     with pytest.raises(ConfigError):
         Pseudonyms(b"short")
+
+
+# ---------------------------------------------------------------- client names (review W4)
+
+
+def test_clean_text_drops_every_format_character_and_the_fillers():
+    import sys
+    import unicodedata
+
+    from universal_email_mcp.oauth.clients import clean_text
+
+    # every Cf character of the Unicode version in use, one by one
+    cf = [chr(c) for c in range(sys.maxunicode + 1) if unicodedata.category(chr(c)) == "Cf"]
+    assert len(cf) > 100 and "؜" in cf and "­" in cf and "\U000e0041" in cf
+    for ch in cf:
+        assert clean_text(f"Bank{ch}ing") == "Banking", hex(ord(ch))
+    for ch in ("ㅤ", "ᅟ", "ᅠ", "ﾠ", "⠀"):  # blank-looking fillers
+        assert clean_text(f"A{ch}{ch}B") == "AB", hex(ord(ch))
+    # the cases the review named
+    assert clean_text("Claude᠎⁦evil⁩ \U000e0067\U000e007f Desktop") == "Claudeevil Desktop"
+    assert clean_text("a‍b") == "ab"  # ZWJ goes too (emoji sequences fall apart)
+    # ordinary text, other scripts, emoji and spacing survive
+    assert (
+        clean_text("  Müller \t& Söhne – 日本語 العربية 🙂\n")
+        == "Müller & Söhne – 日本語 العربية 🙂"
+    )
+    assert clean_text(5) == "" and clean_text("x" * 500, 10) == "x" * 10

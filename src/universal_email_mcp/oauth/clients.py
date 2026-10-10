@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import secrets
 import unicodedata
 from dataclasses import dataclass, replace
@@ -43,7 +42,9 @@ MAX_NAME = 100
 MAX_REDIRECT_URIS = 10
 MAX_CONCURRENT_FETCHES = 8
 ALLOWED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token"})
-_BIDI_AND_INVISIBLE = re.compile("[​-‏‪-‮⁠-⁩﻿]")
+_INVISIBLE_FILLERS = frozenset("\u3164\u115f\u1160\uffa0\u2800\u17b4\u17b5")
+"""Characters that render as nothing (or as blank space) but are not format characters:
+Hangul fillers, the Braille blank and the Khmer inherent vowels."""
 
 
 class ClientError(Exception):
@@ -71,11 +72,19 @@ class ClientInfo:
 
 
 def clean_text(value: object, limit: int = MAX_NAME) -> str:
-    """A short single-line label: control, bidi and zero-width characters removed."""
+    """A short single-line label: control characters become spaces; **every** Unicode format
+    character (category ``Cf``: bidi controls and isolates, zero-width space/joiner/non-joiner,
+    soft hyphen, Arabic letter mark, tag characters, invisible operators, interlinear
+    annotation marks, BOM ...) and the invisible fillers are removed. Dropping the zero-width
+    joiner too means emoji sequences fall apart into single emoji: acceptable for the name of
+    an application, and the only safe rule (a joiner is an invisible character like the rest)."""
     if not isinstance(value, str):
         return ""
-    text = _BIDI_AND_INVISIBLE.sub("", value)
-    text = "".join(" " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in text)
+    text = "".join(
+        " " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c
+        for c in value
+        if unicodedata.category(c) != "Cf" and c not in _INVISIBLE_FILLERS
+    )
     return " ".join(text.split())[:limit]
 
 

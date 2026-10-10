@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Client and application names on the consent page and in the portal drop **all** Unicode
+  format characters (category `Cf`: Arabic letter mark, soft hyphen, Mongolian vowel separator,
+  invisible operators, tag characters, annotation marks, zero-width joiner ...) and the invisible
+  fillers U+3164, U+115F, U+1160, U+FFA0 (also U+2800, U+17B4, U+17B5); emoji joined by a
+  zero-width joiner therefore show as separate emoji.
 - The sanitised mail HTML (`/m/<id>/html`, `/c/<token>`) is served only to requests that the
   browser marks as frame loads: a `Sec-Fetch-Dest` other than `iframe` gets 404, so the
   document cannot be opened as a page of its own on the portal's address (content spoofing).
