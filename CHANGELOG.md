@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- With `CONTENT_ORIGIN`, the content host serves only `/c/*` and the health probes; every other
+  path (portal sign-in, OAuth endpoints, `/mcp`, viewer pages) answers 404 there, so the host that
+  renders untrusted mail HTML offers no phishing surface.
 - Content-origin tokens and paging cursors are no longer signed with `PSEUDONYM_KEY` (which a log
   analyst running `audit --user` holds): they use keys derived from the store key ring with
   their own labels. `PSEUDONYM_KEY` now only maps addresses to pseudonyms. A content token's

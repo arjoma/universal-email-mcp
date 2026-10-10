@@ -7,7 +7,8 @@ stack that applies to everything:
 1. request context: request id, JSON access log, no stack traces in responses,
    security headers (only set when a route did not set its own),
 2. Host and Origin validation (DNS rebinding protection; ``/health`` and
-   ``/ready`` are exempt because platform probes use arbitrary Host values),
+   ``/ready`` are exempt because platform probes use arbitrary Host values), then the
+   content-origin host check (that host serves ``/c/*`` and the probes only),
 3. bearer authentication for the protected prefixes (``/mcp``),
 4. request body size limit.
 
@@ -47,6 +48,7 @@ from universal_email_mcp.jsonlog import log_event, request_id_var
 log = logging.getLogger("universal_email_mcp.http")
 
 MCP_PATH = "/mcp"
+CONTENT_PREFIX = "/c/"
 UNGUARDED_PATHS = frozenset({"/health", "/ready"})
 """Probe endpoints: no Host/Origin check (probes use pod IPs), nothing sensitive."""
 
@@ -103,6 +105,10 @@ class HttpSettings:
     """RFC 9728 URL advertised in ``WWW-Authenticate`` so clients can discover the
     authorization server."""
     ready_checks: dict[str, ReadinessCheck] = field(default_factory=dict[str, ReadinessCheck])
+    content_host: str | None = None
+    """Host name of the content origin (``CONTENT_ORIGIN``): on this host only ``/c/*`` and
+    the probes are served, everything else is 404 (it serves untrusted mail HTML and must not
+    offer the portal's sign-in, OAuth pages or ``/mcp``)."""
 
 
 # ---------------------------------------------------------------- helpers
@@ -223,6 +229,26 @@ class HostOriginMiddleware:
         ):
             await _send_json(send, 403, {"error": "invalid_origin"})
             return
+        await self.app(scope, receive, send)
+
+
+class ContentHostMiddleware:
+    """On the content-origin host only ``/c/*`` and the probes answer; any other path is 404."""
+
+    def __init__(self, app: ASGIApp, *, host: str) -> None:
+        self.app = app
+        self._host = host.lower()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] not in UNGUARDED_PATHS:
+            host = Headers(scope=scope).get("host")
+            if (
+                host
+                and _host_only(host) == self._host
+                and not scope["path"].startswith(CONTENT_PREFIX)
+            ):
+                await _send_json(send, 404, {"error": "not_found"})
+                return
         await self.app(scope, receive, send)
 
 
@@ -441,6 +467,8 @@ def create_app(
             origin_exempt=settings.cors_paths,
         ),
     ]
+    if settings.content_host:
+        middleware.append(Middleware(ContentHostMiddleware, host=settings.content_host))
     if settings.cors_paths:
         middleware.append(Middleware(CorsMiddleware, prefixes=settings.cors_paths))
     if token_check is not None:

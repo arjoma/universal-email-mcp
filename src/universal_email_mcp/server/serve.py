@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
 from mcp.server.mcpserver import MCPServer
@@ -92,6 +93,7 @@ def http_settings(op: OperatorConfig) -> HttpSettings:
         allowed_origins=op.allowed_origins,
         max_request_bytes=op.max_request_bytes,
         hsts=op.hsts,
+        content_host=urlsplit(op.content_origin).hostname if op.content_origin else None,
     )
 
 
