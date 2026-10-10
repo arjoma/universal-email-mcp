@@ -1136,6 +1136,8 @@ class Sender:
             acc = self.config.account(ref.account)
         except MailError:
             return "the original was not marked as answered (unknown account)"
+        if ref.key != acc.key:
+            return "the original was not marked as answered (it belongs to another mailbox)"
         if not (acc.permissions.organize or acc.permissions.drafts):
             return "the original was not marked as answered (no 'organize' or 'drafts' permission)"
 

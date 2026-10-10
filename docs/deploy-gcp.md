@@ -56,7 +56,8 @@ What it does (each step first checks whether the thing exists, so it can be re-r
    `bootstrap.sh` first binds `run.admin` on the project (a service cannot be created without
    it); **run it again after the first deploy**: it then binds the role on the one Cloud Run
    service only and removes the project binding. (IAM conditions are not documented for Cloud Run
-   resources, so the service level binding is the supported way to narrow it; the residual risk
+   resources, so the service level binding is the supported way to narrow it; if you ever delete
+   and recreate the service, run the script with the service missing again to restore the project binding first; the residual risk
    above remains for that service. `DRY_RUN=1` shows the commands.)
 
 3. Creates the Artifact Registry repository, a private source bucket for Cloud Build

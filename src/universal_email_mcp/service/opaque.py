@@ -29,7 +29,7 @@ from universal_email_mcp.b64 import b64u, unb64u
 
 _NONCE = 12
 _TAG = 16
-MAX_TOKEN_LEN = 4096
+MAX_TOKEN_LEN = 8192
 
 
 def _sub(key: bytes, label: bytes) -> bytes:
@@ -59,7 +59,7 @@ class SealBox:
             raw = unb64u(token)
         except ValueError:
             return None
-        if len(raw) < _NONCE + _TAG:
+        if len(raw) < _NONCE + _TAG or b64u(raw) != token:  # one spelling per token
             return None
         for aead, _ in self._keys:
             try:
@@ -128,7 +128,7 @@ class ContentTokens:
                 return None
             if isinstance(exp, bool) or not isinstance(exp, int | float):
                 return None
-            if now >= exp or exp > now + self._ttl + 1:
+            if not (now < exp <= now + self._ttl + 1):  # also rejects NaN
                 return None
             return user_id, message_id, bool(images)
         except (ValueError, TypeError):

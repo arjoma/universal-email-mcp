@@ -152,12 +152,9 @@ say "IAM: build service account (${build_email})"
 if q run services describe "$SERVICE" --region "$REGION"; then
   g run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
     --member "serviceAccount:${build_email}" --role roles/run.admin
-  if q projects get-iam-policy "$PROJECT_ID" \
-    --flatten bindings --filter "bindings.role=roles/run.admin AND bindings.members:serviceAccount:${build_email}" \
-    --format 'value(bindings.role)'; then
-    g projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
-      --role roles/run.admin --condition=None || true
-  fi
+  # (a missing project level binding is not an error: remove-iam-policy-binding may fail)
+  g projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:${build_email}" \
+    --role roles/run.admin --condition=None || true
 else
   echo "    service ${SERVICE} does not exist yet: run.admin is bound on the project for the first deploy;"
   echo "    run this script again afterwards to narrow it to the service"

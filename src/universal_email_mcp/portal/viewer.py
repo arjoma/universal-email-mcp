@@ -67,7 +67,7 @@ from universal_email_mcp.service.viewer import Viewer
 
 log = logging.getLogger(__name__)
 
-_SEALED_ID = re.compile(r"^[A-Za-z0-9_-]{1,3000}$")
+_SEALED_ID = re.compile(r"^[A-Za-z0-9_-]{1,6000}$")
 _SECTION = re.compile(r"^[0-9.]{1,100}$")
 FILE_HEADERS = {
     "x-content-type-options": "nosniff",

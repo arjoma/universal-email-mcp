@@ -242,10 +242,8 @@ class ContentHostMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["path"] not in UNGUARDED_PATHS:
             host = Headers(scope=scope).get("host")
-            if (
-                host
-                and _host_only(host) == self._host
-                and not scope["path"].startswith(CONTENT_PREFIX)
+            if (not host or _host_only(host) == self._host) and not scope["path"].startswith(
+                CONTENT_PREFIX
             ):
                 await _send_json(send, 404, {"error": "not_found"})
                 return
