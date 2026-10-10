@@ -1289,3 +1289,32 @@ def test_user_id_is_never_sealed() -> None:
         names = {f.name for f in dataclasses.fields(cls)}
         if "user_id" in names:
             assert "user_id" not in cls.SEALED, cls.__name__
+
+
+# --- a damaged record does not break listings -------------------------------------------
+
+
+async def test_list_for_user_skips_damaged_records(
+    store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    await with_users(store, "u_1")
+    good = await store.create(make(MailAccount, rid="r_good"))
+    bad = await store.create(make(MailAccount, rid="r_bad"))
+    worse = await store.create(make(MailAccount, rid="r_worse"))
+    await raw_replace(store, MailAccount, bad.id, permissions=["read", "send"])  # MAC fails
+    await raw_replace(store, MailAccount, worse.id, _sealed="not-a-blob")  # MAC fails first
+    with caplog.at_level("WARNING"):
+        rows = await store.list_for_user(MailAccount, "u_1")
+    assert [r.id for r in rows] == [good.id]
+    assert store.unreadable["accounts"] == 2
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "accounts" in text and "r_bad" not in text and PASSWORD not in text
+    assert await store.list_for_user(Identity, "u_1") == []
+
+
+async def test_list_activity_survives_a_damaged_row(store: Store) -> None:
+    await with_users(store, "u_1")
+    good = await store.create(make(ActivityEntry, rid="a_good"))
+    bad = await store.create(make(ActivityEntry, rid="a_bad"))
+    await raw_replace(store, ActivityEntry, bad.id, event="tampered")
+    assert [e.id for e in await store.list_activity("u_1")] == [good.id]

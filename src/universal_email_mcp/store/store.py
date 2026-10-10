@@ -16,6 +16,7 @@ import logging
 import secrets
 import types
 import typing
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -166,6 +167,8 @@ class Store:
         ns = getattr(backend, "namespace", "")
         self._namespace: str = ns if isinstance(ns, str) else ""
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.unreadable: Counter[str] = Counter()
+        """Damaged records skipped by listings since start, per record kind (counts only)."""
 
     def __repr__(self) -> str:
         return f"Store({type(self.backend).__name__}, {self.keys!r})"
@@ -309,14 +312,21 @@ class Store:
     async def list_for_user(
         self, cls: type[R], user_id: str, *, include_expired: bool = False
     ) -> list[R]:
-        """The user's live records of one type, oldest first."""
+        """The user's live records of one type, oldest first. A record that cannot be read
+        (damaged, tampered with, sealed with a key that is gone) is skipped, so one bad record
+        cannot take down a page: it is counted in :attr:`unreadable` and a warning without any
+        content (kind only, no id) is logged. ``export_user`` lists such records explicitly."""
         if cls not in USER_OWNED:
             raise ValueError(f"{cls.__name__} has no user_id")
-        out = [
-            self.decode(cls, i, d)
-            for i, d in await self.backend.find(cls.KIND, "user_id", user_id)
-            if include_expired or not self._expired(d)
-        ]
+        out: list[R] = []
+        for i, d in await self.backend.find(cls.KIND, "user_id", user_id):
+            if not include_expired and self._expired(d):
+                continue
+            try:
+                out.append(self.decode(cls, i, d))
+            except UNREADABLE:
+                self.unreadable[cls.KIND] += 1
+                log.warning("skipped an unreadable %s record in a listing", cls.KIND)
         return sorted(out, key=lambda r: (_when(r), r.id))
 
     async def take(self, cls: type[R], rec_id: str) -> R | None:
