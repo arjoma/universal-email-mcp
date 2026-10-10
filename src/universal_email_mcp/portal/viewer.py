@@ -201,6 +201,16 @@ class ViewerEndpoints(PortalEndpoints):
             except Exception as e:  # noqa: BLE001 - never a stack trace in the browser
                 return self._error(request, e)
 
+    @staticmethod
+    def _not_a_frame(request: Request) -> bool:
+        """The browser says this request is not an ``iframe`` load (``Sec-Fetch-Dest``:
+        ``document`` for a top-level navigation, ``object``, ``embed`` ...). The sanitised mail
+        HTML is meant to be shown inside the viewer's sandboxed frame; opened as a page of its
+        own it would be content a link can spoof (phishing) on a trusted-looking address.
+        A request without the header (old browsers, tools) is not refused."""
+        dest = request.headers.get("sec-fetch-dest")
+        return dest is not None and dest.strip().lower() != "iframe"
+
     def _open_id(self, user_id: str, sealed: str) -> str | None:
         """The message id behind a URL id, or ``None`` (syntax, forgery, another user's)."""
         if not _SEALED_ID.match(sealed):
@@ -357,7 +367,8 @@ class ViewerEndpoints(PortalEndpoints):
         """The sanitised HTML document, same origin (no ``CONTENT_ORIGIN``)."""
         mid = request.path_params["mid"]
         images = request.query_params.get("images") == "1"
-        if self.ps.content_origin:  # only the content origin serves mail HTML then
+        if self.ps.content_origin or self._not_a_frame(request):
+            # with a content origin only that origin serves mail HTML
             return Response("Not found.\n", status_code=404, media_type="text/plain")
         auth = await self._auth(request)
         plain = self._open_id(auth.user.id, mid) if auth else None
@@ -369,7 +380,7 @@ class ViewerEndpoints(PortalEndpoints):
         """The same document on the content origin, addressed by a signed short-lived token
         (that origin has no session)."""
         origin = self.ps.content_origin
-        if origin is None or self.pool is None:
+        if origin is None or self.pool is None or self._not_a_frame(request):
             return Response("Not found.\n", status_code=404, media_type="text/plain")
         host = request.headers.get("host", "").lower()
         if host != origin.split("://", 1)[1].lower():

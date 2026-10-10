@@ -191,7 +191,12 @@ sees the portal cookie. That host serves **only** `/c/*` and the health probes; 
 (sign-in, portal, OAuth, `/mcp`) answers 404 there. Even a sandbox
 escape then lacks the portal's origin. Without it the document is served from the portal's own
 origin at `/m/<id>/html` (still sandboxed by the frame attribute and by the response's own
-`sandbox` CSP). See [operator-env.md](operator-env.md).
+`sandbox` CSP). **Use `CONTENT_ORIGIN` in production**: without it, mail HTML shares the
+portal's origin and address space. In both modes the document is served only to a request that
+the browser marks as a frame load (`Sec-Fetch-Dest: iframe`); a request that says `document`,
+`object`, `embed` and so on (somebody navigated to the address, or a link tries to show the mail
+as a page of its own, which would be spoofable content on a trusted-looking address) gets 404. A
+request without the header is served. See [operator-env.md](operator-env.md).
 
 **Downloads.** Attachments and the `.eml` are served with `Content-Disposition: attachment`
 (the file name is cleaned to ASCII plus an RFC 5987 form; no line break or quote can get

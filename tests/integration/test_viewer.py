@@ -198,7 +198,13 @@ async def test_html_view_is_sandboxed_sanitised_and_images_need_a_click(env: Env
         assert "hxxps[:]//example[.]com/page" in page.text  # the link list is defanged
         assert "https://example.com/page" not in page.text
 
-        doc = b.get(f"/m/{mid}/html")
+        # review W3: opened as a page of its own (top-level navigation, <object>, ...) the
+        # document would be spoofable content on our address; only a frame load is served
+        for dest in ("document", "object", "embed", "empty", "frame"):
+            r = b.get(f"/m/{mid}/html", headers={"sec-fetch-dest": dest})
+            assert r.status_code == 404, dest
+        assert b.get(f"/m/{mid}/html", headers={"sec-fetch-dest": "iframe"}).status_code == 200
+        doc = b.get(f"/m/{mid}/html")  # no header (older browsers, tools): served as before
         assert doc.status_code == 200
         csp = doc.headers["content-security-policy"]
         assert "default-src 'none'" in csp and "img-src data:;" in csp
@@ -499,6 +505,15 @@ async def test_content_origin_serves_the_html_from_another_host(imap_server: Ima
             assert "Formatted" in r.text
             csp = r.headers["content-security-policy"]
             assert f"frame-ancestors {ISSUER}" in csp
+            # a top-level navigation to the content address is refused, a frame load is not
+            nav = stranger.get(
+                token_path, headers={"host": CONTENT_HOST, "sec-fetch-dest": "document"}
+            )
+            assert nav.status_code == 404
+            frame = stranger.get(
+                token_path, headers={"host": CONTENT_HOST, "sec-fetch-dest": "iframe"}
+            )
+            assert frame.status_code == 200
             # wrong host, tampered or foreign token
             assert stranger.get(token_path).status_code == 404
             assert stranger.get(token_path + "x", headers={"host": CONTENT_HOST}).status_code == 404

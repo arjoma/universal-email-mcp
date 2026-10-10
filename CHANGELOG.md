@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The sanitised mail HTML (`/m/<id>/html`, `/c/<token>`) is served only to requests that the
+  browser marks as frame loads: a `Sec-Fetch-Dest` other than `iframe` gets 404, so the
+  document cannot be opened as a page of its own on the portal's address (content spoofing).
+  Documentation recommends `CONTENT_ORIGIN` for production.
 - Consent (Allow) always asks for the password again unless it was typed within the
   re-authentication window (previously only grants with send identities did): a left-open or
   stolen portal session can no longer mint a 90-day grant that reads, moves or deletes mail. The
