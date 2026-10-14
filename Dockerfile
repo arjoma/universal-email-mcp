@@ -13,7 +13,7 @@
 # The base image is pinned by digest (the multi-arch index of python:3.12-slim); bump it
 # deliberately (`podman manifest inspect python:3.12-slim`, or let Dependabot do it).
 
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS build
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS build
 # uv 0.11.18, pinned by digest (the multi-arch index); Dependabot's docker ecosystem bumps it
 COPY --from=ghcr.io/astral-sh/uv:0.11.18@sha256:78bc42400d77b0678ba95765305c826652ed5431f399257271dda681d0318f03 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
@@ -28,7 +28,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable $(for e in $EXTRAS; do printf -- '--extra %s ' "$e"; done)
 
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 ARG VERSION=""
 ARG REVISION=""
 LABEL org.opencontainers.image.title="universal-email-mcp" \
